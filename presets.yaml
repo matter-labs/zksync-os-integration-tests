@@ -1,0 +1,7 @@
+v31_draft:
+  era_contracts: ../era-contracts
+  zksync_os_server: ../zksync-os-server
+  protocol_versions:
+    previous: v30.2
+    next: v31.0
+  

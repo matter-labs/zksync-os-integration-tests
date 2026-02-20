@@ -1,3 +1,11 @@
+sandboxes
 cargo
 target
+docker_builds
+integration-tests/logs
 
+#zksync-era
+#zksync-os-server
+#era-contracts
+
+.DS_Store
