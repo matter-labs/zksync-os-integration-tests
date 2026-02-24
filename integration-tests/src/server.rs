@@ -38,20 +38,46 @@ pub(crate) fn get_or_create_run_id() -> &'static str {
         .as_str()
 }
 
+/// Read the Rust toolchain channel from a repo's rust-toolchain.toml or rust-toolchain file,
+/// so we can set RUSTUP_TOOLCHAIN when building that repo (and avoid using the integration-tests toolchain).
+pub fn read_toolchain_from_dir(dir: &Path) -> Option<String> {
+    let toml_path = dir.join("rust-toolchain.toml");
+    if toml_path.exists() {
+        let content = fs::read_to_string(&toml_path).ok()?;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with("channel") {
+                let rest = line.strip_prefix("channel")?.trim().trim_start_matches('=').trim();
+                let channel = rest.trim_matches('"').trim_matches('\'').trim();
+                if !channel.is_empty() {
+                    return Some(channel.to_string());
+                }
+            }
+        }
+    }
+    let legacy_path = dir.join("rust-toolchain");
+    if legacy_path.exists() {
+        let content = fs::read_to_string(&legacy_path).ok()?;
+        return content.trim().to_string().into();
+    }
+    None
+}
+
 fn resolve_local_server_binary(server_root: &Path) -> Result<PathBuf, DockerError> {
     let release_bin = server_root.join("target/release/zksync-os-server");
     // Always rebuild to ensure the latest local code is used.
-    println!(
-        "Building zksync-os-server (release) from {} ...",
-        server_root.display()
-    );
-    let status = Command::new("cargo")
-        .arg("build")
+    // Use the server repo's toolchain (RUSTUP_TOOLCHAIN) so we don't inherit the integration-tests toolchain.
+    let mut cmd = Command::new("cargo");
+    cmd.arg("build")
         .arg("--release")
         .current_dir(server_root)
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if let Some(toolchain) = read_toolchain_from_dir(server_root) {
+        cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
+    }
+    let status = cmd
         .status()
         .map_err(|e| DockerError::CommandFailed(format!("Failed to run cargo build --release: {}", e)))?;
     if !status.success() {

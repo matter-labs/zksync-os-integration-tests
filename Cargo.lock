@@ -1893,7 +1893,6 @@ dependencies = [
  "tokio",
  "toml",
  "uuid",
- "zerocopy",
 ]
 
 [[package]]

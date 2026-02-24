@@ -7,7 +7,7 @@ use anyhow::Context;
 use chrono::Local;
 
 use crate::presets::{Preset, RepoRef};
-use crate::server::get_or_create_run_id;
+use crate::server::{get_or_create_run_id, read_toolchain_from_dir};
 use crate::utils::find_project_root;
 
 const ERA_CONTRACTS_PROTOCOL_IMAGE_REPO: &str =
@@ -90,13 +90,19 @@ pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyho
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Manifest path contains invalid UTF-8"))?;
 
-    // Step 1: Build silently (suppress compiler warnings and progress)
-    let build_status = Command::new("cargo")
+    // Step 1: Build silently (suppress compiler warnings and progress).
+    // Use era-contracts' toolchain (RUSTUP_TOOLCHAIN) so we don't inherit the integration-tests toolchain.
+    let mut build_cmd = Command::new("cargo");
+    build_cmd
         .args(["build", "--release", "--manifest-path", manifest_str])
         .current_dir(era_contracts_path)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::null());
+    if let Some(toolchain) = read_toolchain_from_dir(era_contracts_path) {
+        build_cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
+    }
+    let build_status = build_cmd
         .status()
         .with_context(|| "Failed to run cargo build for protocol_ops")?;
     if !build_status.success() {
