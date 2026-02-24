@@ -1140,7 +1140,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     println!("=== Starting v30 to v31 upgrade test ===\n");
 
     // Check tooling versions first (protocol_ops from era-contracts); fail fast before starting Anvil/server.
-    run_protocol_ops_for_default_preset(&["check-versions"])?;
+    run_protocol_ops_for_default_preset(&["check-tooling-versions"])?;
     println!("✓ Tooling versions OK\n");
 
     let preset = get_default_preset();
