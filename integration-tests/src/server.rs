@@ -26,7 +26,7 @@ const ZKSYNC_OS_SERVER_IMAGE_REPO: &str =
 pub(crate) fn get_or_create_run_id() -> &'static str {
     TEST_RUN_ID
         .get_or_init(|| {
-            let timestamp = Local::now().format("%Y-%m-%d_%H:%M:%S");
+            let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
             let current = std::thread::current();
             let name = current.name().unwrap_or("unknown");
             let fn_part = name.rsplit("::").next().unwrap_or(name);
