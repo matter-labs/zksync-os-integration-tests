@@ -85,6 +85,13 @@ jobs:
           # Test builds contracts, builds and starts server via ServerBuilder, runs full upgrade, then stops server
           cargo test --package integration-tests --test upgrade-tests -- test_v30_to_v31_upgrade --exact --nocapture --ignored
 
+      - name: Prepare artifacts for upload
+        if: failure()
+        run: |
+          mkdir -p _artifacts/era-contracts
+          cp -r ../era-contracts/l1-contracts/broadcast _artifacts/era-contracts/ 2>/dev/null || true
+          cp -r ../era-contracts/l1-contracts/script-out _artifacts/era-contracts/ 2>/dev/null || true
+
       - name: Upload logs on failure
         if: failure()
         uses: actions/upload-artifact@v4
@@ -92,8 +99,7 @@ jobs:
           name: upgrade-test-logs
           path: |
             integration-tests/logs/
-            ../era-contracts/l1-contracts/broadcast/
-            ../era-contracts/l1-contracts/script-out/
+            _artifacts/
 
       - name: Cleanup
         if: always()
