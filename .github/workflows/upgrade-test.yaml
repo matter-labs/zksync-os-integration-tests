@@ -82,7 +82,7 @@ jobs:
       - name: Run upgrade test
         run: |
           # Test builds contracts, builds and starts server via ServerBuilder, runs full upgrade, then stops server
-          cargo test --test upgrade-tests test_v30_to_v31_upgrade -- --ignored --nocapture
+          cd integration-tests && cargo test --test upgrade-tests test_v30_to_v31_upgrade -- --ignored --nocapture
 
       - name: Upload logs on failure
         if: failure()
