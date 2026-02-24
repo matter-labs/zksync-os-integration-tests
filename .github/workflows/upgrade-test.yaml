@@ -78,7 +78,7 @@ jobs:
           node-version: "18.20.8"
 
       - name: Install Yarn
-        run: npm install -g yarn
+        run: npm install -g yarn@1.22.19
 
       - name: Run upgrade test
         run: |
