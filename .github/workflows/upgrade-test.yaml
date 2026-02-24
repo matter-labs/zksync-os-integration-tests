@@ -52,11 +52,8 @@ jobs:
             curl
 
       - name: Install Rust toolchain
-        uses: moonrepo/setup-rust@v1
-        with:
-          inherit-toolchain: true
-          bins: cargo-nextest
-          cache: false
+        uses: dtolnay/rust-toolchain@stable
+        # Reads channel from rust-toolchain.toml in the repo
 
       - name: Install Foundry
         run: |
