@@ -4,6 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+# Pin to avoid zerocopy 0.8.39 which requires unstable stdarch_x86_avx512 (Rust 1.89+)
+zerocopy = "0.8.38"
 alloy = { version = "0.3", default-features = false, features = ["provider-anvil-node", "json-rpc"] }
 chrono = "0.4"
 anyhow = "1.0"
