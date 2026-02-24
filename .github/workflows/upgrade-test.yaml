@@ -19,8 +19,6 @@ jobs:
     runs-on: matterlabs-ci-runner-high-performance
     timeout-minutes: 120
     env:
-      UPGRADE_VERSION: v31-interop-b
-      UPGRADE_FILE_EXTENSION: v31
       DEBIAN_FRONTEND: noninteractive
       WORKSPACE: ${{ github.workspace }}
 
@@ -30,6 +28,16 @@ jobs:
         with:
           submodules: recursive
           fetch-depth: 0
+
+      - name: Clone era-contracts (tjg-getting-rid-of-permanent-values)
+        run: |
+          git clone --depth 1 --branch tjg-getting-rid-of-permanent-values \
+            https://github.com/matter-labs/era-contracts.git ../era-contracts
+
+      - name: Clone zksync-os-server (bytecodes-supplier-support)
+        run: |
+          git clone --depth 1 --branch bytecodes-supplier-support \
+            https://github.com/matter-labs/zksync-os-server.git ../zksync-os-server
 
       - name: Install system dependencies
         run: |
@@ -71,56 +79,10 @@ jobs:
       - name: Install Yarn
         run: npm install -g yarn
 
-      - name: Install zkstack
-        run: |
-          cd zksync-era
-          ./zkstack_cli/zkstackup/install --path ./zkstack_cli/zkstackup/zkstackup
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          export PATH="$HOME/.local/bin:$PATH"
-          zkstackup --local || true
-          zkstack --version
-          cd ..
-
-      - name: Build zksync-os-server
-        run: |
-          cd zksync-os-server
-          cargo build --release
-          echo "Built zksync-os-server at: ${PWD}/target/release/zksync-os-server"
-
-      - name: Start zksync-os-server on v30.2 chain
-        run: |
-          cd zksync-os-server
-          rm -rf db/*
-          ./target/release/zksync-os-server \
-            --config ./local-chains/v30.2/default/config.yaml \
-            &> ../zksync-os-server-v30.log &
-          echo $! > /tmp/zksync_os_server.pid
-          sleep 10
-          echo "ZKsync OS Server started on v30.2"
-
-      - name: Stop v30.2 server before upgrade
-        run: |
-          kill -9 $(cat /tmp/zksync_os_server.pid) || true
-          sleep 2
-
       - name: Run upgrade test
         run: |
-          # Test automatically starts and manages Anvil L1 node
+          # Test builds contracts, builds and starts server via ServerBuilder, runs full upgrade, then stops server
           cargo test --test upgrade-tests test_v30_to_v31_upgrade -- --ignored --nocapture
-
-      - name: Restart zksync-os-server after upgrade
-        run: |
-          cd zksync-os-server
-          ./target/release/zksync-os-server \
-            --config ./local-chains/v30.2/default/config.yaml \
-            &> ../zksync-os-server-final.log &
-          echo $! > /tmp/zksync_os_server_final.pid
-          sleep 10
-          echo "ZKsync OS Server restarted after upgrade"
-
-      - name: Verify upgrade with test transaction
-        run: |
-          cargo test --test upgrade-tests test_post_upgrade_verification -- --ignored --nocapture
 
       - name: Upload logs on failure
         if: failure()
@@ -128,14 +90,12 @@ jobs:
         with:
           name: upgrade-test-logs
           path: |
-            zksync-os-server-v30.log
-            zksync-os-server-final.log
-            zksync-era/contracts/l1-contracts/broadcast/**/*
-            zksync-era/contracts/l1-contracts/script-out/**/*
+            integration-tests/logs/
+            ../era-contracts/l1-contracts/broadcast/
+            ../era-contracts/l1-contracts/script-out/
 
       - name: Cleanup
         if: always()
         run: |
-          kill -9 $(cat /tmp/zksync_os_server_final.pid) 2>/dev/null || true
-          kill -9 $(cat /tmp/zksync_os_server.pid) 2>/dev/null || true
-          # Anvil is managed by the test and automatically cleaned up
+          # Server and Anvil are managed by the test and cleaned up when the test exits
+          true

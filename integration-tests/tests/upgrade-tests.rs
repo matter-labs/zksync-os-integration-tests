@@ -1157,6 +1157,8 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         .context("Failed to load contracts.yaml")?;
     println!("✓ Wallets and contracts loaded");
 
+    build_contracts(&get_era_contracts_path())?;
+
     println!("Starting zksync-os-server on v30.2...");
     let server = ServerBuilder::new(preset)
         .spawn(&anvil)
