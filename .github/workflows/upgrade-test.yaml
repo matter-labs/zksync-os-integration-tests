@@ -34,6 +34,10 @@ jobs:
           git clone --depth 1 --branch tjg-getting-rid-of-permanent-values \
             https://github.com/matter-labs/era-contracts.git ../era-contracts
 
+      - name: Init era-contracts submodules
+        run: |
+          cd ../era-contracts && git submodule update --init --recursive
+
       - name: Clone zksync-os-server (bytecodes-supplier-support)
         run: |
           git clone --depth 1 --branch bytecodes-supplier-support \
