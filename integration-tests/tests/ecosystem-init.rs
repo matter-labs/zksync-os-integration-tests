@@ -1,5 +1,5 @@
 use integration_tests::anvil::Anvil;
-use integration_tests::presets::{load_default_presets, RepoRef};
+use integration_tests::presets::load_default_presets;
 
 /// Default Anvil account #0 private key (Foundry default).
 const DEFAULT_ANVIL_PRIVATE_KEY: &str =
@@ -17,11 +17,7 @@ async fn test_protocol_ops_ecosystem_init_on_fresh_l1() {
     let anvil = Anvil::spawn_fresh()
         .await
         .expect("Failed to spawn fresh Anvil");
-    let l1_rpc_url = match &preset.era_contracts {
-        RepoRef::Path(_) => anvil.rpc_url().to_string(),
-        // Dockerized protocol_ops needs a host-reachable URL.
-        RepoRef::DockerTag(_) => format!("http://host.docker.internal:{}", anvil.port()),
-    };
+    let l1_rpc_url = anvil.rpc_url_for(&preset.era_contracts);
 
     let args = [
         "ecosystem",

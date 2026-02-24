@@ -2,6 +2,8 @@ use std::path::Path;
 use std::process::{Command, Output, Stdio};
 use std::time::Duration;
 
+use crate::server_utils::strip_ansi_escape_codes_in_file;
+
 /// Error type for Docker operations
 #[derive(Debug, thiserror::Error)]
 pub enum DockerError {
@@ -444,12 +446,12 @@ impl DockerContainer {
     }
 
     /// Save container logs to a file, stripping ANSI escape codes
-    /// 
+    ///
     /// This function:
     /// 1. Verifies the container exists (running or stopped, but not removed)
     /// 2. Saves logs immediately while container still exists
-    /// 3. Strips ANSI escape codes using perl
-    /// 
+    /// 3. Strips ANSI escape codes
+    ///
     /// IMPORTANT: This must be called BEFORE the container is removed.
     pub(crate) fn save_logs(&self, logs_path: &std::path::Path) -> Result<(), DockerError> {
         // First verify container exists (running or stopped, but not removed)
@@ -475,28 +477,32 @@ impl DockerContainer {
         
         // IMPORTANT: Save logs immediately while container still exists
         // Don't wait before checking - the container must exist NOW
-        let logs_path_str = logs_path.to_string_lossy();
-        // Escape single quotes in the path by replacing ' with '\''
-        let escaped_path = logs_path_str.replace('\'', "'\"'\"'");
-        // Strip ANSI escape codes from logs using perl (more portable than sed)
-        // The perl pattern removes ANSI escape sequences: \e[ followed by numbers/semicolons and ending with a letter
-        let _ = Command::new("sh")
-            .arg("-c")
-            .arg(format!(
-                "docker logs {} 2>&1 | perl -pe 's/\\e\\[[0-9;]*[a-zA-Z]//g' > '{}' || true",
-                self.name,
-                escaped_path
-            ))
-            .status()
+        let output = Command::new("docker")
+            .arg("logs")
+            .arg(&self.name)
+            .output()
             .map_err(|e| DockerError::CommandFailed(format!(
                 "Failed to execute docker logs for container '{}': {}",
                 self.name,
                 e
             )))?;
+        let mut combined = Vec::with_capacity(output.stdout.len() + output.stderr.len());
+        combined.extend_from_slice(&output.stdout);
+        combined.extend_from_slice(&output.stderr);
+        std::fs::write(logs_path, combined).map_err(|e| DockerError::CommandFailed(format!(
+            "Failed to write docker logs to '{}': {}",
+            logs_path.display(),
+            e
+        )))?;
+        strip_ansi_escape_codes_in_file(logs_path).map_err(|e| DockerError::CommandFailed(format!(
+            "Failed to strip ANSI escapes from '{}': {}",
+            logs_path.display(),
+            e
+        )))?;
 
         // Wait after saving logs to ensure file is written
         std::thread::sleep(std::time::Duration::from_millis(100));
-        
+
         Ok(())
     }
 
@@ -547,4 +553,3 @@ impl Drop for DockerContainer {
         }
     }
 }
-

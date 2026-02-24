@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use crate::docker_utils::DockerError;
+use crate::docker::DockerError;
 
 /// Find the project root by looking for presets.yaml
 pub fn find_project_root() -> Result<PathBuf, DockerError> {

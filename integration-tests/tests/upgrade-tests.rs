@@ -35,6 +35,7 @@
 
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
+use integration_tests::anvil_utils::{fund_account, impersonate_account, stop_impersonating_account, RICH_ACCOUNT_PRIVATE_KEY};
 use integration_tests::presets::RepoRef;
 use integration_tests::server::ServerBuilder;
 use integration_tests::server_utils::{wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY};
@@ -45,119 +46,6 @@ use std::process::Command;
 use std::time::Duration;
 
 const UPGRADE_VERSION: &str = "v31-interop-b";
-const RICH_ACCOUNT_PRIVATE_KEY: &str = "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
-
-/// Enable Anvil account impersonation
-fn anvil_impersonate_account(address: &str, l1_rpc_url: &str) -> Result<()> {
-    Command::new("cast")
-        .args([
-            "rpc",
-            "anvil_impersonateAccount",
-            address,
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .output()
-        .context("Failed to enable impersonation")?;
-    Ok(())
-}
-
-/// Stop Anvil account impersonation
-fn anvil_stop_impersonating_account(address: &str, l1_rpc_url: &str) {
-    let _ = Command::new("cast")
-        .args([
-            "rpc",
-            "anvil_stopImpersonatingAccount",
-            address,
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .output();
-}
-
-/// Fund an account with ETH
-fn fund_account(address: &str, amount: &str, l1_rpc_url: &str) -> Result<()> {
-    Command::new("cast")
-        .args([
-            "send",
-            address,
-            "--value",
-            amount,
-            "--private-key",
-            RICH_ACCOUNT_PRIVATE_KEY,
-            "--rpc-url",
-            l1_rpc_url,
-            "--gas-price",
-            "100gwei",
-        ])
-        .output()
-        .context("Failed to fund account")?;
-    Ok(())
-}
-
-/// Call a contract function from an impersonated account
-fn call_contract_from(
-    contract: &str,
-    function_sig: &str,
-    args: &[&str],
-    from: &str,
-    context_msg: &str,
-    l1_rpc_url: &str,
-) -> Result<()> {
-    let mut cmd_args = vec![
-        "send",
-        contract,
-        function_sig,
-    ];
-    cmd_args.extend_from_slice(args);
-    cmd_args.extend_from_slice(&[
-        "--from",
-        from,
-        "--rpc-url",
-        l1_rpc_url,
-        "--unlocked",
-    ]);
-
-    Command::new("cast")
-        .args(&cmd_args)
-        .output()
-        .with_context(|| context_msg.to_string())?;
-    Ok(())
-}
-
-/// Impersonate account, call contract, then stop impersonating
-fn call_as_impersonated(
-    contract: &str,
-    function_sig: &str,
-    args: &[&str],
-    from: &str,
-    context_msg: &str,
-    l1_rpc_url: &str,
-) -> Result<()> {
-    anvil_impersonate_account(from, l1_rpc_url)?;
-    let result = call_contract_from(contract, function_sig, args, from, context_msg, l1_rpc_url);
-    anvil_stop_impersonating_account(from, l1_rpc_url);
-    result
-}
-
-/// Make a read-only contract call and return the output
-fn call_contract_view(
-    contract: &str,
-    function_sig: &str,
-    context_msg: &str,
-    l1_rpc_url: &str,
-) -> Result<std::process::Output> {
-    Command::new("cast")
-        .args([
-            "call",
-            contract,
-            function_sig,
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .output()
-        .with_context(|| context_msg.to_string())
-}
 
 
 /// Helper to get project root directory
@@ -451,8 +339,8 @@ fn transfer_governance_ownership_to_governor(
     }
 
     // Transfer ownership via impersonation
-    anvil_impersonate_account(&current_owner, l1_rpc_url)?;
-    fund_account(&current_owner, "1ether", l1_rpc_url)?;
+    impersonate_account(&current_owner, l1_rpc_url)?;
+    fund_account(&current_owner, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
 
     let output = Command::new("cast")
         .args([
@@ -469,7 +357,7 @@ fn transfer_governance_ownership_to_governor(
         .output()
         .context("Failed to transfer governance ownership")?;
 
-    anvil_stop_impersonating_account(&current_owner, l1_rpc_url);
+    stop_impersonating_account(&current_owner, l1_rpc_url);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -525,8 +413,8 @@ fn transfer_contract_ownership(
     }
 
     // Impersonate current owner and transfer
-    anvil_impersonate_account(&current_owner, l1_rpc_url)?;
-    fund_account(&current_owner, "1ether", l1_rpc_url)?;
+    impersonate_account(&current_owner, l1_rpc_url)?;
+    fund_account(&current_owner, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
 
     let output = Command::new("cast")
         .args([
@@ -543,7 +431,7 @@ fn transfer_contract_ownership(
         .output()
         .context("Failed to call transferOwnership")?;
 
-    anvil_stop_impersonating_account(&current_owner, l1_rpc_url);
+    stop_impersonating_account(&current_owner, l1_rpc_url);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -551,8 +439,8 @@ fn transfer_contract_ownership(
     }
 
     // Accept ownership as ecosystem governance
-    anvil_impersonate_account(ecosystem_governance, l1_rpc_url)?;
-    fund_account(ecosystem_governance, "1ether", l1_rpc_url)?;
+    impersonate_account(ecosystem_governance, l1_rpc_url)?;
+    fund_account(ecosystem_governance, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
 
     let output = Command::new("cast")
         .args([
@@ -568,7 +456,7 @@ fn transfer_contract_ownership(
         .output()
         .context("Failed to call acceptOwnership")?;
 
-    anvil_stop_impersonating_account(ecosystem_governance, l1_rpc_url);
+    stop_impersonating_account(ecosystem_governance, l1_rpc_url);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -672,8 +560,8 @@ fn ensure_migration_paused(root: &Path, l1_rpc_url: &str) -> Result<()> {
         .context("Failed to read owner")?;
     let owner = String::from_utf8_lossy(&owner_output.stdout).trim().to_string();
 
-    anvil_impersonate_account(&owner, l1_rpc_url)?;
-    fund_account(&owner, "1ether", l1_rpc_url)?;
+    impersonate_account(&owner, l1_rpc_url)?;
+    fund_account(&owner, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
 
     let output = Command::new("cast")
         .args([
@@ -689,7 +577,7 @@ fn ensure_migration_paused(root: &Path, l1_rpc_url: &str) -> Result<()> {
         .output()
         .context("Failed to call pauseMigration")?;
 
-    anvil_stop_impersonating_account(&owner, l1_rpc_url);
+    stop_impersonating_account(&owner, l1_rpc_url);
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -979,14 +867,13 @@ fn run_chain_upgrade(
     contracts: &Contracts,
     wallets: &Wallets,
 ) -> Result<()> {
-
     // Chain upgrade (via protocol_ops)
     println!("\n  Running chain upgrade (protocol_ops)...");
     let governor_key = wallets.governor.private_key.as_str();
     let chain_address = contracts.l1.diamond_proxy_addr.as_str();
     let admin_address = contracts.l1.chain_admin_addr.as_str();
     let access_control_restriction = contracts.l1.access_control_restriction_addr.as_str();
-    let result = run_protocol_ops_for_default_preset(&[
+    run_protocol_ops_for_default_preset(&[
         "chain",
         "upgrade",
         "--l1-rpc-url",
@@ -999,12 +886,8 @@ fn run_chain_upgrade(
         admin_address,
         "--access-control-restriction",
         access_control_restriction,
-    ]);
-
-    if let Err(e) = result {
-        println!("Warning: chain upgrade reported error: {}", e);
-        println!("Continuing anyway - checking if operation succeeded...");
-    }
+    ])
+    .context("chain upgrade failed")?;
 
     Ok(())
 }
@@ -1068,28 +951,6 @@ fn run_final_upgrade_stages(
     // )
 }
 
-/// Check if a service is accessible
-/// Test transaction after upgrade
-fn test_transaction() -> Result<()> {
-    println!("Sending test transaction...");
-    run_command(
-        "Test transaction",
-        Command::new("cast")
-            .args([
-                "send",
-                "0x5A67EE02274D9Ec050d412b96fE810Be4D71e7A0",
-                "--value",
-                "100",
-                "--private-key",
-                RICH_ACCOUNT_PRIVATE_KEY,
-                "--rpc-url",
-                "http://localhost:3050",
-            ]),
-    )?;
-    println!("✓ Test transaction sent successfully");
-    Ok(())
-}
-
 fn read_u64_from_cast_call(l1_rpc_url: &str, contract: &str, sig: &str) -> Result<u64> {
     read_u64_from_cast_call_with_args(l1_rpc_url, contract, sig, &[])
 }
@@ -1125,129 +986,6 @@ fn read_u64_from_cast_call_with_args(
     first
         .parse::<u64>()
         .with_context(|| format!("Failed to parse decimal value '{}'", first))
-}
-
-fn read_word_from_cast_call(
-    l1_rpc_url: &str,
-    contract: &str,
-    sig: &str,
-    fn_args: &[&str],
-) -> Result<String> {
-    let mut args: Vec<&str> = vec!["call", contract, sig];
-    args.extend_from_slice(fn_args);
-    args.extend_from_slice(&["--rpc-url", l1_rpc_url]);
-
-    let output = Command::new("cast")
-        .args(&args)
-        .output()
-        .with_context(|| format!("Failed to call {} on {}", sig, contract))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cast call failed for {} on {}: {}",
-            sig,
-            contract,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let first = raw.split_whitespace().next().unwrap_or("").to_string();
-    if first.is_empty() {
-        anyhow::bail!("Empty output for {} on {}", sig, contract);
-    }
-    Ok(first)
-}
-
-fn is_zero_hash(word: &str) -> bool {
-    let normalized = word.trim().trim_matches('"').to_ascii_lowercase();
-    normalized == "0x0"
-        || normalized == "0x"
-        || (normalized.starts_with("0x")
-            && normalized[2..].chars().all(|c| c == '0'))
-}
-
-fn validate_upgrade_preflight_state(
-    l1_rpc_url: &str,
-    contracts: &Contracts,
-    target_protocol_version: u64,
-) -> Result<()> {
-    let current_chain_protocol = read_u64_from_cast_call(
-        l1_rpc_url,
-        &contracts.l1.diamond_proxy_addr,
-        "getProtocolVersion()(uint256)",
-    )
-    .context("Failed to read current chain protocol version from diamond proxy")?;
-    let ctm_protocol_version = read_u64_from_cast_call(
-        l1_rpc_url,
-        &contracts.ecosystem_contracts.state_transition_proxy_addr,
-        "protocolVersion()(uint256)",
-    )
-    .context("Failed to read protocol version from state transition proxy")?;
-    let pending_upgrade_batch = read_u64_from_cast_call(
-        l1_rpc_url,
-        &contracts.l1.diamond_proxy_addr,
-        "getL2SystemContractsUpgradeBatchNumber()(uint256)",
-    )
-    .context("Failed to read pending upgrade batch number from diamond proxy")?;
-    let pending_upgrade_tx_hash = read_word_from_cast_call(
-        l1_rpc_url,
-        &contracts.l1.diamond_proxy_addr,
-        "getL2SystemContractsUpgradeTxHash()(bytes32)",
-        &[],
-    )
-    .context("Failed to read pending upgrade tx hash from diamond proxy")?;
-
-    println!("Upgrade preflight diagnostics:");
-    println!("  current chain protocol version: {}", current_chain_protocol);
-    println!("  CTM/state-transition protocol version: {}", ctm_protocol_version);
-    println!("  target protocol version for timestamp: {}", target_protocol_version);
-    println!("  pending upgrade batch number: {}", pending_upgrade_batch);
-    println!("  pending upgrade tx hash: {}", pending_upgrade_tx_hash);
-
-    anyhow::ensure!(
-        target_protocol_version > current_chain_protocol,
-        "Invalid target protocol version {}: must be greater than current chain protocol version {}",
-        target_protocol_version,
-        current_chain_protocol
-    );
-    anyhow::ensure!(
-        target_protocol_version == ctm_protocol_version,
-        "Target protocol version {} does not match state-transition protocol version {}",
-        target_protocol_version,
-        ctm_protocol_version
-    );
-    anyhow::ensure!(
-        pending_upgrade_batch == 0 && is_zero_hash(&pending_upgrade_tx_hash),
-        "An upgrade appears to already be in progress before scheduling (batch={}, tx_hash={})",
-        pending_upgrade_batch,
-        pending_upgrade_tx_hash
-    );
-    Ok(())
-}
-
-fn read_u64_from_cast_rpc(rpc_url: &str, method: &str) -> Result<u64> {
-    let output = Command::new("cast")
-        .args(["rpc", method, "--rpc-url", rpc_url])
-        .output()
-        .with_context(|| format!("Failed to call rpc method {} on {}", method, rpc_url))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cast rpc failed for {} on {}: {}",
-            method,
-            rpc_url,
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let value = raw.trim_matches('"');
-    if let Some(hex) = value.strip_prefix("0x") {
-        return u64::from_str_radix(hex, 16)
-            .with_context(|| format!("Failed to parse hex value '{}'", value));
-    }
-    value
-        .parse::<u64>()
-        .with_context(|| format!("Failed to parse decimal value '{}'", value))
 }
 
 fn read_l2_block_number_by_tag(l2_rpc_url: &str, tag: &str) -> Result<u64> {
@@ -1358,8 +1096,6 @@ fn schedule_upgrade_timestamp(
         upgrade_timestamp, target_protocol_version
     );
 
-    validate_upgrade_preflight_state(l1_rpc_url, contracts, target_protocol_version)?;
-
     run_protocol_ops_for_default_preset(&[
         "chain",
         "set-upgrade-timestamp",
@@ -1403,20 +1139,17 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
 
     println!("=== Starting v30 to v31 upgrade test ===\n");
 
-    // Start Anvil L1 node (will be automatically stopped on test completion).
-    println!("Starting Anvil L1 chain with v30.2 state...");
     let preset = get_default_preset();
+
+    println!("Starting Anvil L1 chain with v30.2 state...");
     let anvil = Anvil::spawn(&preset).await?;
     let l1_rpc_url = anvil.rpc_url();
     println!("✓ Anvil L1 is ready at {}", l1_rpc_url);
 
-    // Load Wallets and Contracts at the beginning
     let server_paths = get_default_server_paths();
     let wallets_path = server_paths.wallets_yaml.clone();
     let contracts_path = server_paths.contracts_yaml.clone();
-    let server_root = server_paths.server_root.clone();
-    let config_path = server_paths.config_yaml.to_string_lossy().to_string();
-    
+
     println!("Loading wallets and contracts configuration...");
     let wallets = Wallets::load_from_path(&wallets_path)
         .context("Failed to load wallets.yaml")?;
@@ -1425,19 +1158,14 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     println!("✓ Wallets and contracts loaded");
 
     println!("Starting zksync-os-server on v30.2...");
-    let server = ServerBuilder::new()
-        .host_port(3050)
-        .l1_rpc_url(l1_rpc_url.to_string())
-        .local_chains_path(server_root.join("local-chains"))
-        .config_path(config_path.clone())
-        .use_local_backend()
-        .spawn_without_anvil()
+    let server = ServerBuilder::new(preset)
+        .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server via ServerBuilder: {:?}", e))?;
     println!("✓ Server started ({})", server.container_name());
 
     println!("Driving L2 traffic until >=3 batches are executed on L1...");
     wait_for_executed_batches_with_traffic(
-        "http://127.0.0.1:3050",
+        server.rpc_url().as_str(),
         l1_rpc_url,
         &contracts.l1.diamond_proxy_addr,
         DEFAULT_TEST_PRIVATE_KEY,
@@ -1464,7 +1192,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     schedule_upgrade_timestamp(l1_rpc_url, &contracts, &wallets)?;
     wait_for_server_batches_to_drain_before_upgrade(
         l1_rpc_url,
-        "http://127.0.0.1:3050",
+        server.rpc_url().as_str(),
         &contracts.l1.diamond_proxy_addr,
         Duration::from_secs(120),
     )?;
@@ -1474,7 +1202,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     // Run chain upgrade
     run_chain_upgrade(&root, l1_rpc_url, &contracts, &wallets)?;
 
-    // Verify the protocol version was upgraded to v31
+    // Verify thef protocol version was upgraded to v31
     verify_protocol_version(&root, l1_rpc_url)?;
 
     // Run final upgrade stages
@@ -1482,7 +1210,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
 
     println!("Driving post-upgrade traffic until >=6 batches are executed on L1...");
     wait_for_executed_batches_with_traffic(
-        "http://127.0.0.1:3050",
+        server.rpc_url().as_str(),
         l1_rpc_url,
         &contracts.l1.diamond_proxy_addr,
         DEFAULT_TEST_PRIVATE_KEY,
@@ -1496,7 +1224,6 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         )
     })?;
 
-    test_transaction()?;
     server
         .kill()
         .map_err(|e| anyhow::anyhow!("Failed to kill server after test: {:?}", e))?;

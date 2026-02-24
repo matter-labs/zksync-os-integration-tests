@@ -6,12 +6,15 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
 
+use chrono::Local;
 use uuid::Uuid;
 
 use crate::anvil::Anvil;
-use crate::docker_utils::{docker_available, DockerContainer, DockerError};
-use crate::presets::{load_default_presets, RepoRef};
-use crate::server_utils::wait_for_chain_to_be_ready;
+use crate::docker::{docker_available, DockerContainer, DockerError};
+use crate::find_ports::pick_unused_port_sync;
+use crate::preset_paths::server_paths_for_preset;
+use crate::presets::{Preset, RepoRef};
+use crate::server_utils::{strip_ansi_escape_codes_in_file, wait_for_chain_to_be_ready};
 use crate::utils::find_project_root;
 
 static TEST_RUN_ID: OnceLock<String> = OnceLock::new();
@@ -20,9 +23,18 @@ const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const ZKSYNC_OS_SERVER_IMAGE_REPO: &str =
     "ghcr.io/matter-labs/zksync-os-server";
 
-fn get_or_create_run_id() -> &'static str {
+pub(crate) fn get_or_create_run_id() -> &'static str {
     TEST_RUN_ID
-        .get_or_init(|| Uuid::new_v4().to_string())
+        .get_or_init(|| {
+            let timestamp = Local::now().format("%Y-%m-%d_%H:%M:%S");
+            let current = std::thread::current();
+            let name = current.name().unwrap_or("unknown");
+            let fn_part = name.rsplit("::").next().unwrap_or(name);
+            let fn_part = fn_part.strip_prefix("test_").unwrap_or(fn_part);
+            let test_name = fn_part.replace([' ', ':'], "_");
+            let uuid = Uuid::new_v4().to_string();
+            format!("{}_{}_{}", test_name, timestamp, &uuid[..8])
+        })
         .as_str()
 }
 
@@ -59,154 +71,81 @@ fn resolve_local_server_binary(server_root: &Path) -> Result<PathBuf, DockerErro
     }
 }
 
-/// Builder for configuring a zksync-os-server instance
+/// Builder for configuring a zksync-os-server instance. Requires a preset and always uses Anvil for L1.
 #[derive(Debug, Clone)]
 pub struct ServerBuilder {
-    /// Host port where server JSON-RPC should listen
-    host_port: u16,
-    /// L1 RPC URL
-    l1_rpc_url: String,
-    /// Path to local-chains directory
-    local_chains_path: PathBuf,
-    /// Config file path relative to server repo root
-    config_path: String,
-    /// Docker image tag to use for docker mode
-    image: String,
-    /// Backend selection strategy
-    backend_mode: ServerBackendMode,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ServerBackendMode {
-    Auto,
-    Local,
-    Docker,
-}
-
-impl Default for ServerBuilder {
-    fn default() -> Self {
-        Self {
-            host_port: 5050,
-            l1_rpc_url: "http://host.docker.internal:8545".to_string(),
-            // Use relative path; will be resolved relative to project root in spawn()
-            local_chains_path: PathBuf::from("zksync-os-server/local-chains"),
-            config_path: "./local-chains/v30.2/default/config.yaml".to_string(),
-            image: "ghcr.io/matter-labs/zksync-os-server:latest".to_string(),
-            backend_mode: ServerBackendMode::Auto,
-        }
-    }
+    preset: Preset,
+    /// Host port where server JSON-RPC should listen (None = random)
+    host_port: Option<u16>,
 }
 
 impl ServerBuilder {
-    /// Create a new ServerBuilder with default settings
-    pub fn new() -> Self {
-        Self::default()
+    /// Create a new ServerBuilder from a preset. Server always uses Anvil for L1.
+    /// Backend (local vs docker) is determined by preset.zksync_os_server.
+    pub fn new(preset: Preset) -> Self {
+        Self {
+            preset,
+            host_port: None,
+        }
     }
 
-    /// Set the host port
+    /// Set the host port (omit to use a random port)
     pub fn host_port(mut self, port: u16) -> Self {
-        self.host_port = port;
+        self.host_port = Some(port);
         self
     }
 
-    /// Set the L1 RPC URL
-    pub fn l1_rpc_url(mut self, url: String) -> Self {
-        self.l1_rpc_url = url;
-        self
+    /// Spawn the server with the given Anvil L1.
+    pub fn spawn(self, anvil: &Anvil) -> Result<Server, DockerError> {
+        let paths = server_paths_for_preset(&self.preset)
+            .map_err(|e| DockerError::CommandFailed(format!("Failed to resolve preset paths: {}", e)))?;
+        let local_chains_path = paths.server_root.join("local-chains");
+        let config_path = format!(
+            "./local-chains/{}/default/config.yaml",
+            self.preset.protocol_versions.previous
+        );
+        let l1_rpc_url = anvil.rpc_url_for(&self.preset.zksync_os_server);
+        let (server_root, use_local, image) = match &self.preset.zksync_os_server {
+            RepoRef::Path(_) => (
+                Some(paths.server_root.clone()),
+                true,
+                format!("{}:latest", ZKSYNC_OS_SERVER_IMAGE_REPO),
+            ),
+            RepoRef::DockerTag(tag) => (
+                None,
+                false,
+                format!("{}:{}", ZKSYNC_OS_SERVER_IMAGE_REPO, tag),
+            ),
+        };
+        let builder = InnerServerBuilder {
+            host_port: self.host_port,
+            l1_rpc_url,
+            local_chains_path,
+            config_path,
+            image,
+            use_local,
+        };
+        Server::spawn_inner(builder, server_root)
     }
 
-    /// Set the local-chains path
-    pub fn local_chains_path(mut self, path: PathBuf) -> Self {
-        self.local_chains_path = path;
-        self
-    }
-
-    /// Set the config path
-    pub fn config_path(mut self, path: String) -> Self {
-        self.config_path = path;
-        self
-    }
-
-    /// Set the Docker image used in docker backend mode.
-    pub fn image(mut self, image: String) -> Self {
-        self.image = image;
-        self
-    }
-
-    /// Force local-binary backend.
-    pub fn use_local_backend(mut self) -> Self {
-        self.backend_mode = ServerBackendMode::Local;
-        self
-    }
-
-    /// Force docker backend.
-    pub fn use_docker_backend(mut self) -> Self {
-        self.backend_mode = ServerBackendMode::Docker;
-        self
-    }
-
-    /// Spawn the server with Anvil L1 (default behavior)
-    pub async fn spawn(self) -> anyhow::Result<ServerWithAnvil> {
-        let presets = load_default_presets()
-            .map_err(|e| DockerError::CommandFailed(format!("Failed to load presets.yaml: {}", e)))?;
-        let mut names: Vec<String> = presets.keys().cloned().collect();
-        names.sort();
-        let preset_name = names
-            .first()
-            .ok_or_else(|| DockerError::CommandFailed("No presets found in presets.yaml".to_string()))?
-            .clone();
-        let preset = presets
-            .get(&preset_name)
-            .ok_or_else(|| DockerError::CommandFailed(format!("Preset '{}' disappeared", preset_name)))?
-            .clone();
-
-        let anvil = Anvil::spawn(&preset).await
+    /// Spawn Anvil from preset, then spawn the server. Returns (server, anvil) separately.
+    pub async fn spawn_with_anvil(self) -> anyhow::Result<(Server, Anvil)> {
+        let anvil = Anvil::spawn(&self.preset).await
             .map_err(|e| DockerError::CommandFailed(format!("Failed to spawn anvil: {}", e)))?;
-        
-        let mut builder = self;
-        let is_local_preset = matches!(preset.zksync_os_server, RepoRef::Path(_));
-        let use_local = match builder.backend_mode {
-            ServerBackendMode::Local => true,
-            ServerBackendMode::Docker => false,
-            ServerBackendMode::Auto => is_local_preset,
-        };
-
-        if let RepoRef::DockerTag(tag) = &preset.zksync_os_server {
-            builder.image = format!("{}:{}", ZKSYNC_OS_SERVER_IMAGE_REPO, tag);
-        }
-
-        // For local binary run, point directly to local anvil endpoint.
-        // Docker cannot use localhost of host and needs host.docker.internal.
-        if use_local {
-            builder.l1_rpc_url = anvil.rpc_url().to_string();
-        } else {
-            builder.l1_rpc_url = format!("http://host.docker.internal:{}", anvil.port());
-        }
-        
-        let server_root = match &preset.zksync_os_server {
-            RepoRef::Path(path) => Some(path.clone()),
-            RepoRef::DockerTag(_) => None,
-        };
-
-        let server = Server::spawn(builder, server_root)
+        let server = self.spawn(&anvil)
             .map_err(|e| anyhow::anyhow!("Failed to spawn server: {:?}", e))?;
-        
-        Ok(ServerWithAnvil {
-            server,
-            anvil,
-        })
+        Ok((server, anvil))
     }
+}
 
-    /// Spawn the server without Anvil (using the configured L1 RPC URL)
-    pub fn spawn_without_anvil(self) -> Result<Server, DockerError> {
-        Server::spawn(self, None)
-    }
-
-    /// Spawn anvil L1 and then spawn the server with anvil's RPC URL
-    /// This is an alias for `spawn()` for backwards compatibility
-    pub async fn spawn_with_anvil(self) -> anyhow::Result<ServerWithAnvil> {
-        self.spawn().await
-    }
+#[derive(Debug, Clone)]
+struct InnerServerBuilder {
+    host_port: Option<u16>,
+    l1_rpc_url: String,
+    local_chains_path: PathBuf,
+    config_path: String,
+    image: String,
+    use_local: bool,
 }
 
 /// A running zksync-os-server instance
@@ -226,34 +165,47 @@ enum ServerRuntime {
 }
 
 impl Server {
-    fn spawn(builder: ServerBuilder, server_root: Option<PathBuf>) -> Result<Self, DockerError> {
+    fn spawn_inner(builder: InnerServerBuilder, server_root: Option<PathBuf>) -> Result<Self, DockerError> {
+        let host_port = builder.host_port.unwrap_or_else(|| {
+            pick_unused_port_sync().expect("failed to pick random port")
+        });
+
         let server_name = format!("integration-tests-zksync-os-server-{}", Uuid::new_v4());
 
         // Find project root and resolve paths relative to it
         let project_root = find_project_root()?;
 
-        // Group all server logs in this test run under logs/run_{run_id}.
+        // Group all server logs in this test run under logs/{run_id}.
+        // Move any existing run directories to previous_runs/ before creating the new one.
         let run_id = get_or_create_run_id();
         let logs_root = project_root.join("integration-tests/logs");
-        let logs_dir = logs_root.join(format!("run_{}", run_id));
+        let previous_runs = logs_root.join("previous_runs");
+        if logs_root.exists() {
+            if let Ok(entries) = fs::read_dir(&logs_root) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if name != "previous_runs" && name != run_id {
+                                let dest = previous_runs.join(name);
+                                fs::create_dir_all(&previous_runs).ok();
+                                let _ = fs::rename(&path, &dest);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        let logs_dir = logs_root.join(run_id);
         fs::create_dir_all(&logs_dir).map_err(|e| DockerError::CommandFailed(format!(
             "Failed to create logs directory at '{}': {}",
             logs_dir.display(),
             e
         )))?;
 
-        let is_local_available = server_root.is_some();
-        let use_local = match builder.backend_mode {
-            ServerBackendMode::Local => true,
-            ServerBackendMode::Docker => false,
-            ServerBackendMode::Auto => is_local_available,
-        };
+        let use_local = builder.use_local;
 
-        let local_chains_path = if builder.local_chains_path.is_absolute() {
-            builder.local_chains_path.clone()
-        } else {
-            project_root.join(&builder.local_chains_path)
-        };
+        let local_chains_path = builder.local_chains_path;
         
         let local_chains_abs = std::fs::canonicalize(&local_chains_path)
             .map_err(|e| DockerError::CommandFailed(format!(
@@ -276,7 +228,7 @@ impl Server {
                 server_root,
                 builder.config_path.clone(),
                 builder.l1_rpc_url.clone(),
-                builder.host_port,
+                host_port,
                 local_chains_abs,
                 logs_dir.join(format!("db_{}", server_name)),
             );
@@ -296,7 +248,7 @@ impl Server {
                 .arg("--name")
                 .arg(&server_name)
                 .arg("-p")
-                .arg(format!("{}:3050", builder.host_port))
+                .arg(format!("{}:3050", host_port))
                 .arg("-e")
                 .arg(format!("GENERAL_L1_RPC_URL={}", builder.l1_rpc_url))
                 .arg("--add-host")
@@ -330,31 +282,10 @@ impl Server {
             ServerRuntime::Docker(DockerContainer::new(server_name.clone()))
         };
 
-        // Record latest server container metadata for external tooling.
-        let run_latest_path = logs_root.join("run_latest.json");
-        let run_latest = serde_json::json!({
-            "run_id": run_id,
-            "container_name": server_name,
-        });
-        let run_latest_content = serde_json::to_string_pretty(&run_latest).map_err(|e| {
-            DockerError::CommandFailed(format!(
-                "Failed to serialize latest server metadata '{}': {}",
-                run_latest_path.display(),
-                e
-            ))
-        })?;
-        fs::write(&run_latest_path, run_latest_content).map_err(|e| {
-            DockerError::CommandFailed(format!(
-                "Failed to write latest server metadata '{}': {}",
-                run_latest_path.display(),
-                e
-            ))
-        })?;
-
         Ok(Self {
             runtime,
             server_name,
-            host_port: builder.host_port,
+            host_port,
             logs_dir,
             run_index: std::cell::Cell::new(1),
         })
@@ -368,6 +299,11 @@ impl Server {
     /// Get the host port
     pub fn host_port(&self) -> u16 {
         self.host_port
+    }
+
+    /// Get the L2 RPC URL
+    pub fn rpc_url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.host_port)
     }
 
     /// Check if the server is running
@@ -426,47 +362,6 @@ impl Server {
             "server_run{}_{}.json",
             run_index, self.server_name
         ))
-    }
-}
-
-/// A server instance with its own anvil L1
-pub struct ServerWithAnvil {
-    server: Server,
-    anvil: Anvil,
-}
-
-impl ServerWithAnvil {
-    /// Get a reference to the server
-    pub fn server(&self) -> &Server {
-        &self.server
-    }
-
-    /// Get a reference to the anvil instance
-    pub fn anvil(&self) -> &Anvil {
-        &self.anvil
-    }
-
-    /// Get the L1 RPC URL
-    pub fn l1_rpc_url(&self) -> &str {
-        self.anvil.rpc_url()
-    }
-
-    /// Stop only the server container, preserving its data for restart.
-    pub fn stop_server(&self) -> Result<(), DockerError> {
-        self.server.stop()
-    }
-
-    /// Start the same server container again after `stop_server`.
-    pub fn start_server(&self) -> Result<(), DockerError> {
-        self.server.start()
-    }
-
-    /// Kill both the server and anvil
-    pub fn kill(self) -> anyhow::Result<()> {
-        self.server.kill()
-            .map_err(|e| anyhow::anyhow!("Failed to kill server: {:?}", e))?;
-        self.anvil.kill()?;
-        Ok(())
     }
 }
 
@@ -620,7 +515,7 @@ impl LocalServerRuntime {
             *path_guard = Some(log_path.to_path_buf());
         }
 
-        if let Err(err) = self.wait_until_rpc_ready() {
+        if let Err(err) = self.wait_until_rpc_ready(log_path) {
             let _ = self.stop();
             return Err(DockerError::CommandFailed(format!(
                 "Server process started but RPC did not become ready on port {}. {}. Check logs at '{}'",
@@ -652,7 +547,13 @@ impl LocalServerRuntime {
             .lock()
             .map_err(|_| DockerError::CommandFailed("Failed to lock log path".to_string()))?;
         if let Some(path) = path_guard.as_ref() {
-            strip_ansi_escape_codes(path)?;
+            strip_ansi_escape_codes_in_file(path).map_err(|e| {
+                DockerError::CommandFailed(format!(
+                    "Failed to strip ANSI escapes from '{}': {}",
+                    path.display(),
+                    e
+                ))
+            })?;
         }
         Ok(())
     }
@@ -661,47 +562,23 @@ impl LocalServerRuntime {
         self.stop()
     }
 
-    fn wait_until_rpc_ready(&self) -> Result<(), String> {
+    fn wait_until_rpc_ready(&self, log_path: &Path) -> Result<(), String> {
         let url = format!("http://127.0.0.1:{}/", self.host_port);
         wait_for_chain_to_be_ready(
             &url,
             "Server RPC",
             SERVER_READY_MAX_ATTEMPTS,
             SERVER_READY_RETRY_DELAY,
+            Some(log_path),
         )
         .map_err(|e| e.to_string())
     }
 }
 
-fn strip_ansi_escape_codes(log_path: &Path) -> Result<(), DockerError> {
-    let path_str = log_path.to_string_lossy();
-    let escaped_path = path_str.replace('\'', "'\"'\"'");
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(format!(
-            "perl -i -pe 's/\\e\\[[0-9;]*[a-zA-Z]//g' '{}'",
-            escaped_path
-        ))
-        .status()
-        .map_err(|e| DockerError::CommandFailed(format!(
-            "Failed to strip ANSI escapes from '{}': {}",
-            log_path.display(),
-            e
-        )))?;
-    if !status.success() {
-        return Err(DockerError::CommandFailed(format!(
-            "Failed to strip ANSI escapes from '{}' (exit status: {})",
-            log_path.display(),
-            status
-        )));
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::presets::RepoRef;
+    use crate::presets::load_default_presets;
     use crate::server_utils::{wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY};
     use crate::upgrade_config::Contracts;
     use std::time::Duration;
@@ -712,7 +589,6 @@ mod tests {
         let test_name = thread.name().unwrap_or("unknown_test").to_string();
         println!("Starting server test...");
 
-        // Configure server paths from the default preset instead of hardcoded defaults.
         let presets = load_default_presets().expect("Failed to load presets.yaml");
         let mut names: Vec<String> = presets.keys().cloned().collect();
         names.sort();
@@ -725,52 +601,24 @@ mod tests {
             .expect("Preset disappeared while reading presets")
             .clone();
 
-        let project_root = crate::utils::find_project_root()
-            .expect("Failed to resolve project root for server test");
-        let server_root = match &preset.zksync_os_server {
-            RepoRef::Path(path) => path.clone(),
-            // For docker-tag presets we still use the local workspace checkout for test artifacts,
-            // while ServerBuilder auto-selects docker backend.
-            RepoRef::DockerTag(_) => project_root.join("../zksync-os-server"),
-        };
-        assert!(
-            server_root.exists(),
-            "Server root does not exist for test: {}",
-            server_root.display()
-        );
+        let paths = crate::preset_paths::server_paths_for_preset(&preset)
+            .expect("Failed to resolve server paths from preset");
+        let contracts_path = paths.contracts_yaml.clone();
 
-        let local_chains_path = server_root.join("local-chains");
-        let config_path = format!(
-            "./local-chains/{}/default/config.yaml",
-            preset.protocol_versions.previous
-        );
-        let contracts_path = local_chains_path
-            .join(&preset.protocol_versions.previous)
-            .join("default")
-            .join("contracts.yaml");
-
-        let server_with_anvil = ServerBuilder::new()
-            .local_chains_path(local_chains_path)
-            .config_path(config_path)
-            .spawn()
+        let (server, anvil) = ServerBuilder::new(preset)
+            .spawn_with_anvil()
             .await
             .expect("Failed to spawn server with anvil");
 
-        let (container_name, l2_rpc_url) = {
-            let server = server_with_anvil.server();
-            (
-                server.container_name().to_string(),
-                format!("http://127.0.0.1:{}", server.host_port()),
-            )
-        };
+        let container_name = server.container_name().to_string();
+        let l2_rpc_url = format!("http://127.0.0.1:{}", server.host_port());
         let contracts = Contracts::load_from_path(&contracts_path)
             .expect("Failed to load contracts.yaml for batch tracking");
 
         std::thread::sleep(Duration::from_secs(1));
         // Verify server is running
         println!("Checking if server is running...");
-        let is_running = server_with_anvil
-            .server()
+        let is_running = server
             .is_running()
             .map_err(|e| format!("Failed to check server status: {:?}", e))
             .unwrap();
@@ -780,7 +628,7 @@ mod tests {
         println!("Sending txs every 3s until >=3 executed L1 batches...");
         wait_for_executed_batches_with_traffic(
             &l2_rpc_url,
-            server_with_anvil.l1_rpc_url(),
+            anvil.rpc_url(),
             &contracts.l1.diamond_proxy_addr,
             DEFAULT_TEST_PRIVATE_KEY,
             3,
@@ -790,12 +638,9 @@ mod tests {
 
         // Restart cycle #1 (stop + start same container)
         println!("Restart cycle #1: stopping server...");
-        server_with_anvil
-            .stop_server()
-            .expect("Failed to stop server in restart cycle #1");
+        server.stop().expect("Failed to stop server in restart cycle #1");
         assert!(
-            !server_with_anvil
-                .server()
+            !server
                 .is_running()
                 .map_err(|e| format!("Failed to check status after stop #1: {:?}", e))
                 .unwrap(),
@@ -804,12 +649,9 @@ mod tests {
         );
 
         println!("Restart cycle #1: starting server...");
-        server_with_anvil
-            .start_server()
-            .expect("Failed to start server in restart cycle #1");
+        server.start().expect("Failed to start server in restart cycle #1");
         assert!(
-            server_with_anvil
-                .server()
+            server
                 .is_running()
                 .map_err(|e| format!("Failed to check status after start #1: {:?}", e))
                 .unwrap(),
@@ -819,12 +661,9 @@ mod tests {
 
         // Restart cycle #2 (stop + start same container)
         println!("Restart cycle #2: stopping server...");
-        server_with_anvil
-            .stop_server()
-            .expect("Failed to stop server in restart cycle #2");
+        server.stop().expect("Failed to stop server in restart cycle #2");
         assert!(
-            !server_with_anvil
-                .server()
+            !server
                 .is_running()
                 .map_err(|e| format!("Failed to check status after stop #2: {:?}", e))
                 .unwrap(),
@@ -833,12 +672,9 @@ mod tests {
         );
 
         println!("Restart cycle #2: starting server...");
-        server_with_anvil
-            .start_server()
-            .expect("Failed to start server in restart cycle #2");
+        server.start().expect("Failed to start server in restart cycle #2");
         assert!(
-            server_with_anvil
-                .server()
+            server
                 .is_running()
                 .map_err(|e| format!("Failed to check status after start #2: {:?}", e))
                 .unwrap(),
@@ -848,10 +684,8 @@ mod tests {
 
         // Kill the server and anvil
         println!("Killing server and anvil...");
-        match server_with_anvil.kill() {
-            Ok(()) => println!("Server and anvil killed successfully"),
-            Err(e) => panic!("Failed to kill server and anvil: {:?}", e),
-        }
+        server.kill().expect("Failed to kill server");
+        anvil.kill().expect("Failed to kill anvil");
 
         println!(
             "{} completed successfully! (container: {})",

@@ -2,9 +2,19 @@ use anyhow::Context;
 use fs2::FileExt;
 use std::{
     fs::File,
-    net::{Ipv4Addr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddrV4, TcpListener as StdTcpListener},
 };
 use tokio::net::TcpListener;
+
+/// Pick an unused port synchronously. The port may be taken by another process before use.
+pub fn pick_unused_port_sync() -> anyhow::Result<u16> {
+    let listener = StdTcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .context("failed to bind to port 0 for random port")?;
+    listener
+        .local_addr()
+        .context("failed to get local address")
+        .map(|addr| addr.port())
+}
 
 pub struct LockedPort {
     pub port: u16,

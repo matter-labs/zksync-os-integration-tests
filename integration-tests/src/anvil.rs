@@ -5,7 +5,7 @@ use std::time::Duration;
 use alloy::providers::ProviderBuilder;
 use crate::find_ports::LockedPort;
 use crate::preset_paths::server_paths_for_preset;
-use crate::presets::Preset;
+use crate::presets::{Preset, RepoRef};
 use crate::server_utils::wait_for_chain_to_be_ready;
 
 /// Get L1 state path for a given preset.
@@ -143,9 +143,18 @@ impl Anvil {
         })
     }
 
-    /// Get the RPC URL for this anvil instance
+    /// Get the RPC URL for this anvil instance (localhost)
     pub fn rpc_url(&self) -> &str {
         &self.rpc_url
+    }
+
+    /// Get the RPC URL appropriate for the given repo ref.
+    /// Path = localhost; DockerTag = host.docker.internal (for containers reaching host anvil)
+    pub fn rpc_url_for(&self, repo_ref: &RepoRef) -> String {
+        match repo_ref {
+            RepoRef::Path(_) => self.rpc_url().to_string(),
+            RepoRef::DockerTag(_) => format!("http://host.docker.internal:{}", self.port()),
+        }
     }
 
     /// Get the port this anvil instance is running on
@@ -169,6 +178,7 @@ fn wait_for_l1_ready(rpc_url: &str) -> anyhow::Result<()> {
         "Anvil L1",
         L1_READY_MAX_ATTEMPTS,
         L1_READY_RETRY_DELAY,
+        None,
     )
 }
 
