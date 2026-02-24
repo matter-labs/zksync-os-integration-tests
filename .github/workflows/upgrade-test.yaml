@@ -84,6 +84,10 @@ jobs:
       - name: Install Yarn
         run: npm install -g yarn@1.22.19
 
+      - name: Build era-contracts
+        run: |
+          cd ../era-contracts && yarn build-all-contracts
+
       - name: Run upgrade test
         run: |
           # Test builds contracts, builds and starts server via ServerBuilder, runs full upgrade, then stops server
