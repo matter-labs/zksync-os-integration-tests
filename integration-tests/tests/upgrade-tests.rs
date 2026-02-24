@@ -38,7 +38,10 @@ use integration_tests::anvil::Anvil;
 use integration_tests::anvil_utils::{fund_account, impersonate_account, stop_impersonating_account, RICH_ACCOUNT_PRIVATE_KEY};
 use integration_tests::presets::RepoRef;
 use integration_tests::server::ServerBuilder;
-use integration_tests::server_utils::{wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY};
+use integration_tests::server_utils::{
+    address_from_private_key, fund_l2_via_l1_deposit,
+    wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY,
+};
 use integration_tests::upgrade_config::{Contracts, Wallets};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -1166,6 +1169,30 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server via ServerBuilder: {:?}", e))?;
     println!("✓ Server started ({})", server.container_name());
+
+    let test_address = address_from_private_key(DEFAULT_TEST_PRIVATE_KEY)
+        .context("Failed to derive address for DEFAULT_TEST_PRIVATE_KEY")?;
+    fund_account(
+        &test_address,
+        "1ether",
+        l1_rpc_url,
+        wallets.deployer.private_key.as_str(),
+    )
+    .context("Failed to fund DEFAULT_TEST_PRIVATE_KEY on L1 for bridge")?;
+    let paths = get_default_server_paths();
+    let balance = fund_l2_via_l1_deposit(
+        &paths.server_root,
+        l1_rpc_url,
+        server.rpc_url().as_str(),
+        &contracts.ecosystem_contracts.bridgehub_proxy_addr,
+        6565,
+        DEFAULT_TEST_PRIVATE_KEY,
+        0.01,
+        Duration::from_secs(120),
+    )
+    .context("Failed to fund DEFAULT_TEST_PRIVATE_KEY on L2 via L1 bridge")?;
+    anyhow::ensure!(balance > 0, "DEFAULT_TEST_PRIVATE_KEY L2 balance must be > 0, got {}", balance);
+    println!("✓ DEFAULT_TEST_PRIVATE_KEY funded on L2 via L1 bridge (balance {} wei)", balance);
 
     println!("Driving L2 traffic until >=3 batches are executed on L1...");
     wait_for_executed_batches_with_traffic(

@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -374,4 +374,139 @@ fn parse_u64_value(raw: &str) -> Result<u64> {
         return u64::from_str_radix(hex, 16).context("Invalid hex value");
     }
     raw.parse::<u64>().context("Invalid decimal value")
+}
+
+/// Derive Ethereum address from a private key via `cast wallet address`.
+pub fn address_from_private_key(private_key: &str) -> Result<String> {
+    let output = Command::new("cast")
+        .args(["wallet", "address", "--private-key", private_key])
+        .output()
+        .context("Failed to run cast wallet address")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "cast wallet address failed:\nSTDERR:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Return L2 native balance in wei via `cast balance`.
+pub fn get_l2_balance(address: &str, l2_rpc_url: &str) -> Result<u128> {
+    let output = Command::new("cast")
+        .args(["balance", address, "--rpc-url", l2_rpc_url])
+        .output()
+        .context("Failed to run cast balance")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "cast balance failed:\nSTDERR:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if let Some(hex) = raw.strip_prefix("0x") {
+        return u128::from_str_radix(hex, 16).context("Invalid hex balance");
+    }
+    raw.parse::<u128>().context("Invalid decimal balance")
+}
+
+fn read_toolchain_from_dir(dir: &Path) -> Option<String> {
+    let toml_path = dir.join("rust-toolchain.toml");
+    if toml_path.exists() {
+        let content = fs::read_to_string(&toml_path).ok()?;
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with("channel") {
+                let rest = line
+                    .strip_prefix("channel")?
+                    .trim()
+                    .trim_start_matches('=')
+                    .trim();
+                let channel = rest.trim_matches('"').trim_matches('\'').trim();
+                if !channel.is_empty() {
+                    return Some(channel.to_string());
+                }
+            }
+        }
+    }
+    let legacy_path = dir.join("rust-toolchain");
+    if legacy_path.exists() {
+        let content = fs::read_to_string(&legacy_path).ok()?;
+        return Some(content.trim().to_string());
+    }
+    None
+}
+
+/// Build and run the generate-deposit tool from zksync-os-server to submit an L1->L2 deposit,
+/// then poll L2 until `test_address` has balance > 0. Caller must fund `test_address` on L1 first.
+pub fn fund_l2_via_l1_deposit(
+    server_root: &Path,
+    l1_rpc_url: &str,
+    l2_rpc_url: &str,
+    bridgehub_addr: &str,
+    chain_id: u64,
+    test_private_key: &str,
+    amount_ether: f64,
+    balance_poll_timeout: Duration,
+) -> Result<u128> {
+    let test_address = address_from_private_key(test_private_key)?;
+    // Build generate-deposit (same pattern as server build: use repo toolchain).
+    let mut build_cmd = Command::new("cargo");
+    build_cmd
+        .arg("build")
+        .arg("--release")
+        .arg("-p")
+        .arg("zksync_os_generate_deposit")
+        .current_dir(server_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    if let Some(toolchain) = read_toolchain_from_dir(server_root) {
+        build_cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
+    }
+    let status = build_cmd
+        .status()
+        .context("Failed to run cargo build for generate-deposit")?;
+    if !status.success() {
+        anyhow::bail!("cargo build -p zksync_os_generate_deposit failed in {}", server_root.display());
+    }
+    let bin = server_root.join("target/release/zksync_os_generate_deposit");
+    if !bin.exists() {
+        anyhow::bail!("generate-deposit binary not found at {}", bin.display());
+    }
+    let output = Command::new(&bin)
+        .args([
+            "--bridgehub",
+            bridgehub_addr,
+            "--chain-id",
+            &chain_id.to_string(),
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--private-key",
+            test_private_key,
+            "--amount",
+            &amount_ether.to_string(),
+        ])
+        .output()
+        .context("Failed to run generate-deposit")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "generate-deposit failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let deadline = Instant::now() + balance_poll_timeout;
+    while Instant::now() < deadline {
+        let balance = get_l2_balance(&test_address, l2_rpc_url)?;
+        if balance > 0 {
+            return Ok(balance);
+        }
+        sleep(Duration::from_secs(2));
+    }
+    anyhow::bail!(
+        "L2 balance for {} did not become > 0 within {:?}",
+        test_address,
+        balance_poll_timeout
+    )
 }
