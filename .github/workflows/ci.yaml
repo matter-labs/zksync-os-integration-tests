@@ -5,6 +5,7 @@ on:
   push:
     branches: ['main']
 
+jobs:
  status-check:
     name: Github Status Check
     runs-on: ubuntu-latest
