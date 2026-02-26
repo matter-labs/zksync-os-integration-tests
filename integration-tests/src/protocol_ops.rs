@@ -243,3 +243,30 @@ pub fn run_protocol_ops_for_preset(preset: &Preset, args: &[&str]) -> anyhow::Re
         }
     }
 }
+
+/// Execute transactions from a protocol-ops --out file by calling protocol_ops
+/// `chain execute-simulated-transactions`, which writes only the transactions to a small
+/// file and runs the Forge script. Requires local era-contracts path (Path preset).
+pub fn run_execute_protocol_ops_out(
+    era_contracts_path: &Path,
+    out_path: &Path,
+    l1_rpc_url: &str,
+    private_key: &str,
+) -> anyhow::Result<()> {
+    let out_path_abs = std::fs::canonicalize(out_path)
+        .with_context(|| format!("Failed to canonicalize out path: {}", out_path.display()))?;
+    let out_str = out_path_abs
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Out path contains invalid UTF-8"))?;
+    let args = [
+        "chain",
+        "execute-simulated-transactions",
+        "--out",
+        out_str,
+        "--l1-rpc-url",
+        l1_rpc_url,
+        "--private-key",
+        private_key,
+    ];
+    run_protocol_ops_local(era_contracts_path, &args).map(|_| ())
+}

@@ -86,38 +86,21 @@ fn parse_no_governance_out_file(out_path: &Path) -> Result<NoGovernancePrepareOu
 
 const UPGRADE_VERSION: &str = "v31-interop-b";
 
-/// Execute transactions from a protocol-ops --out JSON file.
-/// Uses the `transactions` field produced by protocol_ops (each item: to, data, value, optional gasLimit).
+/// Execute transactions from a protocol-ops --out JSON file using the Forge script ExecuteProtocolOpsOut.s.sol.
+/// Uses the `transactions` field produced by protocol_ops (each item: to, data, value).
 pub fn execute_transactions(
+    era_contracts_path: &Path,
     out_path: &Path,
     l1_rpc_url: &str,
     private_key: &str,
 ) -> Result<()> {
-    let content = fs::read_to_string(out_path)
-        .with_context(|| format!("Failed to read out file: {}", out_path.display()))?;
-    let root: serde_json::Value =
-        serde_json::from_str(&content).context("Failed to parse out file as JSON")?;
-    let txs = root
-        .get("transactions")
-        .and_then(|t| t.as_array())
-        .ok_or_else(|| anyhow::anyhow!("Out file missing or invalid .transactions array"))?;
-    for (i, tx) in txs.iter().enumerate() {
-        let to = tx
-            .get("to")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Transaction {} missing .to", i))?;
-        let data = tx.get("data").and_then(|v| v.as_str()).unwrap_or("0x");
-        let value = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0");
-        let gas_limit: Option<&str> = tx.get("gasLimit").and_then(|v| v.as_str());
-        let mut cmd = Command::new("cast");
-        cmd.args(["send", to, "--data", data, "--value", value, "--private-key", private_key, "--rpc-url", l1_rpc_url]);
-        if let Some(g) = gas_limit {
-            cmd.args(["--gas-limit", g]);
-        }
-        let msg = format!("Execute transaction {}/{}", i + 1, txs.len());
-        run_command(msg.as_str(), &mut cmd)?;
-    }
-    Ok(())
+    integration_tests::protocol_ops::run_execute_protocol_ops_out(
+        era_contracts_path,
+        out_path,
+        l1_rpc_url,
+        private_key,
+    )
+    .context("run_execute_protocol_ops_out failed")
 }
 
 /// Helper to get project root directory
@@ -694,7 +677,7 @@ fn run_ecosystem_upgrades(
         .context("Failed to parse no-governance-prepare out file")?;
 
     println!("\n  Executing transactions from simulate output...");
-    execute_transactions(&no_governance_out_path, l1_rpc_url, deployer_key)
+    execute_transactions(&era_path, &no_governance_out_path, l1_rpc_url, deployer_key)
         .context("execute_transactions (no-governance-prepare) failed")?;
 
     std::thread::sleep(Duration::from_secs(1));
@@ -741,7 +724,7 @@ fn run_ecosystem_upgrades(
     ])
     .context("governance-stage0 (simulate) failed")?;
     println!("\n  Executing transactions from governance-stage0 simulate output...");
-    execute_transactions(&governance_stage0_out_path, l1_rpc_url, governor_key)
+    execute_transactions(&era_path, &governance_stage0_out_path, l1_rpc_url, governor_key)
         .context("execute_transactions (governance-stage0) failed")?;
 
     let chain_asset_handler =
@@ -775,7 +758,7 @@ fn run_ecosystem_upgrades(
     ])
     .context("governance-stage1 (simulate) failed")?;
     println!("\n  Executing transactions from governance-stage1 simulate output...");
-    execute_transactions(&governance_stage1_out_path, l1_rpc_url, governor_key)
+    execute_transactions(&era_path, &governance_stage1_out_path, l1_rpc_url, governor_key)
         .context("execute_transactions (governance-stage1) failed - this is required to set protocol version in CTM")?;
 
     check_migration_paused(&chain_asset_handler, "after governance-stage1", l1_rpc_url)?;
@@ -1115,8 +1098,14 @@ fn schedule_upgrade_timestamp(
     ])
     .context("set-upgrade-timestamp (simulate) failed")?;
     println!("\n  Executing set-upgrade-timestamp transaction...");
-    execute_transactions(&set_ts_out_path, l1_rpc_url, wallets.governor.private_key.as_str())
-        .context("execute_transactions (set-upgrade-timestamp) failed")?;
+    let era_path = get_era_contracts_path();
+    execute_transactions(
+        &era_path,
+        &set_ts_out_path,
+        l1_rpc_url,
+        wallets.governor.private_key.as_str(),
+    )
+    .context("execute_transactions (set-upgrade-timestamp) failed")?;
 
     let scheduled_timestamp = read_u64_from_cast_call_with_args(
         l1_rpc_url,
