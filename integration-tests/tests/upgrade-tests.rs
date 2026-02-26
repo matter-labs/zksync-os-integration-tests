@@ -43,13 +43,82 @@ use integration_tests::server_utils::{
     wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY,
 };
 use integration_tests::upgrade_config::{Contracts, Wallets};
+use integration_tests::upgrade_yaml_output_generator;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+/// Script output from protocol_ops no-governance-prepare (from --out file: output.core, output.ecosystem, output.run_json).
+#[derive(Clone)]
+struct NoGovernancePrepareOutput {
+    core: serde_json::Value,
+    ecosystem: serde_json::Value,
+    run_json: String,
+}
+
+fn parse_no_governance_out_file(out_path: &Path) -> Result<NoGovernancePrepareOutput> {
+    let content = fs::read_to_string(out_path)
+        .with_context(|| format!("Failed to read out file: {}", out_path.display()))?;
+    let root: serde_json::Value =
+        serde_json::from_str(&content).context("Failed to parse no-governance-prepare out file")?;
+    let output = root
+        .get("output")
+        .ok_or_else(|| anyhow::anyhow!("Missing output in out file"))?;
+    let core = output
+        .get("core")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Missing output.core in out file"))?;
+    let ecosystem = output
+        .get("ecosystem")
+        .cloned()
+        .ok_or_else(|| anyhow::anyhow!("Missing output.ecosystem in out file"))?;
+    let run_json = output
+        .get("run_json")
+        .and_then(|v| serde_json::to_string(v).ok())
+        .unwrap_or_else(|| "{}".to_string());
+    Ok(NoGovernancePrepareOutput {
+        core,
+        ecosystem,
+        run_json,
+    })
+}
+
 const UPGRADE_VERSION: &str = "v31-interop-b";
 
+/// Execute transactions from a protocol-ops --out JSON file.
+/// Uses the `transactions` field produced by protocol_ops (each item: to, data, value, optional gasLimit).
+pub fn execute_transactions(
+    out_path: &Path,
+    l1_rpc_url: &str,
+    private_key: &str,
+) -> Result<()> {
+    let content = fs::read_to_string(out_path)
+        .with_context(|| format!("Failed to read out file: {}", out_path.display()))?;
+    let root: serde_json::Value =
+        serde_json::from_str(&content).context("Failed to parse out file as JSON")?;
+    let txs = root
+        .get("transactions")
+        .and_then(|t| t.as_array())
+        .ok_or_else(|| anyhow::anyhow!("Out file missing or invalid .transactions array"))?;
+    for (i, tx) in txs.iter().enumerate() {
+        let to = tx
+            .get("to")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("Transaction {} missing .to", i))?;
+        let data = tx.get("data").and_then(|v| v.as_str()).unwrap_or("0x");
+        let value = tx.get("value").and_then(|v| v.as_str()).unwrap_or("0");
+        let gas_limit: Option<&str> = tx.get("gasLimit").and_then(|v| v.as_str());
+        let mut cmd = Command::new("cast");
+        cmd.args(["send", to, "--data", data, "--value", value, "--private-key", private_key, "--rpc-url", l1_rpc_url]);
+        if let Some(g) = gas_limit {
+            cmd.args(["--gas-limit", g]);
+        }
+        let msg = format!("Execute transaction {}/{}", i + 1, txs.len());
+        run_command(msg.as_str(), &mut cmd)?;
+    }
+    Ok(())
+}
 
 /// Helper to get project root directory
 fn get_project_root() -> PathBuf {
@@ -75,7 +144,7 @@ fn get_era_contracts_path() -> PathBuf {
     }
 }
 
-fn run_protocol_ops_for_default_preset(args: &[&str]) -> Result<()> {
+fn run_protocol_ops_for_default_preset(args: &[&str]) -> Result<String> {
     let preset = get_default_preset();
     integration_tests::protocol_ops::run_protocol_ops_for_preset(&preset, args)
 }
@@ -250,18 +319,17 @@ fn extract_yaml_value(yaml: &str, key: &str) -> Result<String> {
     anyhow::bail!("Could not find key '{}' in YAML", key)
 }
 
-/// Extract a TOML value (simple parser for key = "value" format)
-fn extract_toml_value(toml: &str, key: &str) -> Result<String> {
-    for line in toml.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with(key) && trimmed.contains('=') {
-            if let Some(value) = trimmed.split('=').nth(1) {
-                // Remove quotes and whitespace
-                return Ok(value.trim().trim_matches('"').to_string());
-            }
-        }
+/// Extract a string value from JSON by dotted path (e.g. "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr").
+fn extract_json_value(obj: &serde_json::Value, path: &str) -> Result<String> {
+    let mut v = obj;
+    for key in path.split('.') {
+        v = v
+            .get(key)
+            .ok_or_else(|| anyhow::anyhow!("Missing key {:?} in JSON", key))?;
     }
-    anyhow::bail!("Could not find key '{}' in TOML", key)
+    v.as_str()
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("Key {:?} is not a string", path))
 }
 
 /// Extract a YAML value from a specific section (e.g., "governor" section's "private_key")
@@ -474,43 +542,28 @@ fn transfer_contract_ownership(
 /// This is called AFTER no-governance-prepare since contracts are deployed with
 /// deployer as owner, but governance stages need ecosystem governance to be the owner.
 fn transfer_new_contracts_ownership(
-    root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
+    core: &serde_json::Value,
 ) -> Result<()> {
     println!("\n  Transferring contract ownership to ecosystem governance...");
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
-    let era_path = get_era_contracts_path();
-
     let ecosystem_governance = &contracts.ecosystem_contracts.governance;
     println!("    Ecosystem governance: {}", ecosystem_governance);
 
-    // Read contract addresses from the upgrade output (TOML format)
-    let upgrade_output_path = era_path.join("l1-contracts/script-out/v31-upgrade-core.toml");
-    let upgrade_output = fs::read_to_string(&upgrade_output_path)
-        .context("Failed to read v31-upgrade-core.toml")?;
+    let chain_asset_handler = extract_json_value(core, "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr")?;
+    transfer_contract_ownership("ChainAssetHandler", &chain_asset_handler, ecosystem_governance, l1_rpc_url)?;
 
-    // Transfer ChainAssetHandler ownership
-    let chain_asset_handler = extract_toml_value(&upgrade_output, "chain_asset_handler_proxy_addr")?;
-    transfer_contract_ownership("ChainAssetHandler", &chain_asset_handler, &ecosystem_governance, l1_rpc_url)?;
-
-    // Transfer NativeTokenVault ownership (it needs setAssetTracker to be called by owner)
-    let native_token_vault = extract_toml_value(&upgrade_output, "native_token_vault_addr")?;
-    transfer_contract_ownership("NativeTokenVault", &native_token_vault, &ecosystem_governance, l1_rpc_url)?;
+    let native_token_vault = extract_json_value(core, "upgrade_addresses.native_token_vault_addr")?;
+    transfer_contract_ownership("NativeTokenVault", &native_token_vault, ecosystem_governance, l1_rpc_url)?;
 
     println!("  ✓ All ownership transfers complete");
     Ok(())
 }
 
 /// Check if migration is paused on ChainAssetHandler
-fn check_migration_paused(root: &Path, context: &str, l1_rpc_url: &str) -> Result<()> {
-    let era_path = get_era_contracts_path();
-
-    // Read chain_asset_handler address
-    let upgrade_output_path = era_path.join("l1-contracts/script-out/v31-upgrade-core.toml");
-    let upgrade_output = fs::read_to_string(&upgrade_output_path)?;
-    let chain_asset_handler = extract_toml_value(&upgrade_output, "chain_asset_handler_proxy_addr")?;
+fn check_migration_paused(chain_asset_handler: &str, context: &str, l1_rpc_url: &str) -> Result<()> {
 
     // Check migrationPaused
     let output = Command::new("cast")
@@ -534,14 +587,7 @@ fn check_migration_paused(root: &Path, context: &str, l1_rpc_url: &str) -> Resul
 }
 
 /// Ensure migration is paused, calling pauseMigration() directly if needed
-fn ensure_migration_paused(root: &Path, l1_rpc_url: &str) -> Result<()> {
-    let era_path = get_era_contracts_path();
-
-    // Read chain_asset_handler address
-    let upgrade_output_path = era_path.join("l1-contracts/script-out/v31-upgrade-core.toml");
-    let upgrade_output = fs::read_to_string(&upgrade_output_path)?;
-    let chain_asset_handler = extract_toml_value(&upgrade_output, "chain_asset_handler_proxy_addr")?;
-
+fn ensure_migration_paused(chain_asset_handler: &str, l1_rpc_url: &str) -> Result<()> {
     // Check if already paused
     let output = Command::new("cast")
         .args(["call", &chain_asset_handler, "migrationPaused()(bool)", "--rpc-url", l1_rpc_url])
@@ -591,97 +637,34 @@ fn ensure_migration_paused(root: &Path, l1_rpc_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Run a single ecosystem upgrade stage
-fn run_ecosystem_upgrade_stage(era_path: &Path, stage: &str, verbose: bool, skip_broadcast: bool) -> Result<()> {
-    let mut cmd = Command::new("zkstack");
-    cmd.args([
-        "dev",
-        "run-ecosystem-upgrade",
-        "--upgrade-version",
-        UPGRADE_VERSION,
-        "--ecosystem-upgrade-stage",
-        stage,
-    ]);
-
-    // Always use --slow to send transactions sequentially (prevents Anvil mempool overload)
-    cmd.args(["-a", "--slow"]);
-
-    // Add --skip-broadcast flag if requested
-    if skip_broadcast {
-        cmd.arg("--skip-broadcast");
-    }
-
-    // Add verbose flags to see full Forge traces for key stages
-    if verbose && (stage == "governance-stage0" || stage == "governance-stage1" || stage == "no-governance-prepare") {
-        cmd.arg("--verbose");
-        cmd.args(["-a", "-vvvv"]);
-    }
-
-    cmd.current_dir(era_path);
-
-    run_command_with_verbosity(
-        &format!("Ecosystem upgrade - {}", stage),
-        &mut cmd,
-        verbose,
-    )
-}
-
-/// Run ecosystem upgrade stages
+/// Run ecosystem upgrade stages. Returns script output from no-governance-prepare (no v31-upgrade-*.toml files on disk).
 fn run_ecosystem_upgrades(
     root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &Wallets,
-) -> Result<()> {
+) -> Result<NoGovernancePrepareOutput> {
     println!("\n=== Running Ecosystem Upgrades ===");
     let era_path = get_era_contracts_path();
+    let preset = get_default_preset();
 
-    // Fund governance account
     fund_governance_accounts(l1_rpc_url)?;
 
-    // Note: No ownership transfers needed! We use ecosystem governance (0xDB0de...AF70)
-    // which already owns all ecosystem contracts (CTM, ChainAdmin, ProxyAdmin, AssetRouter, NTV)
-
-    // Clean up old broadcast files and output files to ensure fresh deployment
-    let broadcast_v31_dir = era_path.join("l1-contracts/broadcast/EcosystemUpgrade_v31.s.sol/31337");
-    if broadcast_v31_dir.exists() {
-        println!("\n  Cleaning old broadcast files...");
-        fs::remove_dir_all(&broadcast_v31_dir).ok();
-        println!("  ✓ Broadcast files cleaned");
-    }
-
-    // Clean up old script-out files (contain old timer addresses)
-    let script_out_files = [
-        "l1-contracts/script-out/v31-upgrade-core.toml",
-        "l1-contracts/script-out/v31-upgrade-ctm.toml",
-        "l1-contracts/script-out/v31-upgrade-ecosystem.toml",
-    ];
-
-    println!("\n  Cleaning old script-out files...");
-    for file in &script_out_files {
-        let path = era_path.join(file);
-        if path.exists() {
-            fs::remove_file(&path).ok();
-        }
-    }
-    println!("  ✓ Script-out files cleaned");
-
-    // Ensure broadcast directories exist
-    let broadcast_dir = era_path.join("l1-contracts/broadcast");
-    fs::create_dir_all(&broadcast_dir)?;
-
-    // NOTE: We use a different CREATE2 salt for v31 (changed in permanent-values/local.toml)
-    // This ensures all v31 contracts deploy to different addresses, avoiding CREATE2 collisions
-
-    // Stage 0: no-governance-prepare (via protocol_ops)
-    println!("\n  Running no-governance-prepare (protocol_ops)...");
+    // Stage 0: no-governance-prepare in simulate mode, then execute transactions from --out file
+    println!("\n  Running no-governance-prepare (protocol_ops) in simulate mode...");
     let deployer_key = wallets.deployer.private_key.as_str();
     let bridgehub_proxy_address = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
     let ctm_proxy_address = contracts.ecosystem_contracts.state_transition_proxy_addr.as_str();
     let bytecodes_supplier_address = contracts.ecosystem_contracts.l1_bytecodes_supplier_addr.as_str();
     let rollup_da_manager_address = contracts.ecosystem_contracts.l1_rollup_da_manager.as_str();
 
-    let result = run_protocol_ops_for_default_preset(&[
+    let logs_dir = integration_tests::protocol_ops::protocol_ops_logs_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not resolve protocol_ops logs dir"))?;
+    fs::create_dir_all(&logs_dir)?;
+    let no_governance_out_path = logs_dir.join("no_governance_prepare_out.json");
+    let no_governance_out_str = no_governance_out_path.to_str().ok_or_else(|| anyhow::anyhow!("Path invalid UTF-8"))?;
+
+    let no_governance_args = vec![
         "ecosystem",
         "upgrade",
         "--ecosystem-upgrade-stage",
@@ -700,50 +683,45 @@ fn run_ecosystem_upgrades(
         rollup_da_manager_address,
         "--is-zk-sync-os",
         "true",
-    ]);
+        "--simulate",
+        "--out",
+        no_governance_out_str,
+    ];
+    integration_tests::protocol_ops::run_protocol_ops_for_preset(&preset, &no_governance_args)
+        .context("no-governance-prepare (protocol_ops) failed")?;
 
-    if let Err(e) = result {
-        // Check if broadcast files were created despite the error
-        let broadcast_file = resolve_ecosystem_upgrade_run_file(&era_path);
+    let script_output = parse_no_governance_out_file(&no_governance_out_path)
+        .context("Failed to parse no-governance-prepare out file")?;
 
-        if broadcast_file.exists() {
-            println!("Warning: zkstack reported error but broadcast file exists at: {}", broadcast_file.display());
-            println!("Continuing anyway - this is a known zkstack issue...");
-        } else {
-            println!("Broadcast file not found at: {}", broadcast_file.display());
-            // List what files actually exist in the broadcast directory
-            if let Ok(entries) = fs::read_dir(&broadcast_dir) {
-                println!("Files in broadcast directory:");
-                for entry in entries.flatten() {
-                    println!("  - {}", entry.path().display());
-                }
-            }
-            return Err(e);
-        }
-    }
+    println!("\n  Executing transactions from simulate output...");
+    execute_transactions(&no_governance_out_path, l1_rpc_url, deployer_key)
+        .context("execute_transactions (no-governance-prepare) failed")?;
 
-    // Give forge time to write all files
     std::thread::sleep(Duration::from_secs(1));
 
-    // Transfer ownership of newly deployed contracts: deployer -> ecosystem governance
-    // Contracts are deployed with deployer as owner, but governance stages
-    // need ecosystem governance to be the owner to call various functions.
-    transfer_new_contracts_ownership(&root, l1_rpc_url, contracts)?;
+    transfer_new_contracts_ownership(l1_rpc_url, contracts, &script_output.core)?;
+    transfer_governance_ownership_to_governor(root, l1_rpc_url, contracts, wallets)?;
 
-    // Transfer governance ownership to governor wallet
-    // The forge scripts broadcast from the governance owner, but we only have the governor's private key
-    transfer_governance_ownership_to_governor(&root, l1_rpc_url, contracts, wallets)?;
+    let ecosystem_output_path = era_path.join("l1-contracts/script-out/v31-upgrade-ecosystem.toml");
+    if let Some(parent) = ecosystem_output_path.parent() {
+        fs::create_dir_all(parent).ok();
+    }
+    let ecosystem_toml_str = toml::to_string_pretty(&script_output.ecosystem)
+        .context("Failed to serialize ecosystem JSON to TOML")?;
+    fs::write(&ecosystem_output_path, &ecosystem_toml_str)
+        .context("Failed to write ecosystem toml for governance stages")?;
+    let ecosystem_output_path_str = ecosystem_output_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8"))?;
 
-    // ecosystem-admin - skip for now (not implemented in replacement)
-    // let _ = run_ecosystem_upgrade_stage(&era_path, "ecosystem-admin", true, false).or_else(|e| {
-    //     println!("Warning: ecosystem-admin stage reported error: {}", e);
-    //     println!("Continuing anyway - checking if operation succeeded...");
-    //     Ok::<(), anyhow::Error>(())
-    // });
-
-    // Stage 0: governance (via protocol_ops). Must succeed.
     let governor_key = wallets.governor.private_key.as_str();
     let governance_addr = contracts.ecosystem_contracts.governance.as_str();
+
+    let governance_stage0_out_path = logs_dir.join("governance_stage0_out.json");
+    let governance_stage0_out_str = governance_stage0_out_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Path invalid UTF-8"))?;
+    println!("\n  Running governance-stage0 (protocol_ops) in simulate mode...");
     run_protocol_ops_for_default_preset(&[
         "ecosystem",
         "upgrade",
@@ -755,16 +733,29 @@ fn run_ecosystem_upgrades(
         governor_key,
         "--governance-address",
         governance_addr,
+        "--ecosystem-output-path",
+        ecosystem_output_path_str,
+        "--simulate",
+        "--out",
+        governance_stage0_out_str,
     ])
-    .context("governance-stage0 failed")?;
+    .context("governance-stage0 (simulate) failed")?;
+    println!("\n  Executing transactions from governance-stage0 simulate output...");
+    execute_transactions(&governance_stage0_out_path, l1_rpc_url, governor_key)
+        .context("execute_transactions (governance-stage0) failed")?;
 
-    // Check migrationPaused after stage0
-    check_migration_paused(&root, "after governance-stage0", l1_rpc_url)?;
+    let chain_asset_handler =
+        extract_json_value(&script_output.core, "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr")?;
+    check_migration_paused(&chain_asset_handler, "after governance-stage0", l1_rpc_url)?;
+    ensure_migration_paused(&chain_asset_handler, l1_rpc_url)?;
 
-    // Ensure migration is paused before stage1 (fallback if governance-stage0 didn't commit)
-    ensure_migration_paused(&root, l1_rpc_url)?;
+    std::thread::sleep(Duration::from_secs(1));
 
-    // Stage 1 - This must succeed as it sets the protocol version in CTM
+    let governance_stage1_out_path = logs_dir.join("governance_stage1_out.json");
+    let governance_stage1_out_str = governance_stage1_out_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Path invalid UTF-8"))?;
+    println!("\n  Running governance-stage1 (protocol_ops) in simulate mode...");
     run_protocol_ops_for_default_preset(&[
         "ecosystem",
         "upgrade",
@@ -776,15 +767,22 @@ fn run_ecosystem_upgrades(
         governor_key,
         "--governance-address",
         governance_addr,
+        "--ecosystem-output-path",
+        ecosystem_output_path_str,
+        "--simulate",
+        "--out",
+        governance_stage1_out_str,
     ])
-    .context("governance-stage1 failed - this is required to set protocol version in CTM")?;
+    .context("governance-stage1 (simulate) failed")?;
+    println!("\n  Executing transactions from governance-stage1 simulate output...");
+    execute_transactions(&governance_stage1_out_path, l1_rpc_url, governor_key)
+        .context("execute_transactions (governance-stage1) failed - this is required to set protocol version in CTM")?;
 
-    // Check migrationPaused after stage1
-    check_migration_paused(&root, "after governance-stage1", l1_rpc_url)?;
+    check_migration_paused(&chain_asset_handler, "after governance-stage1", l1_rpc_url)?;
 
     println!("✓ All ecosystem upgrade stages completed");
 
-    Ok(())
+    Ok(script_output)
 }
 
 /// Verify that the chain's protocol version matches the expected v31 version
@@ -833,35 +831,25 @@ fn verify_protocol_version(_root: &Path, l1_rpc_url: &str) -> Result<()> {
     Ok(())
 }
 
-/// Generate upgrade YAML output
-fn generate_upgrade_yaml(root: &Path) -> Result<()> {
+/// Generate upgrade YAML output from protocol_ops script output (no file reads).
+fn generate_upgrade_yaml(root: &Path, script_output: &NoGovernancePrepareOutput) -> Result<()> {
+    let _ = root;
     let l1_contracts_path = get_era_contracts_path().join("l1-contracts");
     print!("  Generate upgrade YAML output ... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
-    let run_file = resolve_ecosystem_upgrade_run_file(&get_era_contracts_path());
-    let output_toml = l1_contracts_path.join("script-out/v31-upgrade-ecosystem.toml");
     let yaml_out = l1_contracts_path.join("script-out/v31-local-output.yaml");
-
-    integration_tests::upgrade_yaml_output_generator::generate_upgrade_yaml_output(
-        &run_file,
-        &output_toml,
+    let ecosystem_toml_for_yaml = toml::to_string_pretty(&script_output.ecosystem)
+        .context("Failed to serialize ecosystem to TOML for YAML generator")?;
+    upgrade_yaml_output_generator::generate_upgrade_yaml_output_from_memory(
+        script_output.run_json.as_bytes(),
+        &ecosystem_toml_for_yaml,
         &yaml_out,
     )?;
 
     println!("✓");
     Ok(())
 }
-
-fn resolve_ecosystem_upgrade_run_file(era_path: &Path) -> PathBuf {
-    let base = era_path.join("l1-contracts/broadcast/EcosystemUpgrade_v31.s.sol/31337");
-    let sig_latest = base.join("noGovernancePrepareWithArgs-latest.json");
-    if sig_latest.exists() {
-        return sig_latest;
-    }
-    base.join("run-latest.json")
-}
-
 
 /// Run chain upgrade
 fn run_chain_upgrade(
@@ -1099,6 +1087,15 @@ fn schedule_upgrade_timestamp(
         upgrade_timestamp, target_protocol_version
     );
 
+    let logs_dir = integration_tests::protocol_ops::protocol_ops_logs_dir()
+        .ok_or_else(|| anyhow::anyhow!("Could not resolve protocol_ops logs dir"))?;
+    fs::create_dir_all(&logs_dir)?;
+    let set_ts_out_path = logs_dir.join("set_upgrade_timestamp_out.json");
+    let set_ts_out_str = set_ts_out_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Path invalid UTF-8"))?;
+
+    println!("\n  Running set-upgrade-timestamp (protocol_ops) in simulate mode...");
     run_protocol_ops_for_default_preset(&[
         "chain",
         "set-upgrade-timestamp",
@@ -1112,8 +1109,14 @@ fn schedule_upgrade_timestamp(
         &target_protocol_version.to_string(),
         "--upgrade-timestamp",
         &upgrade_timestamp.to_string(),
+        "--simulate",
+        "--out",
+        set_ts_out_str,
     ])
-    .context("Failed to set upgrade timestamp via protocol_ops")?;
+    .context("set-upgrade-timestamp (simulate) failed")?;
+    println!("\n  Executing set-upgrade-timestamp transaction...");
+    execute_transactions(&set_ts_out_path, l1_rpc_url, wallets.governor.private_key.as_str())
+        .context("execute_transactions (set-upgrade-timestamp) failed")?;
 
     let scheduled_timestamp = read_u64_from_cast_call_with_args(
         l1_rpc_url,
@@ -1213,11 +1216,11 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     // Update permanent values for upgrade
     update_permanent_values(&contracts)?;
 
-    // Run ecosystem upgrade stages
-    run_ecosystem_upgrades(&root, l1_rpc_url, &contracts, &wallets)?;
+    // Run ecosystem upgrade stages (script output via stdout, no v31-upgrade-*.toml files)
+    let script_output = run_ecosystem_upgrades(&root, l1_rpc_url, &contracts, &wallets)?;
 
-    // Generate upgrade YAML output
-    generate_upgrade_yaml(&root)?;
+    // Generate upgrade YAML output from in-memory script output
+    generate_upgrade_yaml(&root, &script_output)?;
 
     // Notify server about upcoming upgrade, then wait for commit/execute counters to converge.
     schedule_upgrade_timestamp(l1_rpc_url, &contracts, &wallets)?;

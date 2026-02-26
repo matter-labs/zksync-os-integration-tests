@@ -1,6 +1,6 @@
-use std::fs::OpenOptions;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use anyhow::Context;
@@ -18,13 +18,37 @@ const ERA_CONTRACTS_PROTOCOL_IMAGE_REPO: &str =
 const PROTOCOL_OPS_DOCKER_ENV: &[(&str, &str)] = &[("FOUNDRY_DISABLE_NIGHTLY_WARNING", "1")];
 
 const PROTOCOL_OPS_COMMANDS_LOG: &str = "protocol_ops_commands.log";
+const PROTOCOL_OPS_OUT_PREFIX: &str = "protocol_ops";
+const PROTOCOL_OPS_OUT_SUFFIX: &str = "_out.json";
 
-fn protocol_ops_log_path() -> Option<std::path::PathBuf> {
+fn protocol_ops_log_path() -> Option<PathBuf> {
     let project_root = find_project_root().ok()?;
     let run_id = get_or_create_run_id();
     let logs_dir = project_root.join("integration-tests/logs").join(run_id);
     std::fs::create_dir_all(&logs_dir).ok()?;
     Some(logs_dir.join(PROTOCOL_OPS_COMMANDS_LOG))
+}
+
+/// Directory used for protocol_ops logs and out files (integration-tests/logs/<run_id>).
+/// Use this when writing or reading protocol_ops --out files from tests so they land in the same run dir.
+pub fn protocol_ops_logs_dir() -> Option<PathBuf> {
+    protocol_ops_log_path().and_then(|p| p.parent().map(PathBuf::from))
+}
+
+/// Parse args for --out=path or --out path; return the path if present.
+fn extract_out_path_from_args(args: &[&str]) -> Option<String> {
+    let mut i = 0;
+    while i < args.len() {
+        let a = args[i];
+        if let Some(path) = a.strip_prefix("--out=") {
+            return Some(path.to_string());
+        }
+        if a == "--out" && i + 1 < args.len() {
+            return Some(args[i + 1].to_string());
+        }
+        i += 1;
+    }
+    None
 }
 
 fn log_protocol_ops_command_and_output(
@@ -67,10 +91,9 @@ fn shell_escape(arg: &str) -> String {
 }
 
 /// Run protocol_ops locally (not in Docker) against the given era-contracts path.
-/// Uses PROTOCOL_CONTRACTS_ROOT so protocol_ops finds contracts in that directory.
-/// Builds silently first, then runs the binary. Runs `nvm use` before execution so
-/// protocol_ops can spawn forge/yarn with the correct Node version from .nvmrc.
-pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyhow::Result<()> {
+/// Returns stdout on success. Uses PROTOCOL_CONTRACTS_ROOT so protocol_ops finds contracts.
+/// Builds silently first, clears broadcast dir, then runs the binary. Runs `nvm use` before execution.
+pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyhow::Result<String> {
     let protocol_ops_dir = era_contracts_path.join("protocol-ops");
     let protocol_ops_manifest = protocol_ops_dir.join("Cargo.toml");
     if !protocol_ops_manifest.exists() {
@@ -90,26 +113,35 @@ pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyho
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Manifest path contains invalid UTF-8"))?;
 
-    // Step 1: Build silently (suppress compiler warnings and progress).
-    // Use era-contracts' toolchain (RUSTUP_TOOLCHAIN) so we don't inherit the integration-tests toolchain.
     let mut build_cmd = Command::new("cargo");
     build_cmd
         .args(["build", "--release", "--manifest-path", manifest_str])
         .current_dir(era_contracts_path)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
     if let Some(toolchain) = read_toolchain_from_dir(era_contracts_path) {
         build_cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
     }
-    let build_status = build_cmd
-        .status()
+    let build_output = build_cmd
+        .output()
         .with_context(|| "Failed to run cargo build for protocol_ops")?;
-    if !build_status.success() {
-        anyhow::bail!("cargo build --release for protocol_ops failed with status: {}", build_status);
+    if !build_output.status.success() {
+        let stderr = String::from_utf8_lossy(&build_output.stderr);
+        eprintln!("{}", stderr);
+        anyhow::bail!(
+            "cargo build --release for protocol_ops failed with status: {}\n\nSTDERR:\n{}",
+            build_output.status,
+            stderr
+        );
     }
 
-    // Step 2: Run the binary. Use bash + nvm so protocol_ops can spawn forge/yarn.
+    let broadcast_dir = era_contracts_path.join("l1-contracts/broadcast");
+    if broadcast_dir.exists() {
+        fs::remove_dir_all(&broadcast_dir).context("clear broadcast dir before protocol_ops")?;
+    }
+    fs::create_dir_all(&broadcast_dir).context("create broadcast dir")?;
+
     let binary = protocol_ops_dir
         .join("target/release/protocol_ops")
         .with_extension(std::env::consts::EXE_EXTENSION);
@@ -152,10 +184,11 @@ pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyho
             stderr
         );
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-fn run_protocol_ops_in_image(image: &str, args: &[&str]) -> anyhow::Result<()> {
+/// Run protocol_ops in Docker image. Returns stdout on success.
+pub fn run_protocol_ops_in_image(image: &str, args: &[&str]) -> anyhow::Result<String> {
     let mut cmd = Command::new("docker");
     cmd.arg("run")
         .arg("--rm")
@@ -193,14 +226,15 @@ fn run_protocol_ops_in_image(image: &str, args: &[&str]) -> anyhow::Result<()> {
             stderr
         );
     }
-    Ok(())
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Run protocol_ops using the era-contracts source configured by the given preset.
+/// Returns stdout on success.
 ///
 /// - `RepoRef::Path` runs protocol_ops from local source.
 /// - `RepoRef::DockerTag` runs protocol_ops from `era-contracts:<tag>` Docker image.
-pub fn run_protocol_ops_for_preset(preset: &Preset, args: &[&str]) -> anyhow::Result<()> {
+pub fn run_protocol_ops_for_preset(preset: &Preset, args: &[&str]) -> anyhow::Result<String> {
     match &preset.era_contracts {
         RepoRef::Path(path) => run_protocol_ops_local(path, args),
         RepoRef::DockerTag(tag) => {

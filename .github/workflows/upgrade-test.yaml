@@ -29,16 +29,16 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Clone era-contracts (tjg-getting-rid-of-permanent-values)
+      - name: Clone era-contracts
         run: |
-          git clone --depth 1 --branch tjg-getting-rid-of-permanent-values \
+          git clone --depth 1 --branch tjg-upgrades-calldata-generation \
             https://github.com/matter-labs/era-contracts.git ../era-contracts
 
       - name: Init era-contracts submodules
         run: |
           cd ../era-contracts && git submodule update --init --recursive
 
-      - name: Clone zksync-os-server (bytecodes-supplier-support)
+      - name: Clone zksync-os-server
         run: |
           git clone --depth 1 --branch bytecodes-supplier-support \
             https://github.com/matter-labs/zksync-os-server.git ../zksync-os-server
