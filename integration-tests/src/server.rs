@@ -103,6 +103,8 @@ pub struct ServerBuilder {
     preset: Preset,
     /// Host port where server JSON-RPC should listen (None = random)
     host_port: Option<u16>,
+    /// Override config path (used instead of preset-derived path when set)
+    config_path_override: Option<PathBuf>,
 }
 
 impl ServerBuilder {
@@ -112,7 +114,14 @@ impl ServerBuilder {
         Self {
             preset,
             host_port: None,
+            config_path_override: None,
         }
+    }
+
+    /// Override the config path (used instead of preset-derived path when set).
+    pub fn config_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.config_path_override = Some(path.into());
+        self
     }
 
     /// Set the host port (omit to use a random port)
@@ -126,10 +135,16 @@ impl ServerBuilder {
         let paths = server_paths_for_preset(&self.preset)
             .map_err(|e| DockerError::CommandFailed(format!("Failed to resolve preset paths: {}", e)))?;
         let local_chains_path = paths.server_root.join("local-chains");
-        let config_path = format!(
-            "./local-chains/{}/default/config.yaml",
-            self.preset.protocol_versions.previous
-        );
+        let config_path = self
+            .config_path_override
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "./local-chains/{}/default/config.yaml",
+                    self.preset.protocol_versions.previous
+                )
+            });
         let l1_rpc_url = anvil.rpc_url_for(&self.preset.zksync_os_server);
         let (server_root, use_local, image) = match &self.preset.zksync_os_server {
             RepoRef::Path(_) => (
