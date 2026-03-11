@@ -1,4 +1,4 @@
-name: ZKsync OS Upgrade Test
+name: ZKsync OS Integration Tests
 
 on:
   pull_request:
@@ -11,11 +11,11 @@ permissions:
   contents: read
 
 concurrency:
-  group: upgrade-test-${{ github.ref }}
+  group: integration-tests-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  upgrade-test:
+  integration-tests:
     runs-on: matterlabs-ci-runner-high-performance
     timeout-minutes: 120
     env:
@@ -87,6 +87,10 @@ jobs:
       - name: Build era-contracts
         run: |
           cd ../era-contracts && yarn build-all-contracts
+
+      - name: Run ecosystem init test
+        run: |
+          cargo test --package integration-tests --test ecosystem-init -- test_protocol_ops_ecosystem_init_on_fresh_l1 --exact --nocapture --ignored
 
       - name: Run upgrade test
         run: |
