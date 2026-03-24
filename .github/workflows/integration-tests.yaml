@@ -18,6 +18,14 @@ jobs:
   integration-tests:
     runs-on: matterlabs-ci-runner-high-performance
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        test:
+          - name: ecosystem-init
+            command: cargo test --package integration-tests --test ecosystem-init -- test_protocol_ops_ecosystem_init_on_fresh_l1 --exact --nocapture --ignored
+          - name: upgrade
+            command: cargo test --package integration-tests --test upgrade-tests -- test_v30_to_v31_upgrade --exact --nocapture --ignored
     env:
       DEBIAN_FRONTEND: noninteractive
       WORKSPACE: ${{ github.workspace }}
@@ -88,14 +96,9 @@ jobs:
         run: |
           cd ../era-contracts && yarn build-all-contracts
 
-      - name: Run ecosystem init test
+      - name: Run test
         run: |
-          cargo test --package integration-tests --test ecosystem-init -- test_protocol_ops_ecosystem_init_on_fresh_l1 --exact --nocapture --ignored
-
-      - name: Run upgrade test
-        run: |
-          # Test builds contracts, builds and starts server via ServerBuilder, runs full upgrade, then stops server
-          cargo test --package integration-tests --test upgrade-tests -- test_v30_to_v31_upgrade --exact --nocapture --ignored
+          ${{ matrix.test.command }}
 
       - name: Prepare artifacts for upload
         if: failure()
@@ -108,7 +111,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: upgrade-test-logs
+          name: integration-test-logs-${{ matrix.test.name }}
           path: |
             integration-tests/logs/
             _artifacts/

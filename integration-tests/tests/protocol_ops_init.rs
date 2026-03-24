@@ -17,6 +17,9 @@ use integration_tests::preset_paths::server_paths_for_preset;
 use integration_tests::protocol_ops::protocol_ops_logs_dir;
 use integration_tests::server::ServerBuilder;
 use integration_tests::anvil_utils::fund_account;
+use integration_tests::keys_from_seed::{
+    operator_commit_private_key, operator_execute_private_key, operator_prove_private_key,
+};
 use integration_tests::server_utils::{
     address_from_private_key, fund_l2_via_l1_deposit,
     wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY,
@@ -29,13 +32,6 @@ use std::time::Duration;
 /// Anvil account #0 (deployer/owner for ecosystem and chain init)
 const DEFAULT_ANVIL_PRIVATE_KEY: &str =
     "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
-/// Anvil accounts #1 and #2 - operator keys must be different for commit/prove/execute
-const OPERATOR_COMMIT_PRIVATE_KEY: &str =
-    "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
-const OPERATOR_PROVE_PRIVATE_KEY: &str =
-    "0x5de4111afa1a4b94908f83103eb1f1706367c2e68ca870fc3fb9a804cdab365a";
-const OPERATOR_EXECUTE_PRIVATE_KEY: &str =
-    "0x7c852118294e51e653712a81e05800f419141751be58f605c371e15141b007a6";
 const CHAIN_ID: u64 = 6565;
 
 fn extract_json_value(obj: &serde_json::Value, path: &str) -> Result<String> {
@@ -129,6 +125,10 @@ async fn run_protocol_ops_init_test() -> Result<()> {
 
     build_contracts(&era_path)?;
 
+    let commit_pk = operator_commit_private_key();
+    let prove_pk = operator_prove_private_key();
+    let execute_pk = operator_execute_private_key();
+
     let logs_dir = protocol_ops_logs_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not resolve protocol_ops logs dir"))?;
     let ecosystem_out = logs_dir.join("ecosystem_init_out.json");
@@ -171,9 +171,9 @@ async fn run_protocol_ops_init_test() -> Result<()> {
         .or_else(|_| extract_json_value(output, "ctm.rollup_l1_da_validator_addr"))?;
     let bytecodes_supplier = extract_json_value(output, "ctm.bytecodes_supplier_addr")?;
 
-    let commit_operator = address_from_private_key(OPERATOR_COMMIT_PRIVATE_KEY)?;
-    let prove_operator = address_from_private_key(OPERATOR_PROVE_PRIVATE_KEY)?;
-    let execute_operator = address_from_private_key(OPERATOR_EXECUTE_PRIVATE_KEY)?;
+    let commit_operator = address_from_private_key(&commit_pk)?;
+    let prove_operator = address_from_private_key(&prove_pk)?;
+    let execute_operator = address_from_private_key(&execute_pk)?;
 
     println!("\n=== protocol_ops chain init ===");
     integration_tests::protocol_ops::run_protocol_ops_for_preset(
@@ -242,9 +242,9 @@ external_price_api_client:
         bytecodes_supplier,
         genesis_path.display(),
         CHAIN_ID,
-        OPERATOR_COMMIT_PRIVATE_KEY,
-        OPERATOR_PROVE_PRIVATE_KEY,
-        OPERATOR_EXECUTE_PRIVATE_KEY,
+        commit_pk,
+        prove_pk,
+        execute_pk,
     );
 
     let config_path = config_dir.join("config.yaml");

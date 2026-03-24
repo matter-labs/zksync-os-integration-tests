@@ -1,5 +1,6 @@
 pub mod anvil;
 pub mod anvil_utils;
+pub mod keys_from_seed;
 pub mod docker;
 pub mod find_ports;
 pub mod preset_paths;
