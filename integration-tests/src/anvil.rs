@@ -2,11 +2,11 @@ use anyhow::Context;
 use std::process::Command;
 use std::time::Duration;
 
-use alloy::providers::ProviderBuilder;
 use crate::find_ports::LockedPort;
 use crate::preset_paths::server_paths_for_preset;
 use crate::presets::{Preset, RepoRef};
 use crate::server_utils::wait_for_chain_to_be_ready;
+use alloy::providers::ProviderBuilder;
 
 /// Get L1 state path for a given preset.
 fn get_l1_state_path(preset: &Preset) -> anyhow::Result<String> {
@@ -45,7 +45,10 @@ const L1_CHAIN_ID: u64 = 31337;
 const L1_READY_MAX_ATTEMPTS: usize = 10;
 const L1_READY_RETRY_DELAY: Duration = Duration::from_secs(1);
 
-fn decompress_l1_state_gz(state_gz: &std::path::Path, state_json: &std::path::Path) -> anyhow::Result<()> {
+fn decompress_l1_state_gz(
+    state_gz: &std::path::Path,
+    state_json: &std::path::Path,
+) -> anyhow::Result<()> {
     let output = Command::new("gzip")
         .arg("-dfk")
         .arg(state_gz)
@@ -82,7 +85,8 @@ pub struct Anvil {
 impl Anvil {
     /// Spawn a new anvil instance on an unused port (loads v30.2 state for upgrade tests)
     pub async fn spawn(preset: &Preset) -> anyhow::Result<Self> {
-        let locked_port = LockedPort::acquire_unused().await
+        let locked_port = LockedPort::acquire_unused()
+            .await
             .context("Failed to acquire unused port for anvil")?;
         let port = locked_port.port;
 
@@ -93,20 +97,17 @@ impl Anvil {
 
         // Spawn anvil using alloy ProviderBuilder
         // The provider manages the anvil process internally
-        let provider = ProviderBuilder::new()
-            .on_anvil_with_wallet_and_config(|anvil| {
-                anvil
-                    .port(port)
-                    .chain_id(L1_CHAIN_ID)
-                    .arg("--load-state")
-                    .arg(l1_state_path)
-            })
-            ;
+        let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
+            anvil
+                .port(port)
+                .chain_id(L1_CHAIN_ID)
+                .arg("--load-state")
+                .arg(l1_state_path)
+        });
 
         let provider: Box<dyn std::any::Any + Send + Sync> = Box::new(provider);
 
-        wait_for_l1_ready(&rpc_url)
-            .context("Anvil L1 is not reachable after spawn")?;
+        wait_for_l1_ready(&rpc_url).context("Anvil L1 is not reachable after spawn")?;
 
         Ok(Self {
             _provider: provider,
@@ -117,24 +118,19 @@ impl Anvil {
 
     /// Spawn a fresh anvil instance (empty chain, no pre-loaded state)
     pub async fn spawn_fresh() -> anyhow::Result<Self> {
-        let locked_port = LockedPort::acquire_unused().await
+        let locked_port = LockedPort::acquire_unused()
+            .await
             .context("Failed to acquire unused port for anvil")?;
         let port = locked_port.port;
 
         let rpc_url = format!("http://localhost:{}", port);
 
         let provider = ProviderBuilder::new()
-            .on_anvil_with_wallet_and_config(|anvil| {
-                anvil
-                    .port(port)
-                    .chain_id(L1_CHAIN_ID)
-            })
-            ;
+            .on_anvil_with_wallet_and_config(|anvil| anvil.port(port).chain_id(L1_CHAIN_ID));
 
         let provider: Box<dyn std::any::Any + Send + Sync> = Box::new(provider);
 
-        wait_for_l1_ready(&rpc_url)
-            .context("Fresh Anvil L1 is not reachable after spawn")?;
+        wait_for_l1_ready(&rpc_url).context("Fresh Anvil L1 is not reachable after spawn")?;
 
         Ok(Self {
             _provider: provider,
@@ -189,4 +185,3 @@ impl Drop for Anvil {
         self._provider = Box::new(());
     }
 }
-

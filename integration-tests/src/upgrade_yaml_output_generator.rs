@@ -32,8 +32,8 @@ pub fn generate_upgrade_yaml_output_from_memory(
     ecosystem_toml: &str,
     yaml_output_path: &Path,
 ) -> anyhow::Result<()> {
-    let run_json: RunJson = serde_json::from_slice(run_json_bytes)
-        .with_context(|| "Failed to parse run JSON")?;
+    let run_json: RunJson =
+        serde_json::from_slice(run_json_bytes).with_context(|| "Failed to parse run JSON")?;
 
     let tx_hashes: Vec<toml::Value> = run_json
         .transactions
@@ -41,7 +41,8 @@ pub fn generate_upgrade_yaml_output_from_memory(
         .map(|tx| toml::Value::String(tx.hash))
         .collect();
 
-    let mut v: toml::Value = toml::from_str(ecosystem_toml).with_context(|| "Failed to parse ecosystem TOML")?;
+    let mut v: toml::Value =
+        toml::from_str(ecosystem_toml).with_context(|| "Failed to parse ecosystem TOML")?;
 
     let table = v
         .as_table_mut()
@@ -58,8 +59,3 @@ pub fn generate_upgrade_yaml_output_from_memory(
 
     Ok(())
 }
-
-
-
-
-

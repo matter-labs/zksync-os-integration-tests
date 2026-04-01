@@ -51,13 +51,10 @@ fn extract_out_path_from_args(args: &[&str]) -> Option<String> {
     None
 }
 
-fn log_protocol_ops_command_and_output(
-    mode: &str,
-    args: &[&str],
-    extra: &str,
-    output: &Output,
-) {
-    let Some(log_path) = protocol_ops_log_path() else { return };
+fn log_protocol_ops_command_and_output(mode: &str, args: &[&str], extra: &str, output: &Output) {
+    let Some(log_path) = protocol_ops_log_path() else {
+        return;
+    };
     let _ = (|| -> anyhow::Result<()> {
         let mut f = OpenOptions::new()
             .create(true)
@@ -169,7 +166,11 @@ pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyho
     log_protocol_ops_command_and_output(
         "local",
         args,
-        &format!("cwd={} PROTOCOL_CONTRACTS_ROOT={}", era_contracts_path.display(), root_str),
+        &format!(
+            "cwd={} PROTOCOL_CONTRACTS_ROOT={}",
+            era_contracts_path.display(),
+            root_str
+        ),
         &output,
     );
 
@@ -207,12 +208,7 @@ pub fn run_protocol_ops_in_image(image: &str, args: &[&str]) -> anyhow::Result<S
         )
     })?;
 
-    log_protocol_ops_command_and_output(
-        "docker",
-        args,
-        &format!("image={}", image),
-        &output,
-    );
+    log_protocol_ops_command_and_output("docker", args, &format!("image={}", image), &output);
 
     if !output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);

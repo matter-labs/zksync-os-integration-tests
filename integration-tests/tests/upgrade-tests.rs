@@ -35,12 +35,14 @@
 
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::anvil_utils::{fund_account, impersonate_account, stop_impersonating_account, RICH_ACCOUNT_PRIVATE_KEY};
+use integration_tests::anvil_utils::{
+    fund_account, impersonate_account, stop_impersonating_account, RICH_ACCOUNT_PRIVATE_KEY,
+};
 use integration_tests::presets::RepoRef;
 use integration_tests::server::ServerBuilder;
 use integration_tests::server_utils::{
-    address_from_private_key, fund_l2_via_l1_deposit,
-    wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY,
+    address_from_private_key, fund_l2_via_l1_deposit, wait_for_executed_batches_with_traffic,
+    DEFAULT_TEST_PRIVATE_KEY,
 };
 use integration_tests::upgrade_config::{Contracts, Wallets};
 use integration_tests::upgrade_yaml_output_generator;
@@ -105,15 +107,14 @@ pub fn execute_transactions(
 
 /// Helper to get project root directory
 fn get_project_root() -> PathBuf {
-    integration_tests::utils::find_project_root()
-        .expect("Failed to find project root")
+    integration_tests::utils::find_project_root().expect("Failed to find project root")
 }
 
 /// Helper to resolve local era-contracts path from presets.
 /// For now this test only supports local preset paths.
 fn get_era_contracts_path() -> PathBuf {
-    let presets = integration_tests::presets::load_default_presets()
-        .expect("Failed to load presets");
+    let presets =
+        integration_tests::presets::load_default_presets().expect("Failed to load presets");
     let mut names: Vec<String> = presets.keys().cloned().collect();
     names.sort();
     let name = names.first().expect("No presets found").clone();
@@ -133,15 +134,12 @@ fn run_protocol_ops_for_default_preset(args: &[&str]) -> Result<String> {
 }
 
 fn get_default_preset() -> integration_tests::presets::Preset {
-    let presets = integration_tests::presets::load_default_presets()
-        .expect("Failed to load presets");
+    let presets =
+        integration_tests::presets::load_default_presets().expect("Failed to load presets");
     let mut names: Vec<String> = presets.keys().cloned().collect();
     names.sort();
     let name = names.first().expect("No presets found").clone();
-    presets
-        .get(&name)
-        .expect("Preset disappeared")
-        .clone()
+    presets.get(&name).expect("Preset disappeared").clone()
 }
 
 fn get_default_server_paths() -> integration_tests::preset_paths::ServerPresetPaths {
@@ -227,9 +225,7 @@ fn build_contracts(era_path: &Path) -> Result<()> {
 }
 
 /// Update permanent values for upgrade
-fn update_permanent_values(
-    contracts: &Contracts,
-) -> Result<()> {
+fn update_permanent_values(contracts: &Contracts) -> Result<()> {
     print!("  Updating permanent values ... ");
     std::io::Write::flush(&mut std::io::stdout()).ok();
 
@@ -267,12 +263,7 @@ l1_bytecodes_supplier_addr = "{}"
 create2_factory_addr = "{}"
 create2_factory_salt = "{}"
 "#,
-        era_chain_id,
-        bridgehub_addr,
-        ctm_addr,
-        bytecodes_supplier,
-        create2_factory,
-        create2_salt
+        era_chain_id, bridgehub_addr, ctm_addr, bytecodes_supplier, create2_factory, create2_salt
     );
 
     let script_config_dir = era_path.join("l1-contracts/script-config");
@@ -330,7 +321,11 @@ fn extract_yaml_value_in_section(yaml: &str, section: &str, key: &str) -> Result
             }
         }
     }
-    anyhow::bail!("Could not find key '{}' in section '{}' in YAML", key, section)
+    anyhow::bail!(
+        "Could not find key '{}' in section '{}' in YAML",
+        key,
+        section
+    )
 }
 
 /// Fund governance accounts with ETH for upgrade transactions
@@ -342,24 +337,22 @@ fn fund_governance_accounts(l1_rpc_url: &str) -> Result<()> {
     // Use high gas price to replace any pending transactions with same nonce
     run_command(
         "Fund governor account",
-        Command::new("cast")
-            .args([
-                "send",
-                governor_address,
-                "--value",
-                "10ether",
-                "--private-key",
-                RICH_ACCOUNT_PRIVATE_KEY,
-                "--rpc-url",
-                l1_rpc_url,
-                "--gas-price",
-                "100gwei",
-            ]),
+        Command::new("cast").args([
+            "send",
+            governor_address,
+            "--value",
+            "10ether",
+            "--private-key",
+            RICH_ACCOUNT_PRIVATE_KEY,
+            "--rpc-url",
+            l1_rpc_url,
+            "--gas-price",
+            "100gwei",
+        ]),
     )?;
 
     Ok(())
 }
-
 
 /// Transfer ownership of the ecosystem governance timelock to the governor wallet
 /// This is needed because the forge scripts broadcast from the governance owner,
@@ -380,10 +373,18 @@ fn transfer_governance_ownership_to_governor(
 
     // Read current owner of governance
     let owner_output = Command::new("cast")
-        .args(["call", &ecosystem_governance, "owner()(address)", "--rpc-url", l1_rpc_url])
+        .args([
+            "call",
+            &ecosystem_governance,
+            "owner()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to read governance owner")?;
-    let current_owner = String::from_utf8_lossy(&owner_output.stdout).trim().to_string();
+    let current_owner = String::from_utf8_lossy(&owner_output.stdout)
+        .trim()
+        .to_string();
     println!("    Current governance owner: {}", current_owner);
 
     // Check if already owned by governor
@@ -394,7 +395,12 @@ fn transfer_governance_ownership_to_governor(
 
     // Transfer ownership via impersonation
     impersonate_account(&current_owner, l1_rpc_url)?;
-    fund_account(&current_owner, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
+    fund_account(
+        &current_owner,
+        "1ether",
+        l1_rpc_url,
+        RICH_ACCOUNT_PRIVATE_KEY,
+    )?;
 
     let output = Command::new("cast")
         .args([
@@ -454,10 +460,18 @@ fn transfer_contract_ownership(
 
     // Read current owner
     let owner_output = Command::new("cast")
-        .args(["call", contract_address, "owner()(address)", "--rpc-url", l1_rpc_url])
+        .args([
+            "call",
+            contract_address,
+            "owner()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to read owner")?;
-    let current_owner = String::from_utf8_lossy(&owner_output.stdout).trim().to_string();
+    let current_owner = String::from_utf8_lossy(&owner_output.stdout)
+        .trim()
+        .to_string();
     println!("      Current owner: {}", current_owner);
 
     // Check if already owned by ecosystem governance
@@ -468,7 +482,12 @@ fn transfer_contract_ownership(
 
     // Impersonate current owner and transfer
     impersonate_account(&current_owner, l1_rpc_url)?;
-    fund_account(&current_owner, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
+    fund_account(
+        &current_owner,
+        "1ether",
+        l1_rpc_url,
+        RICH_ACCOUNT_PRIVATE_KEY,
+    )?;
 
     let output = Command::new("cast")
         .args([
@@ -494,7 +513,12 @@ fn transfer_contract_ownership(
 
     // Accept ownership as ecosystem governance
     impersonate_account(ecosystem_governance, l1_rpc_url)?;
-    fund_account(ecosystem_governance, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
+    fund_account(
+        ecosystem_governance,
+        "1ether",
+        l1_rpc_url,
+        RICH_ACCOUNT_PRIVATE_KEY,
+    )?;
 
     let output = Command::new("cast")
         .args([
@@ -535,22 +559,44 @@ fn transfer_new_contracts_ownership(
     let ecosystem_governance = &contracts.ecosystem_contracts.governance;
     println!("    Ecosystem governance: {}", ecosystem_governance);
 
-    let chain_asset_handler = extract_json_value(core, "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr")?;
-    transfer_contract_ownership("ChainAssetHandler", &chain_asset_handler, ecosystem_governance, l1_rpc_url)?;
+    let chain_asset_handler = extract_json_value(
+        core,
+        "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr",
+    )?;
+    transfer_contract_ownership(
+        "ChainAssetHandler",
+        &chain_asset_handler,
+        ecosystem_governance,
+        l1_rpc_url,
+    )?;
 
     let native_token_vault = extract_json_value(core, "upgrade_addresses.native_token_vault_addr")?;
-    transfer_contract_ownership("NativeTokenVault", &native_token_vault, ecosystem_governance, l1_rpc_url)?;
+    transfer_contract_ownership(
+        "NativeTokenVault",
+        &native_token_vault,
+        ecosystem_governance,
+        l1_rpc_url,
+    )?;
 
     println!("  ✓ All ownership transfers complete");
     Ok(())
 }
 
 /// Check if migration is paused on ChainAssetHandler
-fn check_migration_paused(chain_asset_handler: &str, context: &str, l1_rpc_url: &str) -> Result<()> {
-
+fn check_migration_paused(
+    chain_asset_handler: &str,
+    context: &str,
+    l1_rpc_url: &str,
+) -> Result<()> {
     // Check migrationPaused
     let output = Command::new("cast")
-        .args(["call", &chain_asset_handler, "migrationPaused()(bool)", "--rpc-url", l1_rpc_url])
+        .args([
+            "call",
+            &chain_asset_handler,
+            "migrationPaused()(bool)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to call migrationPaused")?;
 
@@ -559,11 +605,19 @@ fn check_migration_paused(chain_asset_handler: &str, context: &str, l1_rpc_url: 
 
     // Also check which implementation is being used
     let impl_output = Command::new("cast")
-        .args(["storage", &chain_asset_handler, "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc", "--rpc-url", l1_rpc_url])
+        .args([
+            "storage",
+            &chain_asset_handler,
+            "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to read implementation slot")?;
 
-    let impl_addr = String::from_utf8_lossy(&impl_output.stdout).trim().to_string();
+    let impl_addr = String::from_utf8_lossy(&impl_output.stdout)
+        .trim()
+        .to_string();
     println!("  Implementation {} = {}", context, impl_addr);
 
     Ok(())
@@ -573,7 +627,13 @@ fn check_migration_paused(chain_asset_handler: &str, context: &str, l1_rpc_url: 
 fn ensure_migration_paused(chain_asset_handler: &str, l1_rpc_url: &str) -> Result<()> {
     // Check if already paused
     let output = Command::new("cast")
-        .args(["call", &chain_asset_handler, "migrationPaused()(bool)", "--rpc-url", l1_rpc_url])
+        .args([
+            "call",
+            &chain_asset_handler,
+            "migrationPaused()(bool)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to call migrationPaused")?;
 
@@ -587,10 +647,18 @@ fn ensure_migration_paused(chain_asset_handler: &str, l1_rpc_url: &str) -> Resul
 
     // Get the owner and pause via impersonation
     let owner_output = Command::new("cast")
-        .args(["call", &chain_asset_handler, "owner()(address)", "--rpc-url", l1_rpc_url])
+        .args([
+            "call",
+            &chain_asset_handler,
+            "owner()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to read owner")?;
-    let owner = String::from_utf8_lossy(&owner_output.stdout).trim().to_string();
+    let owner = String::from_utf8_lossy(&owner_output.stdout)
+        .trim()
+        .to_string();
 
     impersonate_account(&owner, l1_rpc_url)?;
     fund_account(&owner, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
@@ -637,15 +705,23 @@ fn run_ecosystem_upgrades(
     println!("\n  Running no-governance-prepare (protocol_ops) in simulate mode...");
     let deployer_key = wallets.deployer.private_key.as_str();
     let bridgehub_proxy_address = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
-    let ctm_proxy_address = contracts.ecosystem_contracts.state_transition_proxy_addr.as_str();
-    let bytecodes_supplier_address = contracts.ecosystem_contracts.l1_bytecodes_supplier_addr.as_str();
+    let ctm_proxy_address = contracts
+        .ecosystem_contracts
+        .state_transition_proxy_addr
+        .as_str();
+    let bytecodes_supplier_address = contracts
+        .ecosystem_contracts
+        .l1_bytecodes_supplier_addr
+        .as_str();
     let rollup_da_manager_address = contracts.ecosystem_contracts.l1_rollup_da_manager.as_str();
 
     let logs_dir = integration_tests::protocol_ops::protocol_ops_logs_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not resolve protocol_ops logs dir"))?;
     fs::create_dir_all(&logs_dir)?;
     let no_governance_out_path = logs_dir.join("no_governance_prepare_out.json");
-    let no_governance_out_str = no_governance_out_path.to_str().ok_or_else(|| anyhow::anyhow!("Path invalid UTF-8"))?;
+    let no_governance_out_str = no_governance_out_path
+        .to_str()
+        .ok_or_else(|| anyhow::anyhow!("Path invalid UTF-8"))?;
 
     let no_governance_args = vec![
         "ecosystem",
@@ -724,11 +800,18 @@ fn run_ecosystem_upgrades(
     ])
     .context("governance-stage0 (simulate) failed")?;
     println!("\n  Executing transactions from governance-stage0 simulate output...");
-    execute_transactions(&era_path, &governance_stage0_out_path, l1_rpc_url, governor_key)
-        .context("execute_transactions (governance-stage0) failed")?;
+    execute_transactions(
+        &era_path,
+        &governance_stage0_out_path,
+        l1_rpc_url,
+        governor_key,
+    )
+    .context("execute_transactions (governance-stage0) failed")?;
 
-    let chain_asset_handler =
-        extract_json_value(&script_output.core, "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr")?;
+    let chain_asset_handler = extract_json_value(
+        &script_output.core,
+        "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr",
+    )?;
     check_migration_paused(&chain_asset_handler, "after governance-stage0", l1_rpc_url)?;
     ensure_migration_paused(&chain_asset_handler, l1_rpc_url)?;
 
@@ -782,7 +865,13 @@ fn verify_protocol_version(_root: &Path, l1_rpc_url: &str) -> Result<()> {
 
     // Get current protocol version from chain
     let output = Command::new("cast")
-        .args(["call", &diamond_proxy, "getProtocolVersion()(uint256)", "--rpc-url", l1_rpc_url])
+        .args([
+            "call",
+            &diamond_proxy,
+            "getProtocolVersion()(uint256)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to call getProtocolVersion")?;
 
@@ -806,11 +895,17 @@ fn verify_protocol_version(_root: &Path, l1_rpc_url: &str) -> Result<()> {
     if major != 31 {
         anyhow::bail!(
             "Protocol version mismatch! Expected major version 31, got {}. Full version: {}.{}.{}",
-            major, major, minor, patch
+            major,
+            major,
+            minor,
+            patch
         );
     }
 
-    println!("    ✓ Protocol version verified: v{}.{}.{}", major, minor, patch);
+    println!(
+        "    ✓ Protocol version verified: v{}.{}.{}",
+        major, minor, patch
+    );
     Ok(())
 }
 
@@ -889,7 +984,6 @@ fn run_final_upgrade_stages(
         governance_addr,
     ])
     .context("governance-stage2 failed")?;
-
 
     // Stage 3 is skipped for local testing because:
     // 1. It requires v31 contracts to be deployed (l1AssetTracker function)
@@ -1043,7 +1137,14 @@ fn schedule_upgrade_timestamp(
     wallets: &Wallets,
 ) -> Result<()> {
     let output = Command::new("cast")
-        .args(["block", "latest", "--field", "timestamp", "--rpc-url", l1_rpc_url])
+        .args([
+            "block",
+            "latest",
+            "--field",
+            "timestamp",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
         .output()
         .context("Failed to get latest block timestamp")?;
     if !output.status.success() {
@@ -1150,10 +1251,9 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     let contracts_path = server_paths.contracts_yaml.clone();
 
     println!("Loading wallets and contracts configuration...");
-    let wallets = Wallets::load_from_path(&wallets_path)
-        .context("Failed to load wallets.yaml")?;
-    let contracts = Contracts::load_from_path(&contracts_path)
-        .context("Failed to load contracts.yaml")?;
+    let wallets = Wallets::load_from_path(&wallets_path).context("Failed to load wallets.yaml")?;
+    let contracts =
+        Contracts::load_from_path(&contracts_path).context("Failed to load contracts.yaml")?;
     println!("✓ Wallets and contracts loaded");
 
     println!("Starting zksync-os-server on v30.2...");
@@ -1171,9 +1271,8 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         wallets.deployer.private_key.as_str(),
     )
     .context("Failed to fund DEFAULT_TEST_PRIVATE_KEY on L1 for bridge")?;
-    let paths = get_default_server_paths();
+    let server_logs = server.logs_path();
     let balance = fund_l2_via_l1_deposit(
-        &paths.server_root,
         l1_rpc_url,
         server.rpc_url().as_str(),
         &contracts.ecosystem_contracts.bridgehub_proxy_addr,
@@ -1181,10 +1280,18 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         DEFAULT_TEST_PRIVATE_KEY,
         0.01,
         Duration::from_secs(120),
+        Some(server_logs.as_path()),
     )
     .context("Failed to fund DEFAULT_TEST_PRIVATE_KEY on L2 via L1 bridge")?;
-    anyhow::ensure!(balance > 0, "DEFAULT_TEST_PRIVATE_KEY L2 balance must be > 0, got {}", balance);
-    println!("✓ DEFAULT_TEST_PRIVATE_KEY funded on L2 via L1 bridge (balance {} wei)", balance);
+    anyhow::ensure!(
+        balance > 0,
+        "DEFAULT_TEST_PRIVATE_KEY L2 balance must be > 0, got {}",
+        balance
+    );
+    println!(
+        "✓ DEFAULT_TEST_PRIVATE_KEY funded on L2 via L1 bridge (balance {} wei)",
+        balance
+    );
 
     println!("Driving L2 traffic until >=3 batches are executed on L1...");
     wait_for_executed_batches_with_traffic(

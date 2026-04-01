@@ -20,15 +20,21 @@ pub fn private_key_from_seed(seed: &str) -> String {
     out
 }
 
-/// Operator keys for protocol_ops_init (commit / prove / execute).
-pub fn operator_commit_private_key() -> String {
-    private_key_from_seed("operator commit pk")
+/// Eth-path ZKsync Era validator (register-chain `validator_sender_operator_eth`, not OS batch L1 roles).
+pub fn era_validator_private_key() -> String {
+    private_key_from_seed("era validator operator pk")
 }
 
-pub fn operator_prove_private_key() -> String {
-    private_key_from_seed("operator prove pk")
+/// ZKsync OS L1 operators (commit / prove / execute). `_chain_name` disambiguates keys per chain
+/// (e.g. `"gateway chain"` vs `"chain 1"`) so L1 nonces are not shared across concurrent servers.
+pub fn operator_commit_private_key(_chain_name: &str) -> String {
+    private_key_from_seed(&format!("operator commit pk|{_chain_name}"))
 }
 
-pub fn operator_execute_private_key() -> String {
-    private_key_from_seed("operator execute pk")
+pub fn operator_prove_private_key(_chain_name: &str) -> String {
+    private_key_from_seed(&format!("operator prove pk|{_chain_name}"))
+}
+
+pub fn operator_execute_private_key(_chain_name: &str) -> String {
+    private_key_from_seed(&format!("operator execute pk|{_chain_name}"))
 }

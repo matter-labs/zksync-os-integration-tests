@@ -1,13 +1,11 @@
-use std::path::PathBuf;
 use crate::docker::DockerError;
+use std::path::PathBuf;
 
 /// Find the project root by looking for presets.yaml
 pub fn find_project_root() -> Result<PathBuf, DockerError> {
-    let mut current_dir = std::env::current_dir()
-        .map_err(|e| DockerError::CommandFailed(format!(
-            "Failed to get current working directory: {}",
-            e
-        )))?;
+    let mut current_dir = std::env::current_dir().map_err(|e| {
+        DockerError::CommandFailed(format!("Failed to get current working directory: {}", e))
+    })?;
 
     loop {
         let presets_yaml = current_dir.join("presets.yaml");
@@ -30,8 +28,3 @@ pub fn find_project_root() -> Result<PathBuf, DockerError> {
         }
     }
 }
-
-
-
-
-

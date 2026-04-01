@@ -20,8 +20,7 @@ use crate::utils::find_project_root;
 static TEST_RUN_ID: OnceLock<String> = OnceLock::new();
 const SERVER_READY_MAX_ATTEMPTS: usize = 30;
 const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
-const ZKSYNC_OS_SERVER_IMAGE_REPO: &str =
-    "ghcr.io/matter-labs/zksync-os-server";
+const ZKSYNC_OS_SERVER_IMAGE_REPO: &str = "ghcr.io/matter-labs/zksync-os-server";
 
 pub(crate) fn get_or_create_run_id() -> &'static str {
     TEST_RUN_ID
@@ -47,7 +46,11 @@ pub fn read_toolchain_from_dir(dir: &Path) -> Option<String> {
         for line in content.lines() {
             let line = line.trim();
             if line.starts_with("channel") {
-                let rest = line.strip_prefix("channel")?.trim().trim_start_matches('=').trim();
+                let rest = line
+                    .strip_prefix("channel")?
+                    .trim()
+                    .trim_start_matches('=')
+                    .trim();
                 let channel = rest.trim_matches('"').trim_matches('\'').trim();
                 if !channel.is_empty() {
                     return Some(channel.to_string());
@@ -77,13 +80,14 @@ fn resolve_local_server_binary(server_root: &Path) -> Result<PathBuf, DockerErro
     if let Some(toolchain) = read_toolchain_from_dir(server_root) {
         cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
     }
-    let status = cmd
-        .status()
-        .map_err(|e| DockerError::CommandFailed(format!("Failed to run cargo build --release: {}", e)))?;
+    let status = cmd.status().map_err(|e| {
+        DockerError::CommandFailed(format!("Failed to run cargo build --release: {}", e))
+    })?;
     if !status.success() {
         return Err(DockerError::CommandFailed(format!(
             "cargo build --release failed in '{}' with status {}",
-            server_root.display(), status
+            server_root.display(),
+            status
         )));
     }
 
@@ -105,6 +109,8 @@ pub struct ServerBuilder {
     host_port: Option<u16>,
     /// Override config path (used instead of preset-derived path when set)
     config_path_override: Option<PathBuf>,
+    /// Override RocksDB directory for local server (default: under integration-tests/logs/{run_id}/)
+    rocks_db_path_override: Option<PathBuf>,
 }
 
 impl ServerBuilder {
@@ -115,6 +121,7 @@ impl ServerBuilder {
             preset,
             host_port: None,
             config_path_override: None,
+            rocks_db_path_override: None,
         }
     }
 
@@ -130,10 +137,17 @@ impl ServerBuilder {
         self
     }
 
+    /// Use a fixed RocksDB path (local server only). Lets a later process reuse replay / tree state.
+    pub fn rocks_db_path(mut self, path: impl Into<PathBuf>) -> Self {
+        self.rocks_db_path_override = Some(path.into());
+        self
+    }
+
     /// Spawn the server with the given Anvil L1.
     pub fn spawn(self, anvil: &Anvil) -> Result<Server, DockerError> {
-        let paths = server_paths_for_preset(&self.preset)
-            .map_err(|e| DockerError::CommandFailed(format!("Failed to resolve preset paths: {}", e)))?;
+        let paths = server_paths_for_preset(&self.preset).map_err(|e| {
+            DockerError::CommandFailed(format!("Failed to resolve preset paths: {}", e))
+        })?;
         let local_chains_path = paths.server_root.join("local-chains");
         let config_path = self
             .config_path_override
@@ -165,15 +179,18 @@ impl ServerBuilder {
             config_path,
             image,
             use_local,
+            rocks_db_path: self.rocks_db_path_override,
         };
         Server::spawn_inner(builder, server_root)
     }
 
     /// Spawn Anvil from preset, then spawn the server. Returns (server, anvil) separately.
     pub async fn spawn_with_anvil(self) -> anyhow::Result<(Server, Anvil)> {
-        let anvil = Anvil::spawn(&self.preset).await
+        let anvil = Anvil::spawn(&self.preset)
+            .await
             .map_err(|e| DockerError::CommandFailed(format!("Failed to spawn anvil: {}", e)))?;
-        let server = self.spawn(&anvil)
+        let server = self
+            .spawn(&anvil)
             .map_err(|e| anyhow::anyhow!("Failed to spawn server: {:?}", e))?;
         Ok((server, anvil))
     }
@@ -187,6 +204,7 @@ struct InnerServerBuilder {
     config_path: String,
     image: String,
     use_local: bool,
+    rocks_db_path: Option<PathBuf>,
 }
 
 /// A running zksync-os-server instance
@@ -206,10 +224,13 @@ enum ServerRuntime {
 }
 
 impl Server {
-    fn spawn_inner(builder: InnerServerBuilder, server_root: Option<PathBuf>) -> Result<Self, DockerError> {
-        let host_port = builder.host_port.unwrap_or_else(|| {
-            pick_unused_port_sync().expect("failed to pick random port")
-        });
+    fn spawn_inner(
+        builder: InnerServerBuilder,
+        server_root: Option<PathBuf>,
+    ) -> Result<Self, DockerError> {
+        let host_port = builder
+            .host_port
+            .unwrap_or_else(|| pick_unused_port_sync().expect("failed to pick random port"));
 
         let server_name = format!("integration-tests-zksync-os-server-{}", Uuid::new_v4());
 
@@ -238,16 +259,18 @@ impl Server {
             }
         }
         let logs_dir = logs_root.join(run_id);
-        fs::create_dir_all(&logs_dir).map_err(|e| DockerError::CommandFailed(format!(
-            "Failed to create logs directory at '{}': {}",
-            logs_dir.display(),
-            e
-        )))?;
+        fs::create_dir_all(&logs_dir).map_err(|e| {
+            DockerError::CommandFailed(format!(
+                "Failed to create logs directory at '{}': {}",
+                logs_dir.display(),
+                e
+            ))
+        })?;
 
         let use_local = builder.use_local;
 
         let local_chains_path = builder.local_chains_path;
-        
+
         let local_chains_abs = std::fs::canonicalize(&local_chains_path)
             .map_err(|e| DockerError::CommandFailed(format!(
                 "Failed to canonicalize local-chains path '{}' (project root: '{}', current directory: '{}'): {}",
@@ -261,8 +284,13 @@ impl Server {
 
         let first_run_log = logs_dir.join(format!("server_run1_{}.json", server_name));
         let runtime = if use_local {
-            let server_root = server_root.unwrap_or_else(|| project_root.join("../zksync-os-server"));
+            let server_root =
+                server_root.unwrap_or_else(|| project_root.join("../zksync-os-server"));
             let binary_path = resolve_local_server_binary(&server_root)?;
+            let rocks_path = builder
+                .rocks_db_path
+                .clone()
+                .unwrap_or_else(|| logs_dir.join(format!("db_{}", server_name)));
             let runtime = LocalServerRuntime::new(
                 server_name.clone(),
                 binary_path,
@@ -271,7 +299,7 @@ impl Server {
                 builder.l1_rpc_url.clone(),
                 host_port,
                 local_chains_abs,
-                logs_dir.join(format!("db_{}", server_name)),
+                rocks_path,
             );
             runtime.start_with_log_path(&first_run_log)?;
             ServerRuntime::Local(runtime)
@@ -307,8 +335,7 @@ impl Server {
             let output = cmd.output().map_err(|e| {
                 DockerError::CommandFailed(format!(
                     "Failed to execute docker run command for container '{}': {}",
-                    server_name,
-                    e
+                    server_name, e
                 ))
             })?;
             if !output.status.success() {
@@ -399,10 +426,8 @@ impl Server {
     }
 
     fn run_logs_path(&self, run_index: u32) -> PathBuf {
-        self.logs_dir.join(format!(
-            "server_run{}_{}.json",
-            run_index, self.server_name
-        ))
+        self.logs_dir
+            .join(format!("server_run{}_{}.json", run_index, self.server_name))
     }
 }
 
@@ -495,14 +520,16 @@ impl LocalServerRuntime {
             .write(true)
             .truncate(true)
             .open(log_path)
-            .map_err(|e| DockerError::CommandFailed(format!(
-                "Failed to open log file '{}': {}",
-                log_path.display(),
-                e
-            )))?;
-        let log_file_err = log_file
-            .try_clone()
-            .map_err(|e| DockerError::CommandFailed(format!("Failed to clone log file handle: {}", e)))?;
+            .map_err(|e| {
+                DockerError::CommandFailed(format!(
+                    "Failed to open log file '{}': {}",
+                    log_path.display(),
+                    e
+                ))
+            })?;
+        let log_file_err = log_file.try_clone().map_err(|e| {
+            DockerError::CommandFailed(format!("Failed to clone log file handle: {}", e))
+        })?;
 
         let mut cmd = Command::new(&self.binary_path);
         fs::create_dir_all(&self.rocks_db_path).map_err(|e| {
@@ -542,10 +569,9 @@ impl LocalServerRuntime {
         })?;
 
         {
-            let mut guard = self
-                .child
-                .lock()
-                .map_err(|_| DockerError::CommandFailed("Failed to lock server process".to_string()))?;
+            let mut guard = self.child.lock().map_err(|_| {
+                DockerError::CommandFailed("Failed to lock server process".to_string())
+            })?;
             *guard = Some(child);
         }
         {
@@ -576,7 +602,10 @@ impl LocalServerRuntime {
             .map_err(|_| DockerError::CommandFailed("Failed to lock server process".to_string()))?;
         if let Some(child) = guard.as_mut() {
             child.kill().map_err(|e| {
-                DockerError::CommandFailed(format!("Failed to stop local server '{}': {}", self.name, e))
+                DockerError::CommandFailed(format!(
+                    "Failed to stop local server '{}': {}",
+                    self.name, e
+                ))
             })?;
             let _ = child.wait();
             *guard = None;
@@ -679,7 +708,9 @@ mod tests {
 
         // Restart cycle #1 (stop + start same container)
         println!("Restart cycle #1: stopping server...");
-        server.stop().expect("Failed to stop server in restart cycle #1");
+        server
+            .stop()
+            .expect("Failed to stop server in restart cycle #1");
         assert!(
             !server
                 .is_running()
@@ -690,7 +721,9 @@ mod tests {
         );
 
         println!("Restart cycle #1: starting server...");
-        server.start().expect("Failed to start server in restart cycle #1");
+        server
+            .start()
+            .expect("Failed to start server in restart cycle #1");
         assert!(
             server
                 .is_running()
@@ -702,7 +735,9 @@ mod tests {
 
         // Restart cycle #2 (stop + start same container)
         println!("Restart cycle #2: stopping server...");
-        server.stop().expect("Failed to stop server in restart cycle #2");
+        server
+            .stop()
+            .expect("Failed to stop server in restart cycle #2");
         assert!(
             !server
                 .is_running()
@@ -713,7 +748,9 @@ mod tests {
         );
 
         println!("Restart cycle #2: starting server...");
-        server.start().expect("Failed to start server in restart cycle #2");
+        server
+            .start()
+            .expect("Failed to start server in restart cycle #2");
         assert!(
             server
                 .is_running()
@@ -734,4 +771,3 @@ mod tests {
         );
     }
 }
-

@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::thread::sleep;
 use std::time::{Duration, Instant};
 
@@ -90,9 +90,8 @@ fn rpc_failure_looks_like_server_down(error: &str) -> bool {
 }
 
 fn print_stacktrace_context(log_path: &Path, context_lines_before: usize) -> Result<()> {
-    let raw_logs = fs::read_to_string(log_path).with_context(|| {
-        format!("Failed to read server log file '{}'", log_path.display())
-    })?;
+    let raw_logs = fs::read_to_string(log_path)
+        .with_context(|| format!("Failed to read server log file '{}'", log_path.display()))?;
 
     let sanitized_logs = strip_ansi_escape_sequences(&raw_logs);
     if sanitized_logs != raw_logs {
@@ -180,7 +179,7 @@ pub fn strip_ansi_escape_sequences(input: &str) -> String {
         match it.peek().copied() {
             Some('[') => {
                 it.next(); // consume '['
-                // Consume CSI sequence until a final byte (usually an ASCII letter).
+                           // Consume CSI sequence until a final byte (usually an ASCII letter).
                 while let Some(c) = it.next() {
                     if c.is_ascii_alphabetic() {
                         break;
@@ -189,7 +188,7 @@ pub fn strip_ansi_escape_sequences(input: &str) -> String {
             }
             Some(']') => {
                 it.next(); // consume ']'
-                // Consume OSC sequence until BEL or ST (ESC \)
+                           // Consume OSC sequence until BEL or ST (ESC \)
                 loop {
                     match it.next() {
                         Some('\u{0007}') | None => break,
@@ -369,6 +368,56 @@ fn get_total_batches_executed(l1_rpc_url: &str, diamond_proxy_addr: &str) -> Res
         .with_context(|| format!("Unable to parse getTotalBatchesExecuted output: '{}'", raw))
 }
 
+fn get_total_batches_committed(l1_rpc_url: &str, diamond_proxy_addr: &str) -> Result<u64> {
+    let output = Command::new("cast")
+        .args([
+            "call",
+            diamond_proxy_addr,
+            "getTotalBatchesCommitted()(uint256)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .output()
+        .context("Failed to execute cast call for getTotalBatchesCommitted")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "cast call failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    parse_u64_value(&raw)
+        .with_context(|| format!("Unable to parse getTotalBatchesCommitted output: '{}'", raw))
+}
+
+/// Wait until L1 shows no in-flight batches (`getTotalBatchesCommitted == getTotalBatchesExecuted`).
+pub fn wait_for_l1_committed_equals_executed(
+    l1_rpc_url: &str,
+    diamond_proxy_addr: &str,
+    timeout: Duration,
+) -> Result<()> {
+    let start = Instant::now();
+    loop {
+        let committed = get_total_batches_committed(l1_rpc_url, diamond_proxy_addr)
+            .context("getTotalBatchesCommitted")?;
+        let executed = get_total_batches_executed(l1_rpc_url, diamond_proxy_addr)
+            .context("getTotalBatchesExecuted")?;
+        if committed == executed {
+            println!("L1 batch counters idle: committed={committed} executed={executed}");
+            return Ok(());
+        }
+        if start.elapsed() >= timeout {
+            anyhow::bail!(
+                "Timeout waiting for committed==executed (committed={committed} executed={executed})"
+            );
+        }
+        sleep(Duration::from_millis(400));
+    }
+}
+
 fn parse_u64_value(raw: &str) -> Result<u64> {
     if let Some(hex) = raw.strip_prefix("0x") {
         return u64::from_str_radix(hex, 16).context("Invalid hex value");
@@ -391,7 +440,7 @@ pub fn address_from_private_key(private_key: &str) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
-/// Return L2 native balance in wei via `cast balance`.
+/// Return L2 native balance in wei via `cast balance` (fails on RPC errors; no retries).
 pub fn get_l2_balance(address: &str, l2_rpc_url: &str) -> Result<u128> {
     let output = Command::new("cast")
         .args(["balance", address, "--rpc-url", l2_rpc_url])
@@ -410,37 +459,42 @@ pub fn get_l2_balance(address: &str, l2_rpc_url: &str) -> Result<u128> {
     raw.parse::<u128>().context("Invalid decimal balance")
 }
 
-fn read_toolchain_from_dir(dir: &Path) -> Option<String> {
-    let toml_path = dir.join("rust-toolchain.toml");
-    if toml_path.exists() {
-        let content = fs::read_to_string(&toml_path).ok()?;
-        for line in content.lines() {
-            let line = line.trim();
-            if line.starts_with("channel") {
-                let rest = line
-                    .strip_prefix("channel")?
-                    .trim()
-                    .trim_start_matches('=')
-                    .trim();
-                let channel = rest.trim_matches('"').trim_matches('\'').trim();
-                if !channel.is_empty() {
-                    return Some(channel.to_string());
-                }
-            }
-        }
-    }
-    let legacy_path = dir.join("rust-toolchain");
-    if legacy_path.exists() {
-        let content = fs::read_to_string(&legacy_path).ok()?;
-        return Some(content.trim().to_string());
-    }
-    None
+fn cast_balance_transient(stderr: &str) -> bool {
+    stderr.contains("Connection refused")
+        || stderr.contains("tcp connect error")
+        || stderr.contains("client error (Connect)")
+        || stderr.contains("operation timed out")
+        || stderr.contains("timed out")
 }
 
-/// Build and run the generate-deposit tool from zksync-os-server to submit an L1->L2 deposit,
-/// then poll L2 until `test_address` has balance > 0. Caller must fund `test_address` on L1 first.
+/// `Ok(None)` = RPC unreachable / transient; `Ok(Some(wei))` = balance (may be 0).
+fn poll_l2_balance_once(address: &str, l2_rpc_url: &str) -> Result<Option<u128>> {
+    let output = Command::new("cast")
+        .args(["balance", address, "--rpc-url", l2_rpc_url])
+        .output()
+        .context("Failed to run cast balance")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if cast_balance_transient(&stderr) {
+            return Ok(None);
+        }
+        anyhow::bail!("cast balance failed:\nSTDERR:\n{}", stderr);
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let balance = if let Some(hex) = raw.strip_prefix("0x") {
+        u128::from_str_radix(hex, 16).context("Invalid hex balance")?
+    } else {
+        raw.parse::<u128>().context("Invalid decimal balance")?
+    };
+    Ok(Some(balance))
+}
+
+/// Submit a Bridgehub L1→L2 deposit (in-process; does not use zksync-os-server tooling),
+/// then poll L2 until `test_address` has balance > 0. Caller must fund the deposit signer on L1 first.
+///
+/// When `server_logs_path` is set (or discoverable under `integration-tests/logs/`), RPC failures and
+/// balance poll timeouts print a server log excerpt so crashes match `upgrade-tests` / traffic diagnostics.
 pub fn fund_l2_via_l1_deposit(
-    server_root: &Path,
     l1_rpc_url: &str,
     l2_rpc_url: &str,
     bridgehub_addr: &str,
@@ -448,65 +502,57 @@ pub fn fund_l2_via_l1_deposit(
     test_private_key: &str,
     amount_ether: f64,
     balance_poll_timeout: Duration,
+    server_logs_path: Option<&Path>,
 ) -> Result<u128> {
     let test_address = address_from_private_key(test_private_key)?;
-    // Build generate-deposit (same pattern as server build: use repo toolchain).
-    let mut build_cmd = Command::new("cargo");
-    build_cmd
-        .arg("build")
-        .arg("--release")
-        .arg("-p")
-        .arg("zksync_os_generate_deposit")
-        .current_dir(server_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    if let Some(toolchain) = read_toolchain_from_dir(server_root) {
-        build_cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
-    }
-    let status = build_cmd
-        .status()
-        .context("Failed to run cargo build for generate-deposit")?;
-    if !status.success() {
-        anyhow::bail!("cargo build -p zksync_os_generate_deposit failed in {}", server_root.display());
-    }
-    let bin = server_root.join("target/release/zksync_os_generate_deposit");
-    if !bin.exists() {
-        anyhow::bail!("generate-deposit binary not found at {}", bin.display());
-    }
-    let output = Command::new(&bin)
-        .args([
-            "--bridgehub",
-            bridgehub_addr,
-            "--chain-id",
-            &chain_id.to_string(),
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            test_private_key,
-            "--amount",
-            &amount_ether.to_string(),
-        ])
-        .output()
-        .context("Failed to run generate-deposit")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "generate-deposit failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
+    if let Err(err) = crate::l1_l2_deposit::submit_l1_to_l2_deposit_via_bridgehub(
+        l1_rpc_url,
+        bridgehub_addr,
+        chain_id,
+        test_private_key,
+        amount_ether,
+    ) {
+        print_deposit_failure_server_logs(server_logs_path);
+        return Err(err).context("Bridgehub L1→L2 deposit");
     }
     let deadline = Instant::now() + balance_poll_timeout;
     while Instant::now() < deadline {
-        let balance = get_l2_balance(&test_address, l2_rpc_url)?;
-        if balance > 0 {
-            return Ok(balance);
+        match poll_l2_balance_once(&test_address, l2_rpc_url) {
+            Ok(Some(balance)) if balance > 0 => return Ok(balance),
+            Ok(_) => sleep(Duration::from_secs(2)),
+            Err(err) => {
+                let msg = format!("{err:#}");
+                if rpc_failure_looks_like_server_down(&msg) {
+                    print_deposit_failure_server_logs(server_logs_path);
+                }
+                return Err(err);
+            }
         }
-        sleep(Duration::from_secs(2));
     }
+    print_deposit_failure_server_logs(server_logs_path);
+    let logs_hint = server_logs_path
+        .map(|p| format!(" Server logs: {}", p.display()))
+        .unwrap_or_default();
     anyhow::bail!(
-        "L2 balance for {} did not become > 0 within {:?}",
+        "L2 balance for {} did not become > 0 within {:?}.{}",
         test_address,
-        balance_poll_timeout
+        balance_poll_timeout,
+        logs_hint
     )
+}
+
+fn print_deposit_failure_server_logs(server_logs_path: Option<&Path>) {
+    if let Some(log_path) = server_logs_path {
+        if let Err(err) = print_stacktrace_context(log_path, 100) {
+            eprintln!(
+                "Failed to extract stacktrace context from server logs '{}': {}",
+                log_path.display(),
+                err
+            );
+        }
+        return;
+    }
+    if let Ok(Some(log_path)) = find_latest_server_log_path() {
+        let _ = print_stacktrace_context(&log_path, 100);
+    }
 }

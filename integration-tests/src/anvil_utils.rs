@@ -101,13 +101,7 @@ pub fn call_contract_view(
     l1_rpc_url: &str,
 ) -> Result<std::process::Output> {
     Command::new("cast")
-        .args([
-            "call",
-            contract,
-            function_sig,
-            "--rpc-url",
-            l1_rpc_url,
-        ])
+        .args(["call", contract, function_sig, "--rpc-url", l1_rpc_url])
         .output()
         .with_context(|| context_msg.to_string())
 }

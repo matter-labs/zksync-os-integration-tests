@@ -115,8 +115,12 @@ pub struct Contracts {
 impl Contracts {
     pub fn load_from_path(contracts_path: &Path) -> Result<Self> {
         use std::fs;
-        let content = fs::read_to_string(contracts_path)
-            .with_context(|| format!("Failed to read contracts file: {}", contracts_path.display()))?;
+        let content = fs::read_to_string(contracts_path).with_context(|| {
+            format!(
+                "Failed to read contracts file: {}",
+                contracts_path.display()
+            )
+        })?;
         let contracts: Contracts =
             serde_yaml::from_str(&content).context("Failed to parse contracts.yaml")?;
         Ok(contracts)

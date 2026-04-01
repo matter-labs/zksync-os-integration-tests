@@ -75,7 +75,11 @@ pub fn load_presets_from_dir(dir: impl AsRef<Path>) -> anyhow::Result<RawPresets
         let presets = load_presets_file(&path)?;
         for (name, preset) in presets {
             if out.contains_key(&name) {
-                anyhow::bail!("Duplicate preset '{}' found while loading {}", name, path.display());
+                anyhow::bail!(
+                    "Duplicate preset '{}' found while loading {}",
+                    name,
+                    path.display()
+                );
             }
             out.insert(name, preset);
         }
@@ -95,7 +99,8 @@ fn resolve_presets(project_root: &Path, raw: RawPresets) -> anyhow::Result<Prese
     let mut out: Presets = HashMap::new();
     for (name, r) in raw {
         let era_contracts = parse_repo_ref(project_root, &name, "era-contracts", &r.era_contracts)?;
-        let zksync_os_server = parse_repo_ref(project_root, &name, "zksync-os-server", &r.zksync_os_server)?;
+        let zksync_os_server =
+            parse_repo_ref(project_root, &name, "zksync-os-server", &r.zksync_os_server)?;
 
         out.insert(
             name,
@@ -170,11 +175,7 @@ fn format_yaml_parse_error(path: &Path, contents: &str, err: serde_yaml::Error) 
             if line_no == line {
                 // caret under column (best-effort; columns are 1-based)
                 let caret_pad = col.saturating_sub(1);
-                msg.push_str(&format!(
-                    "  {:4} | {}^\n",
-                    "",
-                    " ".repeat(caret_pad)
-                ));
+                msg.push_str(&format!("  {:4} | {}^\n", "", " ".repeat(caret_pad)));
             }
         }
     }
@@ -188,9 +189,8 @@ mod tests {
 
     #[test]
     fn test_load_presets() {
-        let presets = load_default_presets().expect("Failed to load presets.yaml from project root");
+        let presets =
+            load_default_presets().expect("Failed to load presets.yaml from project root");
         println!("{:#?}", presets);
     }
 }
-
-
