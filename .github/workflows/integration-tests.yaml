@@ -46,27 +46,6 @@ jobs:
         with:
           toolchain: nightly-2026-02-20
 
-      - name: Install Foundry
-        run: |
-          mkdir -p foundry
-          curl -LO https://github.com/foundry-rs/foundry/releases/download/v1.5.1/foundry_v1.5.1_linux_amd64.tar.gz
-          tar zxf foundry_v1.5.1_linux_amd64.tar.gz -C ./foundry
-          chmod +x ./foundry/*
-          echo "${PWD}/foundry" >> "${GITHUB_PATH}"
-
-      - name: Install Foundry-ZKsync
-        uses: dutterbutter/foundry-zksync-toolchain@v1
-        with:
-          version: v0.1.5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18.20.8"
-
-      - name: Install Yarn
-        run: npm install -g yarn@1.22.19
-
       - name: Run integration tests
         run: ./run-tests.sh
 

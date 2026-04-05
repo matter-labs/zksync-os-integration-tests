@@ -184,9 +184,6 @@ impl ServerBuilder {
     ///
     /// A config path must be set via `.config_path()` before calling this method.
     pub fn spawn(self, anvil: &Anvil) -> Result<Server, DockerError> {
-        let paths = server_paths_for_preset(&self.preset).map_err(|e| {
-            DockerError::CommandFailed(format!("Failed to resolve preset paths: {}", e))
-        })?;
         let project_root = find_project_root()?;
         let local_chains_path = project_root.join("local-chains");
         let config_path = self
@@ -200,11 +197,16 @@ impl ServerBuilder {
             })?;
         let l1_rpc_url = anvil.rpc_url_for(&self.preset.zksync_os_server);
         let (server_root, use_local, image) = match &self.preset.zksync_os_server {
-            RepoRef::Path(_) => (
-                Some(paths.server_root.clone()),
-                true,
-                format!("{}:latest", ZKSYNC_OS_SERVER_IMAGE_REPO),
-            ),
+            RepoRef::Path(_) => {
+                let paths = server_paths_for_preset(&self.preset).map_err(|e| {
+                    DockerError::CommandFailed(format!("Failed to resolve preset paths: {}", e))
+                })?;
+                (
+                    Some(paths.server_root.clone()),
+                    true,
+                    format!("{}:latest", ZKSYNC_OS_SERVER_IMAGE_REPO),
+                )
+            }
             RepoRef::DockerTag { tag, .. } => (
                 None,
                 false,
