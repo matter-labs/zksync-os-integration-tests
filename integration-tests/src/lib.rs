@@ -29,4 +29,3 @@ pub use chain::l1_l2_deposit;
 pub use chain::protocol_ops;
 pub use chain::server_utils;
 
-pub use l1_state as l1_state_meta; // old name compat
