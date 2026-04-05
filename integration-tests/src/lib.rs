@@ -28,4 +28,3 @@ pub use chain::keys_from_seed;
 pub use chain::l1_l2_deposit;
 pub use chain::protocol_ops;
 pub use chain::server_utils;
-

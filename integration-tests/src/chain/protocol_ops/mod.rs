@@ -262,7 +262,6 @@ fn protocol_ops_log_path_for_run(run_id: &str) -> Option<PathBuf> {
     Some(logs_dir.join(PROTOCOL_OPS_COMMANDS_LOG))
 }
 
-
 fn log_protocol_ops_command_and_output(
     mode: &str,
     args: &[&str],
@@ -426,4 +425,3 @@ pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyho
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
-
