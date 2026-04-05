@@ -32,7 +32,7 @@ impl EraContractsBackend {
     /// Create an `EraContractsBackend` from a preset configuration.
     ///
     /// `run_name` identifies the test run (e.g. `"gateway_settling"`). In Docker
-    /// mode, artifacts land under `.test-run-logs/{run_name}/contracts_artifacts/`.
+    /// mode, artifacts land under `test-run-logs/{run_name}/contracts_artifacts/`.
     ///
     /// `extra_mounts` are additional `(host_path, container_path)` volume mounts
     /// for Docker mode. They are ignored in local mode.
@@ -66,7 +66,7 @@ impl EraContractsBackend {
     }
 
     /// Create a Docker backend. The host-side work_dir lives under
-    /// `.test-run-logs/{run_id}/contracts_artifacts/` in the project tree so
+    /// `test-run-logs/{run_id}/contracts_artifacts/` in the project tree so
     /// it is captured alongside other test artifacts.
     pub fn docker(
         image: &str,
@@ -77,7 +77,7 @@ impl EraContractsBackend {
             .map_err(|e| anyhow::anyhow!("{e}"))?;
         let run_id = crate::infra::server::get_or_create_run_id(run_name);
         let work_dir = project_root
-            .join(".test-run-logs")
+            .join("test-run-logs")
             .join(run_id)
             .join("contracts_artifacts");
         fs::create_dir_all(&work_dir)?;

@@ -86,7 +86,7 @@ pub struct WalletsFile {
 // Cache key helpers
 // ---------------------------------------------------------------------------
 
-pub const CACHE_DIR: &str = ".l1-state-cache";
+pub const CACHE_DIR: &str = "l1-state-cache";
 
 fn to_snake_case(s: &str) -> String {
     s.chars()

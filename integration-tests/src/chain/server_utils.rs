@@ -292,7 +292,7 @@ fn send_traffic_tx(l2_rpc_url: &str, sender_private_key: &str) -> Result<()> {
 
 fn find_latest_server_log_path() -> Result<Option<std::path::PathBuf>> {
     let project_root = find_project_root()?;
-    let logs_root = project_root.join(".test-run-logs");
+    let logs_root = project_root.join("test-run-logs");
     if !logs_root.exists() {
         return Ok(None);
     }
@@ -482,7 +482,7 @@ fn poll_l2_balance_once(address: &str, l2_rpc_url: &str) -> Result<Option<u128>>
 /// Submit a Bridgehub L1→L2 deposit (in-process; does not use zksync-os-server tooling),
 /// then poll L2 until `test_address` has balance > 0. Caller must fund the deposit signer on L1 first.
 ///
-/// When `server_logs_path` is set (or discoverable under `.test-run-logs/`), RPC failures and
+/// When `server_logs_path` is set (or discoverable under `test-run-logs/`), RPC failures and
 /// balance poll timeouts print a server log excerpt so crashes match `upgrade-tests` / traffic diagnostics.
 /// Fund an L2 address via L1→L2 deposit through the Bridgehub.
 ///

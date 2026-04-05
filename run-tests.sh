@@ -96,6 +96,10 @@ total_pass=0
 total_fail=0
 failed_list=""
 
+# Clear previous test run logs
+rm -rf test-run-logs
+mkdir -p test-run-logs
+
 for preset in $all_presets; do
   tests=$(echo "$PAIRS" | awk -v p="$preset" '$1 == p {print $2}')
 

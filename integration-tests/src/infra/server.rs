@@ -106,9 +106,9 @@ pub struct ServerBuilder {
     host_port: Option<u16>,
     /// Override config path (used instead of preset-derived path when set)
     config_path_override: Option<PathBuf>,
-    /// Override RocksDB directory for local server (default: under .test-run-logs/{run_id}/)
+    /// Override RocksDB directory for local server (default: under test-run-logs/{run_id}/)
     rocks_db_path_override: Option<PathBuf>,
-    /// Override the logs directory (default: .test-run-logs/{run_id}/)
+    /// Override the logs directory (default: test-run-logs/{run_id}/)
     logs_dir_override: Option<PathBuf>,
     /// Human-readable chain name for log filenames (e.g. "gateway_settling_a").
     /// Falls back to the Docker container UUID if not set.
@@ -123,7 +123,7 @@ pub struct ServerBuilder {
 impl ServerBuilder {
     /// Create a new ServerBuilder from a preset.
     /// `run_name` is an explicit label for this test run (e.g. `"upgrade_v30_to_v31"`),
-    /// used in log directory names under `.test-run-logs/`.
+    /// used in log directory names under `test-run-logs/`.
     /// Backend (local vs docker) is determined by preset.zksync_os_server.
     pub fn new(preset: Preset, run_name: impl Into<String>) -> Self {
         Self {
@@ -165,7 +165,7 @@ impl ServerBuilder {
     }
 
     /// Override the directory where server logs are stored.
-    /// Default: `.test-run-logs/{run_id}/`.
+    /// Default: `test-run-logs/{run_id}/`.
     pub fn logs_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.logs_dir_override = Some(path.into());
         self
@@ -290,12 +290,12 @@ impl Server {
         // Find project root and resolve paths relative to it
         let project_root = find_project_root()?;
 
-        // Group all server logs in this test run under .test-run-logs/{run_id}.
+        // Group all server logs in this test run under test-run-logs/{run_id}.
         let run_id = get_or_create_run_id(&builder.run_name);
         let logs_dir = if let Some(override_dir) = builder.logs_dir.as_ref() {
             override_dir.clone()
         } else {
-            project_root.join(".test-run-logs").join(run_id)
+            project_root.join("test-run-logs").join(run_id)
         };
         fs::create_dir_all(&logs_dir).map_err(|e| {
             DockerError::CommandFailed(format!(
