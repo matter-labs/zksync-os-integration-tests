@@ -64,6 +64,7 @@ docker_args=(
   --platform=linux/amd64
   --add-host=host.docker.internal:host-gateway
   -e FOUNDRY_DISABLE_NIGHTLY_WARNING=1
+  -e FOUNDRY_OFFLINE=true
   -e ETH_RPC_URL="${ETH_RPC_URL:-http://host.docker.internal:8545}"
   -v "${WORK_DIR}:${CONTAINER_WORK}"
   -v "${WORK_DIR}/script-out:/contracts/l1-contracts/script-out"

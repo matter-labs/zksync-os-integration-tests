@@ -212,29 +212,10 @@ pcli chain dump-gateway-force-deployments \
     --dump-toml-rel=/script-out/force-dep-dump.toml \
     --l1-rpc-url=$L1_RPC_URL
 
-export FORCE_DEPLOYMENTS_DATA=$(grep 'force_deployments_data' $WORK_DIR/script-out/force-dep-dump.toml | sed 's/force_deployments_data = //')
+export FORCE_DEPLOYMENTS_DATA=$(grep 'force_deployments_data' $WORK_DIR/script-out/force-dep-dump.toml | sed 's/force_deployments_data = //; s/^"//; s/"$//')
 
-# Create the vote preparation input config
-mkdir -p "$WORK_DIR/script-config"
-cat > "$WORK_DIR/script-config/gateway-vote-preparation.toml" <<EOF
-owner_address = "$ECOSYSTEM_OWNER"
-testnet_verifier = true
-support_l2_legacy_shared_bridge_test = false
-is_zk_sync_os = true
-zk_token_asset_id = "$ZK_TOKEN_ID"
-refund_recipient = "$DEPLOYER"
-gateway_chain_id = $GATEWAY_CHAIN_ID
-gateway_settlement_fee = 500000000000000000
-force_deployments_data = $FORCE_DEPLOYMENTS_DATA
-
-[contracts]
-governance_security_council_address = "$DEPLOYER"
-governance_min_delay = 0
-validator_timelock_execution_delay = 0
-EOF
-
-# Mount the script-config directory into the container for vote-prepare
-export EXTRA_MOUNTS="$WORK_DIR/script-config:/contracts/l1-contracts/script-config"
+# Vote preparation output lives in script-out (mounted into the container)
+VOTE_OUTPUT_PATH="/script-out/gateway_vote_prep_out.toml"
 
 # Extract the CTM deployment tracker address (needed for whitelist)
 export STM_TRACKER=$(jq -r '.output.deployed_addresses.bridgehub.ctm_deployment_tracker_proxy_addr' $WORK_DIR/hub.init.json)
@@ -251,12 +232,16 @@ pcli chain convert-to-gateway \
     --l1-rpc-url=$L1_RPC_URL
 
 # Step 6b: Deploy gateway CTM contracts and prepare governance calls
-#   ctm-representative-chain-id: any chain already registered on the CTM (use chain1=272)
 pcli chain convert-to-gateway \
     --stage=vote-prepare \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --ctm-representative-chain-id=$GATEWAY_CHAIN_ID \
+    --force-deployments-data=$FORCE_DEPLOYMENTS_DATA \
+    --refund-recipient=$DEPLOYER \
+    --testnet-verifier=true \
+    --is-zk-sync-os=true \
+    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
     --private-key=$DEPLOYER_PK \
     --l1-rpc-url=$L1_RPC_URL
 
@@ -266,6 +251,7 @@ pcli chain convert-to-gateway \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --governance-address=$GOVERNANCE \
+    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
     --private-key=$ECOSYSTEM_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
 
@@ -303,6 +289,7 @@ pcli chain migrate-to-gateway \
     --chain-id=$CHAIN1_CHAIN_ID \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --l1-gas-price=1000000000 \
+    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
     --refund-recipient=$DEPLOYER \
     --private-key=$CHAIN1_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
@@ -326,6 +313,7 @@ pcli chain migrate-to-gateway \
     --chain-id=$CHAIN2_CHAIN_ID \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --l1-gas-price=1000000000 \
+    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
     --refund-recipient=$DEPLOYER \
     --private-key=$CHAIN2_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
