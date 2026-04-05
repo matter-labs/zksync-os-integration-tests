@@ -422,19 +422,12 @@ fn parse_u64_value(raw: &str) -> Result<u64> {
     raw.parse::<u64>().context("Invalid decimal value")
 }
 
-/// Derive Ethereum address from a private key via `cast wallet address`.
+/// Derive Ethereum address from a private key.
 pub fn address_from_private_key(private_key: &str) -> Result<String> {
-    let output = Command::new("cast")
-        .args(["wallet", "address", "--private-key", private_key])
-        .output()
-        .context("Failed to run cast wallet address")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cast wallet address failed:\nSTDERR:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    use alloy::signers::local::PrivateKeySigner;
+    let key = private_key.strip_prefix("0x").unwrap_or(private_key);
+    let signer: PrivateKeySigner = key.parse().context("Invalid private key")?;
+    Ok(format!("{:?}", signer.address()))
 }
 
 /// Return L2 native balance in wei via `cast balance` (fails on RPC errors; no retries).
