@@ -46,6 +46,14 @@ jobs:
         with:
           toolchain: nightly-2026-02-20
 
+      - name: Install Foundry
+        run: |
+          mkdir -p foundry
+          curl -LO https://github.com/foundry-rs/foundry/releases/download/v1.5.1/foundry_v1.5.1_linux_amd64.tar.gz
+          tar zxf foundry_v1.5.1_linux_amd64.tar.gz -C ./foundry
+          chmod +x ./foundry/*
+          echo "${PWD}/foundry" >> "${GITHUB_PATH}"
+
       - name: Run integration tests
         run: ./run-tests.sh
 
