@@ -1,6 +1,6 @@
 cargo
 target
-.test-run-logs
+test-run-logs
 
 #zksync-era
 #zksync-os-server
@@ -13,4 +13,4 @@ local-chains/*/l1-state.json
 local-chains/*/l1-state.json.sha256
 
 # Generated l1-state cache
-.l1-state-cache/
+l1-state-cache/
