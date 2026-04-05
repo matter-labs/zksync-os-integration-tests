@@ -934,6 +934,7 @@ fn run_generation_flow(
     fs::create_dir_all(&logs_dir).context("create logs dir for state generation")?;
     let gw_server =
         integration_tests::server::ServerBuilder::new(preset.clone(), "generate_l1_state")
+            .chain_name("gateway")
             .config_path(&gw_config_path)
             .rocks_db_path(&gw_rocks_db)
             .logs_dir(&logs_dir)
@@ -1461,13 +1462,8 @@ fn main() -> Result<()> {
     let output_dir = fs::canonicalize(&output_dir)?;
     let output_path = output_dir.join("l1-state.json");
 
-    let work_name = format!(
-        "generate_l1_state_{}",
-        uuid::Uuid::new_v4().to_string().get(..8).unwrap_or("run")
-    );
-
     // Create the era-contracts execution backend (local or Docker session).
-    let contracts_backend = EraContractsBackend::from_preset(&preset, &work_name, &[])?;
+    let contracts_backend = EraContractsBackend::from_preset(&preset, "generate_l1_state", &[])?;
     println!("Work directory: {}", contracts_backend.work_dir().display());
     if let EraContractsBackend::Docker { ref session, .. } = contracts_backend {
         println!(

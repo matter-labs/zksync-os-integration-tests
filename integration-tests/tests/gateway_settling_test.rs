@@ -15,11 +15,7 @@ use std::time::Duration;
 
 async fn run_gateway_settling_test() -> Result<()> {
     let preset = load_current_preset()?;
-    let work_name = format!(
-        "gw_settling_{}",
-        uuid::Uuid::new_v4().to_string().get(..8).unwrap_or("run")
-    );
-    let contracts_backend = EraContractsBackend::from_preset(&preset, &work_name, &[])?;
+    let contracts_backend = EraContractsBackend::from_preset(&preset, "gateway_settling", &[])?;
     let eco = load_ecosystem(&preset)?;
     anyhow::ensure!(
         !eco.gateway_settling_chains.is_empty(),
@@ -91,6 +87,7 @@ async fn run_gateway_settling_test() -> Result<()> {
     // ---- Gateway server (ephemeral mode with archived RocksDB) ----
     println!("\n=== Starting gateway server (chain {}) ===", gw.chain_id);
     let gw_server = ServerBuilder::new(preset.clone(), "gateway_settling")
+        .chain_name(&gw.name)
         .ephemeral()
         .config_path(&gw_config_path)
         .spawn(&anvil)
@@ -150,6 +147,7 @@ async fn run_gateway_settling_test() -> Result<()> {
         chain.chain_id
     );
     let chain_server = ServerBuilder::new(preset, "gateway_settling")
+        .chain_name(&chain.name)
         .config_path(&chain_config)
         .gateway_rpc_url(&gw_l2_rpc)
         .spawn(&anvil)

@@ -68,11 +68,7 @@ fn get_default_preset() -> integration_tests::presets::Preset {
 
 fn create_era_backend() -> Result<EraContractsBackend> {
     let preset = get_default_preset();
-    let run_id = format!(
-        "upgrade_v30_to_v31_{}",
-        uuid::Uuid::new_v4().to_string().get(..8).unwrap_or("run")
-    );
-    EraContractsBackend::from_preset(&preset, &run_id, &[])
+    EraContractsBackend::from_preset(&preset, "upgrade_v30_to_v31", &[])
 }
 
 fn get_default_chain_dir() -> PathBuf {
@@ -1069,6 +1065,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
 
     println!("Starting zksync-os-server on v30.2...");
     let server = ServerBuilder::new(preset, "upgrade_v30_to_v31")
+        .chain_name("default")
         .config_path(&config_path)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server via ServerBuilder: {:?}", e))?;

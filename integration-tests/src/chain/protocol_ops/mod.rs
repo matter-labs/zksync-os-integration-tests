@@ -255,9 +255,10 @@ impl Drop for EraContainerSession {
 
 const PROTOCOL_OPS_COMMANDS_LOG: &str = "protocol_ops_commands.log";
 
-fn protocol_ops_log_path_for_run(run_id: &str) -> Option<PathBuf> {
+fn protocol_ops_log_path() -> Option<PathBuf> {
+    let run_name = get_run_id()?;
     let project_root = find_project_root().ok()?;
-    let logs_dir = project_root.join(".test-run-logs").join(run_id);
+    let logs_dir = project_root.join(".test-run-logs").join(run_name);
     std::fs::create_dir_all(&logs_dir).ok()?;
     Some(logs_dir.join(PROTOCOL_OPS_COMMANDS_LOG))
 }
@@ -281,7 +282,7 @@ fn log_protocol_ops_command_and_output(
         elapsed.as_secs_f64()
     );
 
-    let Some(log_path) = get_run_id().and_then(protocol_ops_log_path_for_run) else {
+    let Some(log_path) = protocol_ops_log_path() else {
         return;
     };
     let _ = (|| -> anyhow::Result<()> {

@@ -31,23 +31,21 @@ const CONTAINER_WORK_PREFIX: &str = "/contracts/work";
 impl EraContractsBackend {
     /// Create an `EraContractsBackend` from a preset configuration.
     ///
-    /// - `RepoRef::Path` → `EraContractsBackend::Local`, work_dir lives at `era_path/work/{work_name}`
-    /// - `RepoRef::DockerTag` → `EraContractsBackend::Docker`, host `work_dir` mounted at `/contracts/work/{work_name}`
-    ///
-    /// `work_name` is a subdirectory name for run isolation (e.g. run-id or UUID).
+    /// `run_name` identifies the test run (e.g. `"gateway_settling"`). In Docker
+    /// mode, artifacts land under `.test-run-logs/{run_name}/contracts_artifacts/`.
     ///
     /// `extra_mounts` are additional `(host_path, container_path)` volume mounts
     /// for Docker mode. They are ignored in local mode.
     pub fn from_preset(
         preset: &Preset,
-        work_name: &str,
+        run_name: &str,
         extra_mounts: &[(&Path, &str)],
     ) -> Result<Self> {
         match &preset.era_contracts {
-            RepoRef::Path(p) => Self::local(p, work_name),
+            RepoRef::Path(p) => Self::local(p, run_name),
             RepoRef::DockerTag { tag, .. } => {
                 let image = format!("{}:{}", ERA_CONTRACTS_PROTOCOL_IMAGE_REPO, tag);
-                Self::docker(&image, work_name, extra_mounts)
+                Self::docker(&image, run_name, extra_mounts)
             }
         }
     }
@@ -68,17 +66,23 @@ impl EraContractsBackend {
     }
 
     /// Create a Docker backend. The host-side work_dir lives under
-    /// `.test-run-logs/era_work_{work_name}` in the project tree so it is
-    /// captured alongside other test artifacts.
-    pub fn docker(image: &str, work_name: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
+    /// `.test-run-logs/{run_id}/contracts_artifacts/` in the project tree so
+    /// it is captured alongside other test artifacts.
+    pub fn docker(
+        image: &str,
+        run_name: &str,
+        extra_mounts: &[(&Path, &str)],
+    ) -> Result<Self> {
         let project_root = crate::infra::utils::find_project_root()
             .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let run_id = crate::infra::server::get_or_create_run_id(run_name);
         let work_dir = project_root
             .join(".test-run-logs")
-            .join(format!("era_work_{}", work_name));
+            .join(run_id)
+            .join("contracts_artifacts");
         fs::create_dir_all(&work_dir)?;
         let work_dir = fs::canonicalize(&work_dir)?;
-        let container_work = format!("{}/{}", CONTAINER_WORK_PREFIX, work_name);
+        let container_work = format!("{}/{}", CONTAINER_WORK_PREFIX, run_name);
         let session = EraContainerSession::start(image, &work_dir, &container_work, extra_mounts)?;
         Ok(EraContractsBackend::Docker { session, work_dir })
     }

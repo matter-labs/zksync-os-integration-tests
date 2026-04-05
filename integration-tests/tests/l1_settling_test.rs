@@ -68,6 +68,7 @@ async fn run_l1_settling_test() -> Result<()> {
         chain.chain_id
     );
     let server = ServerBuilder::new(preset, "l1_settling")
+        .chain_name(&chain.name)
         .config_path(&config_path)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server: {:?}", e))?;

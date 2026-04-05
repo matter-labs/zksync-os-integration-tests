@@ -6,7 +6,6 @@ use std::sync::Mutex;
 use std::sync::OnceLock;
 use std::time::Duration;
 
-use chrono::Local;
 use uuid::Uuid;
 
 use crate::anvil::Anvil;
@@ -22,14 +21,9 @@ const SERVER_READY_MAX_ATTEMPTS: usize = 30;
 const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const ZKSYNC_OS_SERVER_IMAGE_REPO: &str = "ghcr.io/matter-labs/zksync-os-server";
 
-pub(crate) fn get_or_create_run_id(name: &str) -> &'static str {
+pub fn get_or_create_run_id(name: &str) -> &'static str {
     TEST_RUN_ID
-        .get_or_init(|| {
-            let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
-            let test_name = name.replace([' ', ':'], "_");
-            let uuid = Uuid::new_v4().to_string();
-            format!("{}_{}_{}", test_name, timestamp, &uuid[..8])
-        })
+        .get_or_init(|| name.replace([' ', ':'], "_"))
         .as_str()
 }
 
@@ -116,6 +110,9 @@ pub struct ServerBuilder {
     rocks_db_path_override: Option<PathBuf>,
     /// Override the logs directory (default: .test-run-logs/{run_id}/)
     logs_dir_override: Option<PathBuf>,
+    /// Human-readable chain name for log filenames (e.g. "gateway_settling_a").
+    /// Falls back to the Docker container UUID if not set.
+    chain_name: Option<String>,
     /// Override gateway RPC URL (set via env var at runtime, overrides config YAML value)
     gateway_rpc_url: Option<String>,
     /// When true, do NOT set general_rocks_db_path / sequencer_rocks_db_path env vars.
@@ -136,6 +133,7 @@ impl ServerBuilder {
             config_path_override: None,
             rocks_db_path_override: None,
             logs_dir_override: None,
+            chain_name: None,
             gateway_rpc_url: None,
             ephemeral: false,
         }
@@ -170,6 +168,14 @@ impl ServerBuilder {
     /// Default: `.test-run-logs/{run_id}/`.
     pub fn logs_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.logs_dir_override = Some(path.into());
+        self
+    }
+
+    /// Set a human-readable chain name used in log filenames
+    /// (e.g. "gateway", "gateway_settling_a"). When not set, the Docker
+    /// container UUID is used instead.
+    pub fn chain_name(mut self, name: impl Into<String>) -> Self {
+        self.chain_name = Some(name.into());
         self
     }
 
@@ -223,6 +229,7 @@ impl ServerBuilder {
             use_local,
             rocks_db_path: self.rocks_db_path_override,
             logs_dir: self.logs_dir_override,
+            chain_name: self.chain_name,
             gateway_rpc_url: self.gateway_rpc_url,
             ephemeral: self.ephemeral,
         };
@@ -241,6 +248,7 @@ struct InnerServerBuilder {
     use_local: bool,
     rocks_db_path: Option<PathBuf>,
     logs_dir: Option<PathBuf>,
+    chain_name: Option<String>,
     gateway_rpc_url: Option<String>,
     ephemeral: bool,
 }
@@ -249,7 +257,10 @@ struct InnerServerBuilder {
 #[derive(Debug)]
 pub struct Server {
     runtime: ServerRuntime,
+    /// Unique Docker container name (UUID-based).
     server_name: String,
+    /// Human-readable label used in log filenames and DB directory names.
+    log_label: String,
     host_port: u16,
     logs_dir: PathBuf,
     run_index: std::cell::Cell<u32>,
@@ -271,35 +282,20 @@ impl Server {
             .unwrap_or_else(|| pick_unused_port_sync().expect("failed to pick random port"));
 
         let server_name = format!("integration-tests-zksync-os-server-{}", Uuid::new_v4());
+        let log_label = builder
+            .chain_name
+            .clone()
+            .unwrap_or_else(|| server_name.clone());
 
         // Find project root and resolve paths relative to it
         let project_root = find_project_root()?;
 
-        // Group all server logs in this test run under logs/{run_id}.
-        // Move any existing run directories to previous_runs/ before creating the new one.
+        // Group all server logs in this test run under .test-run-logs/{run_id}.
         let run_id = get_or_create_run_id(&builder.run_name);
         let logs_dir = if let Some(override_dir) = builder.logs_dir.as_ref() {
             override_dir.clone()
         } else {
-            let logs_root = project_root.join(".test-run-logs");
-            let previous_runs = logs_root.join("previous_runs");
-            if logs_root.exists() {
-                if let Ok(entries) = fs::read_dir(&logs_root) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.is_dir() {
-                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                                if name != "previous_runs" && name != run_id {
-                                    let dest = previous_runs.join(name);
-                                    fs::create_dir_all(&previous_runs).ok();
-                                    let _ = fs::rename(&path, &dest);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            logs_root.join(run_id)
+            project_root.join(".test-run-logs").join(run_id)
         };
         fs::create_dir_all(&logs_dir).map_err(|e| {
             DockerError::CommandFailed(format!(
@@ -324,7 +320,7 @@ impl Server {
                 e
             )))?;
 
-        let first_run_log = logs_dir.join(format!("server_run1_{}.json", server_name));
+        let first_run_log = logs_dir.join(format!("{}_run_1.json", log_label));
         let runtime = if use_local {
             let server_root =
                 server_root.unwrap_or_else(|| project_root.join("../zksync-os-server"));
@@ -332,7 +328,7 @@ impl Server {
             let rocks_path = builder
                 .rocks_db_path
                 .clone()
-                .unwrap_or_else(|| logs_dir.join(format!("db_{}", server_name)));
+                .unwrap_or_else(|| logs_dir.join(format!("db_{}", log_label)));
             let runtime = LocalServerRuntime::new(
                 server_name.clone(),
                 binary_path,
@@ -416,7 +412,7 @@ impl Server {
             let rocks_path = builder
                 .rocks_db_path
                 .clone()
-                .unwrap_or_else(|| logs_dir.join(format!("db_{}", server_name)));
+                .unwrap_or_else(|| logs_dir.join(format!("db_{}", log_label)));
             fs::create_dir_all(&rocks_path).map_err(|e| {
                 DockerError::CommandFailed(format!(
                     "Failed to create rocks db directory '{}': {}",
@@ -526,6 +522,7 @@ impl Server {
         Ok(Self {
             runtime,
             server_name,
+            log_label,
             host_port,
             logs_dir,
             run_index: std::cell::Cell::new(1),
@@ -613,7 +610,7 @@ impl Server {
 
     fn run_logs_path(&self, run_index: u32) -> PathBuf {
         self.logs_dir
-            .join(format!("server_run{}_{}.json", run_index, self.server_name))
+            .join(format!("{}_run_{}.json", self.log_label, run_index))
     }
 }
 
@@ -918,6 +915,7 @@ mod tests {
             .expect("Failed to spawn anvil");
 
         let server = ServerBuilder::new(preset, "server_test")
+            .chain_name("default")
             .config_path(&config_path)
             .spawn(&anvil)
             .expect("Failed to spawn server");

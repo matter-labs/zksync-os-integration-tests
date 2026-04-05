@@ -290,6 +290,7 @@ async fn run_interop_message_test() -> Result<()> {
     // ---- Start gateway ----
     println!("\n=== Starting gateway server (chain {}) ===", gw.chain_id);
     let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), "interop")
+        .chain_name(&gw.name)
         .ephemeral()
         .config_path(&gw_config)
         .spawn(&anvil)
@@ -300,6 +301,7 @@ async fn run_interop_message_test() -> Result<()> {
     // ---- Start chain A (fresh, gateway_rpc_url set via env var) ----
     println!("\n=== Starting chain A (chain {}) ===", chain_a.chain_id);
     let chain_a_server = integration_tests::server::ServerBuilder::new(preset.clone(), "interop")
+        .chain_name(&chain_a.name)
         .config_path(&chain_a_config)
         .gateway_rpc_url(&gw_l2_rpc)
         .spawn(&anvil)
@@ -310,6 +312,7 @@ async fn run_interop_message_test() -> Result<()> {
     // ---- Start chain B (fresh, gateway_rpc_url set via env var) ----
     println!("\n=== Starting chain B (chain {}) ===", chain_b.chain_id);
     let chain_b_server = integration_tests::server::ServerBuilder::new(preset, "interop")
+        .chain_name(&chain_b.name)
         .config_path(&chain_b_config)
         .gateway_rpc_url(&gw_l2_rpc)
         .spawn(&anvil)
