@@ -69,4 +69,3 @@ jobs:
           path: |
             .test-run-logs/
             .l1-state-cache/
-            /tmp/era_work_*/

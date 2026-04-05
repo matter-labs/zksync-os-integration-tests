@@ -67,10 +67,15 @@ impl EraContractsBackend {
         Ok(EraContractsBackend::Local { era_path, work_dir })
     }
 
-    /// Create a Docker backend. A temp directory is used as the host-side
-    /// work_dir, mounted at `/contracts/work/{work_name}` inside the container.
+    /// Create a Docker backend. The host-side work_dir lives under
+    /// `.test-run-logs/era_work_{work_name}` in the project tree so it is
+    /// captured alongside other test artifacts.
     pub fn docker(image: &str, work_name: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
-        let work_dir = std::env::temp_dir().join(format!("era_work_{}", work_name));
+        let project_root = crate::infra::utils::find_project_root()
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        let work_dir = project_root
+            .join(".test-run-logs")
+            .join(format!("era_work_{}", work_name));
         fs::create_dir_all(&work_dir)?;
         let work_dir = fs::canonicalize(&work_dir)?;
         let container_work = format!("{}/{}", CONTAINER_WORK_PREFIX, work_name);
