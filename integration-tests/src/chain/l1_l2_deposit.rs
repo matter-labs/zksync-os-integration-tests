@@ -74,20 +74,22 @@ alloy::sol! {
     }
 }
 
-/// Submit an L1→L2 deposit (same flow as `zksync_os_generate_deposit` binary).
+/// Submit an L1→L2 deposit to a specific L2 recipient.
 ///
-/// Runs the async Bridgehub calls on a fresh runtime in a dedicated thread so this stays correct
-/// when called from `#[tokio::test]` (current-thread) as well as from plain sync code.
-pub fn submit_l1_to_l2_deposit_via_bridgehub(
+/// Uses the given `private_key` as the L1 signer. If `l2_recipient` is `None`,
+/// the deposit goes to the L1 signer's own address.
+pub fn submit_l1_to_l2_deposit_to(
     l1_rpc_url: &str,
     bridgehub_addr: &str,
     chain_id: u64,
     private_key: &str,
     amount_ether: f64,
+    l2_recipient: Option<&str>,
 ) -> Result<()> {
     let l1_rpc_url = l1_rpc_url.to_string();
     let bridgehub_addr = bridgehub_addr.to_string();
     let private_key = private_key.to_string();
+    let l2_recipient = l2_recipient.map(|s| s.to_string());
     match std::thread::Builder::new()
         .name("l1-l2-deposit".into())
         .spawn(move || {
@@ -99,6 +101,7 @@ pub fn submit_l1_to_l2_deposit_via_bridgehub(
                     chain_id,
                     private_key.as_str(),
                     amount_ether,
+                    l2_recipient.as_deref(),
                 ))
         })
         .map_err(|e| anyhow::anyhow!("spawn l1-l2-deposit thread: {e}"))?
@@ -123,6 +126,7 @@ async fn submit_l1_to_l2_deposit_via_bridgehub_inner(
     chain_id: u64,
     private_key: &str,
     amount_ether: f64,
+    l2_recipient: Option<&str>,
 ) -> Result<()> {
     let bridgehub_address: Address = bridgehub_addr
         .parse()
@@ -161,16 +165,22 @@ async fn submit_l1_to_l2_deposit_via_bridgehub_inner(
         ._0;
 
     let sender = l1_wallet.default_signer().address();
+    let recipient: Address = match l2_recipient {
+        Some(addr) => addr
+            .parse()
+            .with_context(|| format!("invalid l2_recipient address {addr}"))?,
+        None => sender,
+    };
     let request = IBridgehub::L2TransactionRequestDirect {
         chainId: U256::from(chain_id),
         mintValue: amount + tx_base_cost,
-        l2Contract: sender,
+        l2Contract: recipient,
         l2Value: amount,
         l2Calldata: vec![].into(),
         l2GasLimit: U256::from(L2_DEPOSIT_GAS_LIMIT),
         l2GasPerPubdataByteLimit: U256::from(REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE),
         factoryDeps: vec![],
-        refundRecipient: sender,
+        refundRecipient: recipient,
     };
 
     let l1_deposit_request = bridgehub

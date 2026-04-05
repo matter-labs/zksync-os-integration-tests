@@ -5,11 +5,87 @@ on:
   push:
     branches: ['main']
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+permissions:
+  contents: read
+
 jobs:
- status-check:
+  format:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2026-02-20
+          components: rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+  lint:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2026-02-20
+          components: clippy
+
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features --workspace -- -D warnings
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2026-02-20
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+      - name: Run unit tests
+        run: cargo test --workspace --lib
+
+  ci-success:
     name: Github Status Check
     runs-on: ubuntu-latest
     if: always() && !cancelled()
+    needs: [format, lint, build]
     steps:
-      - name: Always succeed
-        run: echo "Status check passed"
+      - name: Status
+        run: |
+          if [[ "${{ contains(join(needs.*.result, ','), 'failure') }}" == "true" ]]; then
+            echo "CI failed"
+            exit 1
+          fi

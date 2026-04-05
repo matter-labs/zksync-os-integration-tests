@@ -15,25 +15,29 @@ pub enum DockerError {
     DockerNotAvailable(String),
 }
 
-pub fn docker_image_exists(tag: &str) -> Result<bool, DockerError> {
-    if !docker_available() {
-        return Err(DockerError::DockerNotAvailable(
-            "Docker is not installed or not in PATH".to_string(),
-        ));
-    }
-
-    let status = Command::new("docker")
-        .args(["image", "inspect"])
-        .arg(tag)
-        .stdin(Stdio::null())
+/// Check if a docker image exists locally first, then fall back to a remote
+/// registry manifest check. This avoids slow network round-trips when the
+/// image has already been pulled.
+pub fn docker_image_exists(image: &str) -> bool {
+    // Fast local check
+    let local = Command::new("docker")
+        .args(["image", "inspect", image])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .map_err(|e| {
-            DockerError::CommandFailed(format!("Failed to execute docker image inspect: {}", e))
-        })?;
-
-    Ok(status.success())
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if local {
+        return true;
+    }
+    // Slower remote check
+    Command::new("docker")
+        .args(["manifest", "inspect", image])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 pub fn docker_build_image(
@@ -88,20 +92,31 @@ pub fn docker_pull_image(image: &str) -> Result<(), DockerError> {
         ));
     }
 
-    let status = Command::new("docker")
+    let output = Command::new("docker")
         .arg("pull")
+        .args(["--platform", "linux/amd64"])
         .arg(image)
-        .stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .status()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
         .map_err(|e| DockerError::CommandFailed(format!("Failed to execute docker pull: {}", e)))?;
 
-    if !status.success() {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(DockerError::CommandFailed(format!(
-            "docker pull failed with status: {}",
-            status
+            "docker pull failed with status: {}\n{}",
+            output.status, stderr
         )));
+    }
+
+    // Print only the "Status:" line (e.g. "Status: Image is up to date for …")
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.starts_with("Status:") {
+            println!("{}", line);
+            break;
+        }
     }
 
     Ok(())

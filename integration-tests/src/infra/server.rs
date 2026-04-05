@@ -22,19 +22,20 @@ const SERVER_READY_MAX_ATTEMPTS: usize = 30;
 const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const ZKSYNC_OS_SERVER_IMAGE_REPO: &str = "ghcr.io/matter-labs/zksync-os-server";
 
-pub(crate) fn get_or_create_run_id() -> &'static str {
+pub(crate) fn get_or_create_run_id(name: &str) -> &'static str {
     TEST_RUN_ID
         .get_or_init(|| {
             let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S");
-            let current = std::thread::current();
-            let name = current.name().unwrap_or("unknown");
-            let fn_part = name.rsplit("::").next().unwrap_or(name);
-            let fn_part = fn_part.strip_prefix("test_").unwrap_or(fn_part);
-            let test_name = fn_part.replace([' ', ':'], "_");
+            let test_name = name.replace([' ', ':'], "_");
             let uuid = Uuid::new_v4().to_string();
             format!("{}_{}_{}", test_name, timestamp, &uuid[..8])
         })
         .as_str()
+}
+
+/// Return the run ID if it has already been initialised (by a prior `get_or_create_run_id` call).
+pub(crate) fn get_run_id() -> Option<&'static str> {
+    TEST_RUN_ID.get().map(|s| s.as_str())
 }
 
 /// Read the Rust toolchain channel from a repo's rust-toolchain.toml or rust-toolchain file,
@@ -105,24 +106,46 @@ fn resolve_local_server_binary(server_root: &Path) -> Result<PathBuf, DockerErro
 #[derive(Debug, Clone)]
 pub struct ServerBuilder {
     preset: Preset,
+    /// Explicit name for this test run (used in log directory names).
+    run_name: String,
     /// Host port where server JSON-RPC should listen (None = random)
     host_port: Option<u16>,
     /// Override config path (used instead of preset-derived path when set)
     config_path_override: Option<PathBuf>,
-    /// Override RocksDB directory for local server (default: under integration-tests/logs/{run_id}/)
+    /// Override RocksDB directory for local server (default: under .test-run-logs/{run_id}/)
     rocks_db_path_override: Option<PathBuf>,
+    /// Override the logs directory (default: .test-run-logs/{run_id}/)
+    logs_dir_override: Option<PathBuf>,
+    /// Override gateway RPC URL (set via env var at runtime, overrides config YAML value)
+    gateway_rpc_url: Option<String>,
+    /// When true, do NOT set general_rocks_db_path / sequencer_rocks_db_path env vars.
+    /// Required for ephemeral mode configs where the server manages its own tempdir.
+    ephemeral: bool,
 }
 
 impl ServerBuilder {
-    /// Create a new ServerBuilder from a preset. Server always uses Anvil for L1.
+    /// Create a new ServerBuilder from a preset.
+    /// `run_name` is an explicit label for this test run (e.g. `"upgrade_v30_to_v31"`),
+    /// used in log directory names under `.test-run-logs/`.
     /// Backend (local vs docker) is determined by preset.zksync_os_server.
-    pub fn new(preset: Preset) -> Self {
+    pub fn new(preset: Preset, run_name: impl Into<String>) -> Self {
         Self {
             preset,
+            run_name: run_name.into(),
             host_port: None,
             config_path_override: None,
             rocks_db_path_override: None,
+            logs_dir_override: None,
+            gateway_rpc_url: None,
+            ephemeral: false,
         }
+    }
+
+    /// Enable ephemeral mode: skip setting rocks_db env vars so the server's
+    /// `general.ephemeral = true` config controls all RocksDB paths via a tempdir.
+    pub fn ephemeral(mut self) -> Self {
+        self.ephemeral = true;
+        self
     }
 
     /// Override the config path (used instead of preset-derived path when set).
@@ -143,22 +166,38 @@ impl ServerBuilder {
         self
     }
 
+    /// Override the directory where server logs are stored.
+    /// Default: `.test-run-logs/{run_id}/`.
+    pub fn logs_dir(mut self, path: impl Into<PathBuf>) -> Self {
+        self.logs_dir_override = Some(path.into());
+        self
+    }
+
+    /// Set gateway RPC URL at runtime (overrides whatever is in config YAML).
+    /// Used for gateway-settling chains where the gateway port is only known at test time.
+    pub fn gateway_rpc_url(mut self, url: impl Into<String>) -> Self {
+        self.gateway_rpc_url = Some(url.into());
+        self
+    }
+
     /// Spawn the server with the given Anvil L1.
+    ///
+    /// A config path must be set via `.config_path()` before calling this method.
     pub fn spawn(self, anvil: &Anvil) -> Result<Server, DockerError> {
         let paths = server_paths_for_preset(&self.preset).map_err(|e| {
             DockerError::CommandFailed(format!("Failed to resolve preset paths: {}", e))
         })?;
-        let local_chains_path = paths.server_root.join("local-chains");
+        let project_root = find_project_root()?;
+        let local_chains_path = project_root.join("local-chains");
         let config_path = self
             .config_path_override
             .as_ref()
             .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_else(|| {
-                format!(
-                    "./local-chains/{}/default/config.yaml",
-                    self.preset.protocol_versions.previous
+            .ok_or_else(|| {
+                DockerError::CommandFailed(
+                    "config_path must be set on ServerBuilder before calling spawn".to_string(),
                 )
-            });
+            })?;
         let l1_rpc_url = anvil.rpc_url_for(&self.preset.zksync_os_server);
         let (server_root, use_local, image) = match &self.preset.zksync_os_server {
             RepoRef::Path(_) => (
@@ -166,13 +205,14 @@ impl ServerBuilder {
                 true,
                 format!("{}:latest", ZKSYNC_OS_SERVER_IMAGE_REPO),
             ),
-            RepoRef::DockerTag(tag) => (
+            RepoRef::DockerTag { tag, .. } => (
                 None,
                 false,
                 format!("{}:{}", ZKSYNC_OS_SERVER_IMAGE_REPO, tag),
             ),
         };
         let builder = InnerServerBuilder {
+            run_name: self.run_name,
             host_port: self.host_port,
             l1_rpc_url,
             local_chains_path,
@@ -180,24 +220,17 @@ impl ServerBuilder {
             image,
             use_local,
             rocks_db_path: self.rocks_db_path_override,
+            logs_dir: self.logs_dir_override,
+            gateway_rpc_url: self.gateway_rpc_url,
+            ephemeral: self.ephemeral,
         };
         Server::spawn_inner(builder, server_root)
-    }
-
-    /// Spawn Anvil from preset, then spawn the server. Returns (server, anvil) separately.
-    pub async fn spawn_with_anvil(self) -> anyhow::Result<(Server, Anvil)> {
-        let anvil = Anvil::spawn(&self.preset)
-            .await
-            .map_err(|e| DockerError::CommandFailed(format!("Failed to spawn anvil: {}", e)))?;
-        let server = self
-            .spawn(&anvil)
-            .map_err(|e| anyhow::anyhow!("Failed to spawn server: {:?}", e))?;
-        Ok((server, anvil))
     }
 }
 
 #[derive(Debug, Clone)]
 struct InnerServerBuilder {
+    run_name: String,
     host_port: Option<u16>,
     l1_rpc_url: String,
     local_chains_path: PathBuf,
@@ -205,6 +238,9 @@ struct InnerServerBuilder {
     image: String,
     use_local: bool,
     rocks_db_path: Option<PathBuf>,
+    logs_dir: Option<PathBuf>,
+    gateway_rpc_url: Option<String>,
+    ephemeral: bool,
 }
 
 /// A running zksync-os-server instance
@@ -219,7 +255,7 @@ pub struct Server {
 
 #[derive(Debug)]
 enum ServerRuntime {
-    Local(LocalServerRuntime),
+    Local(Box<LocalServerRuntime>),
     Docker(DockerContainer),
 }
 
@@ -239,26 +275,30 @@ impl Server {
 
         // Group all server logs in this test run under logs/{run_id}.
         // Move any existing run directories to previous_runs/ before creating the new one.
-        let run_id = get_or_create_run_id();
-        let logs_root = project_root.join("integration-tests/logs");
-        let previous_runs = logs_root.join("previous_runs");
-        if logs_root.exists() {
-            if let Ok(entries) = fs::read_dir(&logs_root) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if name != "previous_runs" && name != run_id {
-                                let dest = previous_runs.join(name);
-                                fs::create_dir_all(&previous_runs).ok();
-                                let _ = fs::rename(&path, &dest);
+        let run_id = get_or_create_run_id(&builder.run_name);
+        let logs_dir = if let Some(override_dir) = builder.logs_dir.as_ref() {
+            override_dir.clone()
+        } else {
+            let logs_root = project_root.join(".test-run-logs");
+            let previous_runs = logs_root.join("previous_runs");
+            if logs_root.exists() {
+                if let Ok(entries) = fs::read_dir(&logs_root) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
+                        if path.is_dir() {
+                            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                                if name != "previous_runs" && name != run_id {
+                                    let dest = previous_runs.join(name);
+                                    fs::create_dir_all(&previous_runs).ok();
+                                    let _ = fs::rename(&path, &dest);
+                                }
                             }
                         }
                     }
                 }
             }
-        }
-        let logs_dir = logs_root.join(run_id);
+            logs_root.join(run_id)
+        };
         fs::create_dir_all(&logs_dir).map_err(|e| {
             DockerError::CommandFailed(format!(
                 "Failed to create logs directory at '{}': {}",
@@ -300,15 +340,45 @@ impl Server {
                 host_port,
                 local_chains_abs,
                 rocks_path,
+                builder.gateway_rpc_url.clone(),
+                builder.ephemeral,
             );
             runtime.start_with_log_path(&first_run_log)?;
-            ServerRuntime::Local(runtime)
+            ServerRuntime::Local(Box::new(runtime))
         } else {
             if !docker_available() {
                 return Err(DockerError::DockerNotAvailable(
                     "Docker is not installed or not in PATH".to_string(),
                 ));
             }
+            // Resolve the config file's parent directory and mount it into
+            // the container so the server can read the config, genesis.json,
+            // and any sibling files (wallets, chain configs, etc.).
+            let config_host_path = std::fs::canonicalize(&builder.config_path).map_err(|e| {
+                DockerError::CommandFailed(format!(
+                    "Failed to canonicalize config path '{}': {}",
+                    builder.config_path, e
+                ))
+            })?;
+            let config_dir = config_host_path.parent().ok_or_else(|| {
+                DockerError::CommandFailed(format!(
+                    "Config path '{}' has no parent directory",
+                    config_host_path.display()
+                ))
+            })?;
+            let config_filename = config_host_path.file_name().ok_or_else(|| {
+                DockerError::CommandFailed(format!(
+                    "Config path '{}' has no filename",
+                    config_host_path.display()
+                ))
+            })?;
+            let container_config_dir = "/app/config";
+            let container_config_path = format!(
+                "{}/{}",
+                container_config_dir,
+                config_filename.to_string_lossy()
+            );
+
             let mut cmd = Command::new("docker");
             cmd.arg("run")
                 .arg("-d")
@@ -319,18 +389,92 @@ impl Server {
                 .arg("-p")
                 .arg(format!("{}:3050", host_port))
                 .arg("-e")
-                .arg(format!("GENERAL_L1_RPC_URL={}", builder.l1_rpc_url))
-                .arg("--add-host")
+                .arg(format!("GENERAL_L1_RPC_URL={}", builder.l1_rpc_url));
+            if let Some(ref gw_url) = builder.gateway_rpc_url {
+                // Remap localhost to host.docker.internal so the container can
+                // reach the gateway server running on the host.
+                let docker_gw_url = gw_url
+                    .replace("://localhost:", "://host.docker.internal:")
+                    .replace("://127.0.0.1:", "://host.docker.internal:");
+                cmd.arg("-e")
+                    .arg(format!("general_gateway_rpc_url={}", docker_gw_url));
+            }
+            // Resolve genesis.json the same way as local mode
+            let genesis_path = config_dir.join("genesis.json");
+            if genesis_path.exists() {
+                cmd.arg("-e").arg(format!(
+                    "genesis_genesis_input_path={}/genesis.json",
+                    container_config_dir
+                ));
+            }
+            cmd.arg("-e")
+                .arg(format!("LOCAL_CHAINS_PATH={}", container_config_dir));
+            // Mount RocksDB directory so data persists on the host (needed for
+            // ephemeral state archival after server shutdown).
+            let rocks_path = builder
+                .rocks_db_path
+                .clone()
+                .unwrap_or_else(|| logs_dir.join(format!("db_{}", server_name)));
+            fs::create_dir_all(&rocks_path).map_err(|e| {
+                DockerError::CommandFailed(format!(
+                    "Failed to create rocks db directory '{}': {}",
+                    rocks_path.display(),
+                    e
+                ))
+            })?;
+            let container_rocks_path = "/app/rocksdb";
+            if builder.ephemeral {
+                // Remap ephemeral_state path: the archive lives in the config
+                // dir on the host, which is mounted at container_config_dir.
+                // Parse the config to find the ephemeral_state filename and
+                // override it to the container-mounted path.
+                let config_content = fs::read_to_string(&config_host_path).map_err(|e| {
+                    DockerError::CommandFailed(format!(
+                        "Failed to read config '{}': {}",
+                        config_host_path.display(),
+                        e
+                    ))
+                })?;
+                if let Some(state_line) = config_content
+                    .lines()
+                    .find(|l| l.contains("ephemeral_state:"))
+                {
+                    if let Some(host_path) = state_line
+                        .split('\'')
+                        .nth(1)
+                        .or_else(|| state_line.split(':').nth(1).map(|s| s.trim()))
+                    {
+                        let filename = std::path::Path::new(host_path)
+                            .file_name()
+                            .unwrap_or_default()
+                            .to_string_lossy();
+                        cmd.arg("-e").arg(format!(
+                            "general_ephemeral_state={}/{}",
+                            container_config_dir, filename
+                        ));
+                    }
+                }
+            } else {
+                cmd.arg("-e")
+                    .arg(format!("general_rocks_db_path={}", container_rocks_path))
+                    .arg("-e")
+                    .arg(format!("sequencer_rocks_db_path={}", container_rocks_path));
+            }
+            cmd.arg("--add-host")
                 .arg("host.docker.internal:host-gateway")
                 .arg("-v")
                 .arg(format!("{}:/app/local-chains", local_chains_abs.display()))
+                .arg("-v")
+                .arg(format!("{}:{}", config_dir.display(), container_config_dir))
+                .arg("-v")
+                .arg(format!("{}:{}", rocks_path.display(), container_rocks_path))
                 .arg("--workdir")
                 .arg("/app")
                 .arg("--user")
                 .arg("root")
                 .arg(&builder.image)
                 .arg("--config")
-                .arg(&builder.config_path);
+                .arg(&container_config_path);
 
             let output = cmd.output().map_err(|e| {
                 DockerError::CommandFailed(format!(
@@ -347,7 +491,34 @@ impl Server {
                     String::from_utf8_lossy(&output.stdout)
                 )));
             }
-            ServerRuntime::Docker(DockerContainer::new(server_name.clone()))
+            let container = DockerContainer::new(server_name.clone());
+
+            // Wait for the server inside the container to be ready,
+            // the same way we do for local servers.
+            let rpc_url = format!("http://127.0.0.1:{}/", host_port);
+            let _ = container.save_logs(&first_run_log);
+            if let Err(err) = crate::server_utils::wait_for_chain_to_be_ready(
+                &rpc_url,
+                "Docker server RPC",
+                SERVER_READY_MAX_ATTEMPTS,
+                SERVER_READY_RETRY_DELAY,
+                Some(first_run_log.as_path()),
+            ) {
+                // Capture container logs before reporting the error.
+                let _ = container.save_logs(&first_run_log);
+                let _ = container.kill(&first_run_log);
+                return Err(DockerError::CommandFailed(format!(
+                    "Server container '{}' started but RPC did not become ready on port {}:\n{}\nCheck logs at '{}'",
+                    server_name,
+                    host_port,
+                    err,
+                    first_run_log.display(),
+                )));
+            }
+            // Save a snapshot of logs now that the server is ready.
+            let _ = container.save_logs(&first_run_log);
+
+            ServerRuntime::Docker(container)
         };
 
         Ok(Self {
@@ -416,6 +587,19 @@ impl Server {
         self.run_logs_path(self.run_index.get())
     }
 
+    /// Flush current container logs to the host log file.
+    ///
+    /// For docker containers this runs `docker logs` and writes the output;
+    /// for local servers the logs are already streamed to the file, so this
+    /// is a no-op.
+    pub fn save_logs(&self) -> Result<(), DockerError> {
+        if let ServerRuntime::Docker(c) = &self.runtime {
+            let log_path = self.run_logs_path(self.run_index.get());
+            c.save_logs(&log_path)?;
+        }
+        Ok(())
+    }
+
     /// Kill the server container (force stop) and remove it
     pub fn kill(self) -> Result<(), DockerError> {
         let current_run_logs = self.run_logs_path(self.run_index.get());
@@ -459,11 +643,14 @@ struct LocalServerRuntime {
     host_port: u16,
     local_chains_abs: PathBuf,
     rocks_db_path: PathBuf,
+    gateway_rpc_url: Option<String>,
+    ephemeral: bool,
     child: Mutex<Option<Child>>,
     current_log_path: Mutex<Option<PathBuf>>,
 }
 
 impl LocalServerRuntime {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         name: String,
         binary_path: PathBuf,
@@ -473,6 +660,8 @@ impl LocalServerRuntime {
         host_port: u16,
         local_chains_abs: PathBuf,
         rocks_db_path: PathBuf,
+        gateway_rpc_url: Option<String>,
+        ephemeral: bool,
     ) -> Self {
         Self {
             name,
@@ -483,6 +672,8 @@ impl LocalServerRuntime {
             host_port,
             local_chains_abs,
             rocks_db_path,
+            gateway_rpc_url,
+            ephemeral,
             child: Mutex::new(None),
             current_log_path: Mutex::new(None),
         }
@@ -532,31 +723,71 @@ impl LocalServerRuntime {
         })?;
 
         let mut cmd = Command::new(&self.binary_path);
-        fs::create_dir_all(&self.rocks_db_path).map_err(|e| {
-            DockerError::CommandFailed(format!(
-                "Failed to create rocks db directory '{}': {}",
-                self.rocks_db_path.display(),
-                e
-            ))
-        })?;
+        // Resolve genesis.json path relative to the config file:
+        //   - local-chains/<ver>/default/config.yaml  →  parent/parent/genesis.json
+        //   - <state_dir>/chain_<id>.yaml             →  parent/genesis.json
+        let config_as_path = std::path::Path::new(&self.config_path);
+        let genesis_path = config_as_path.parent().and_then(|dir| {
+            // Try sibling genesis.json first (flat layout: chain_*.yaml + genesis.json)
+            let sibling = dir.join("genesis.json");
+            if sibling.exists() {
+                return Some(sibling);
+            }
+            // Try grandparent (nested layout: default/config.yaml → ../../genesis.json)
+            dir.parent()
+                .map(|gp| gp.join("genesis.json"))
+                .filter(|p| p.exists())
+        });
+
         cmd.arg("--config")
             .arg(&self.config_path)
             .current_dir(&self.server_root)
             .env("GENERAL_L1_RPC_URL", &self.l1_rpc_url)
-            .env("rpc_address", format!("0.0.0.0:{}", self.host_port))
-            .env(
+            .env("rpc_address", format!("0.0.0.0:{}", self.host_port));
+        if let Some(ref gw_url) = self.gateway_rpc_url {
+            cmd.env("general_gateway_rpc_url", gw_url);
+        }
+        if !self.ephemeral {
+            // In ephemeral mode the server creates its own tempdir for RocksDB;
+            // setting these env vars would override that and break ephemeral state loading.
+            fs::create_dir_all(&self.rocks_db_path).map_err(|e| {
+                DockerError::CommandFailed(format!(
+                    "Failed to create rocks db directory '{}': {}",
+                    self.rocks_db_path.display(),
+                    e
+                ))
+            })?;
+            cmd.env(
                 "general_rocks_db_path",
                 self.rocks_db_path.to_string_lossy().to_string(),
             )
             .env(
                 "sequencer_rocks_db_path",
                 self.rocks_db_path.to_string_lossy().to_string(),
-            )
-            .env(
-                "LOCAL_CHAINS_PATH",
-                self.local_chains_abs.to_string_lossy().to_string(),
-            )
-            .stdout(Stdio::from(log_file))
+            );
+        }
+        cmd.env(
+            "LOCAL_CHAINS_PATH",
+            self.local_chains_abs.to_string_lossy().to_string(),
+        );
+        if let Some(gp) = &genesis_path {
+            cmd.env(
+                "genesis_genesis_input_path",
+                gp.to_string_lossy().to_string(),
+            );
+        }
+        // Randomize auxiliary ports to avoid collisions when multiple servers run concurrently.
+        let status_port = pick_unused_port_sync()
+            .map_err(|e| DockerError::CommandFailed(format!("pick status port: {}", e)))?;
+        let prover_port = pick_unused_port_sync()
+            .map_err(|e| DockerError::CommandFailed(format!("pick prover port: {}", e)))?;
+        let prometheus_port = pick_unused_port_sync()
+            .map_err(|e| DockerError::CommandFailed(format!("pick prometheus port: {}", e)))?;
+        cmd.env("status_server_address", format!("0.0.0.0:{}", status_port))
+            .env("prover_api_address", format!("0.0.0.0:{}", prover_port))
+            .env("observability_prometheus_port", prometheus_port.to_string());
+
+        cmd.stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_file_err));
 
         let child = cmd.spawn().map_err(|e| {
@@ -648,8 +879,9 @@ impl LocalServerRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
     use crate::presets::load_default_presets;
-    use crate::server_utils::{wait_for_executed_batches_with_traffic, DEFAULT_TEST_PRIVATE_KEY};
+    use crate::server_utils::wait_for_executed_batches_with_traffic;
     use crate::upgrade_config::Contracts;
     use std::time::Duration;
 
@@ -671,14 +903,22 @@ mod tests {
             .expect("Preset disappeared while reading presets")
             .clone();
 
-        let paths = crate::preset_paths::server_paths_for_preset(&preset)
-            .expect("Failed to resolve server paths from preset");
-        let contracts_path = paths.contracts_yaml.clone();
+        let chain_dir = crate::preset_paths::chain_dir_for_version("v30.2")
+            .expect("Failed to resolve chain dir");
+        let contracts_path = chain_dir.join("contracts.yaml");
+        let config_path = chain_dir.join("config.yaml");
 
-        let (server, anvil) = ServerBuilder::new(preset)
-            .spawn_with_anvil()
+        let version_dir = chain_dir.parent().expect("chain_dir has no parent");
+        let l1_state_path = version_dir.join("l1-state.json");
+
+        let anvil = Anvil::spawn_with_state(&l1_state_path)
             .await
-            .expect("Failed to spawn server with anvil");
+            .expect("Failed to spawn anvil");
+
+        let server = ServerBuilder::new(preset, "server_test")
+            .config_path(&config_path)
+            .spawn(&anvil)
+            .expect("Failed to spawn server");
 
         let container_name = server.container_name().to_string();
         let l2_rpc_url = format!("http://127.0.0.1:{}", server.host_port());
@@ -700,7 +940,7 @@ mod tests {
             &l2_rpc_url,
             anvil.rpc_url(),
             &contracts.l1.diamond_proxy_addr,
-            DEFAULT_TEST_PRIVATE_KEY,
+            DEFAULT_ANVIL_PRIVATE_KEY,
             3,
             Duration::from_secs(120),
         )

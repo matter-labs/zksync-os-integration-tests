@@ -2,10 +2,17 @@ sandboxes
 cargo
 target
 docker_builds
-integration-tests/logs
+.test-run-logs
 
 #zksync-era
 #zksync-os-server
 #era-contracts
 
 .DS_Store
+
+# Decompressed L1 state (generated at runtime from .gz)
+local-chains/*/l1-state.json
+local-chains/*/l1-state.json.sha256
+
+# Generated l1-state cache
+.l1-state-cache/

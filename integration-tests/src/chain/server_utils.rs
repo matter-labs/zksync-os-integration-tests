@@ -16,9 +16,6 @@ const ANSI_RED: &str = "\x1b[31m";
 const ANSI_YELLOW: &str = "\x1b[33m";
 const ANSI_BLUE: &str = "\x1b[34m";
 
-pub const DEFAULT_TEST_PRIVATE_KEY: &str =
-    "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
-
 /// Poll `eth_chainId` via `cast chain-id` until the RPC endpoint is reachable.
 pub fn wait_for_chain_to_be_ready(
     rpc_url: &str,
@@ -180,7 +177,7 @@ pub fn strip_ansi_escape_sequences(input: &str) -> String {
             Some('[') => {
                 it.next(); // consume '['
                            // Consume CSI sequence until a final byte (usually an ASCII letter).
-                while let Some(c) = it.next() {
+                for c in it.by_ref() {
                     if c.is_ascii_alphabetic() {
                         break;
                     }
@@ -215,7 +212,7 @@ pub fn strip_ansi_escape_sequences(input: &str) -> String {
 /// are executed on the chain contract.
 pub fn wait_for_executed_batches_with_traffic(
     l2_rpc_url: &str,
-    l1_rpc_url: &str,
+    settlement_rpc_url: &str,
     diamond_proxy_addr: &str,
     sender_private_key: &str,
     min_batches: u64,
@@ -226,13 +223,13 @@ pub fn wait_for_executed_batches_with_traffic(
     let mut next_progress_at = start + Duration::from_secs(5);
 
     loop {
-        let executed = get_total_batches_executed(l1_rpc_url, diamond_proxy_addr)
-            .context("Failed to read getTotalBatchesExecuted from L1")?;
+        let executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)
+            .context("Failed to read getTotalBatchesExecuted")?;
 
         let now = Instant::now();
         if now >= next_progress_at {
             println!(
-                "Progress: executed_l1_batches={}, sent_txs={}",
+                "Progress: executed_batches={}, sent_txs={}",
                 executed, tx_count
             );
             next_progress_at = now + Duration::from_secs(5);
@@ -240,7 +237,7 @@ pub fn wait_for_executed_batches_with_traffic(
 
         if executed >= min_batches {
             println!(
-                "Reached executed L1 batches target: {} (sent {} txs)",
+                "Reached executed batches target: {} (sent {} txs)",
                 executed, tx_count
             );
             return Ok(executed);
@@ -248,7 +245,7 @@ pub fn wait_for_executed_batches_with_traffic(
 
         if start.elapsed() >= timeout {
             anyhow::bail!(
-                "Timed out waiting for executed L1 batches. target={}, current={}, sent_txs={}",
+                "Timed out waiting for executed batches. target={}, current={}, sent_txs={}",
                 min_batches,
                 executed,
                 tx_count
@@ -295,7 +292,7 @@ fn send_traffic_tx(l2_rpc_url: &str, sender_private_key: &str) -> Result<()> {
 
 fn find_latest_server_log_path() -> Result<Option<std::path::PathBuf>> {
     let project_root = find_project_root()?;
-    let logs_root = project_root.join("integration-tests/logs");
+    let logs_root = project_root.join(".test-run-logs");
     if !logs_root.exists() {
         return Ok(None);
     }
@@ -492,32 +489,37 @@ fn poll_l2_balance_once(address: &str, l2_rpc_url: &str) -> Result<Option<u128>>
 /// Submit a Bridgehub L1→L2 deposit (in-process; does not use zksync-os-server tooling),
 /// then poll L2 until `test_address` has balance > 0. Caller must fund the deposit signer on L1 first.
 ///
-/// When `server_logs_path` is set (or discoverable under `integration-tests/logs/`), RPC failures and
+/// When `server_logs_path` is set (or discoverable under `.test-run-logs/`), RPC failures and
 /// balance poll timeouts print a server log excerpt so crashes match `upgrade-tests` / traffic diagnostics.
+/// Fund an L2 address via L1→L2 deposit through the Bridgehub.
+///
+/// Uses Anvil's default pre-funded account as the L1 signer to avoid nonce
+/// conflicts with operator keys that the server may be using concurrently.
+#[allow(clippy::too_many_arguments)]
 pub fn fund_l2_via_l1_deposit(
     l1_rpc_url: &str,
     l2_rpc_url: &str,
     bridgehub_addr: &str,
     chain_id: u64,
-    test_private_key: &str,
+    l2_recipient: &str,
     amount_ether: f64,
     balance_poll_timeout: Duration,
     server_logs_path: Option<&Path>,
 ) -> Result<u128> {
-    let test_address = address_from_private_key(test_private_key)?;
-    if let Err(err) = crate::l1_l2_deposit::submit_l1_to_l2_deposit_via_bridgehub(
+    if let Err(err) = crate::l1_l2_deposit::submit_l1_to_l2_deposit_to(
         l1_rpc_url,
         bridgehub_addr,
         chain_id,
-        test_private_key,
+        crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY,
         amount_ether,
+        Some(l2_recipient),
     ) {
         print_deposit_failure_server_logs(server_logs_path);
         return Err(err).context("Bridgehub L1→L2 deposit");
     }
     let deadline = Instant::now() + balance_poll_timeout;
     while Instant::now() < deadline {
-        match poll_l2_balance_once(&test_address, l2_rpc_url) {
+        match poll_l2_balance_once(l2_recipient, l2_rpc_url) {
             Ok(Some(balance)) if balance > 0 => return Ok(balance),
             Ok(_) => sleep(Duration::from_secs(2)),
             Err(err) => {
@@ -535,7 +537,7 @@ pub fn fund_l2_via_l1_deposit(
         .unwrap_or_default();
     anyhow::bail!(
         "L2 balance for {} did not become > 0 within {:?}.{}",
-        test_address,
+        l2_recipient,
         balance_poll_timeout,
         logs_hint
     )
