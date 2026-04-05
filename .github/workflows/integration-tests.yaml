@@ -60,12 +60,13 @@ jobs:
       - name: Run integration tests
         run: ./run-tests.sh
 
-      - name: Upload logs on failure
-        if: failure()
+      - name: Upload logs
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: integration-test-logs
+          include-hidden-files: true
           path: |
             .test-run-logs/
-            work/
+            .l1-state-cache/
             /tmp/era_work_*/

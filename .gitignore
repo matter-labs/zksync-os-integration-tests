@@ -1,7 +1,5 @@
-sandboxes
 cargo
 target
-docker_builds
 .test-run-logs
 
 #zksync-era
