@@ -113,6 +113,8 @@ impl Anvil {
             anvil
                 .port(port)
                 .chain_id(L1_CHAIN_ID)
+                .arg("--host")
+                .arg("0.0.0.0")
                 .arg("--load-state")
                 .arg(&state_str)
                 .arg("--disable-block-gas-limit")
@@ -149,6 +151,8 @@ impl Anvil {
             anvil
                 .port(port)
                 .chain_id(L1_CHAIN_ID)
+                .arg("--host")
+                .arg("0.0.0.0")
                 .arg("--load-state")
                 .arg(&state_str)
         });
@@ -173,7 +177,13 @@ impl Anvil {
         let rpc_url = format!("http://localhost:{}", port);
 
         let provider = ProviderBuilder::new()
-            .on_anvil_with_wallet_and_config(|anvil| anvil.port(port).chain_id(L1_CHAIN_ID));
+            .on_anvil_with_wallet_and_config(|anvil| {
+                anvil
+                    .port(port)
+                    .chain_id(L1_CHAIN_ID)
+                    .arg("--host")
+                    .arg("0.0.0.0")
+            });
 
         let provider: Box<dyn std::any::Any + Send + Sync> = Box::new(provider);
 

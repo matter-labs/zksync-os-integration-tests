@@ -101,6 +101,8 @@ impl DumpStateAnvil {
             .args([
                 "--preserve-historical-states",
                 "--disable-block-gas-limit",
+                "--host",
+                "0.0.0.0",
                 "--dump-state",
                 dump_state_path.to_str().unwrap(),
                 "--port",

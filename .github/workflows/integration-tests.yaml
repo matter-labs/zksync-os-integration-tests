@@ -77,3 +77,5 @@ jobs:
           name: integration-test-logs
           path: |
             .test-run-logs/
+            work/
+            /tmp/era_work_*/
