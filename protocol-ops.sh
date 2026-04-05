@@ -38,34 +38,27 @@ WORK_DIR="$(cd "${WORK_DIR}" && pwd)"   # absolute path
 
 CONTAINER_WORK="/contracts/work/session"
 
-# ── Rewrite localhost URLs to host.docker.internal ──────────────────────
-# The container cannot reach the host via localhost; Docker provides
-# host.docker.internal as the DNS name for the host network.
-rewrite_args=()
-for arg in "$@"; do
-  arg="${arg//:\/\/localhost:/:\/\/host.docker.internal:}"
-  arg="${arg//:\/\/127.0.0.1:/:\/\/host.docker.internal:}"
-  rewrite_args+=("$arg")
-done
-
 # ── Determine working directory inside the container ──────────────────
 # forge must run from /contracts/l1-contracts so it can find
 # the Solidity sources and foundry.toml.
 container_workdir=""
-case "${rewrite_args[0]}" in
+case "$1" in
   forge)
     container_workdir="/contracts/l1-contracts"
     ;;
 esac
 
 # ── Build docker run command ────────────────────────────────────────────
+# --network=host: container shares the host network namespace, so
+# localhost inside the container reaches host services (e.g. Anvil)
+# directly. No URL rewriting needed.
 docker_args=(
   run --rm
   --platform=linux/amd64
-  --add-host=host.docker.internal:host-gateway
+  --network=host
   -e FOUNDRY_DISABLE_NIGHTLY_WARNING=1
   -e FOUNDRY_OFFLINE=true
-  -e ETH_RPC_URL="${ETH_RPC_URL:-http://host.docker.internal:8545}"
+  -e ETH_RPC_URL="${ETH_RPC_URL:-http://localhost:8545}"
   -v "${WORK_DIR}:${CONTAINER_WORK}"
   -v "${WORK_DIR}/script-out:/contracts/l1-contracts/script-out"
 )
@@ -81,4 +74,4 @@ fi
 
 docker_args+=("${IMAGE}")
 
-exec docker "${docker_args[@]}" "${rewrite_args[@]}"
+exec docker "${docker_args[@]}" "$@"
