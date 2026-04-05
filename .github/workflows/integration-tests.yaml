@@ -54,6 +54,9 @@ jobs:
           chmod +x ./foundry/*
           echo "${PWD}/foundry" >> "${GITHUB_PATH}"
 
+      - name: Build all crates
+        run: cargo build --release --workspace
+
       - name: Run integration tests
         run: ./run-tests.sh
 

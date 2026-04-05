@@ -1,14 +1,22 @@
 //! Standalone tool to generate `l1-state.json` for integration tests.
 //!
 //! Replicates the L1 setup from `update_server.py` / `protocol_ops_init` test:
-//! 1. Start Anvil with `--dump-state`
-//! 2. Deploy L1 contracts via `protocol_ops ecosystem init`
-//! 3. Register chains via `protocol_ops chain init`
-//! 4. Fund operator accounts
-//! 5. Convert gateway chain via forge scripts + protocol_ops
-//! 6. Start gateway server, migrate chains, stop
-//! 7. Handle L1-settling chains (deposits)
-//! 8. Stop Anvil (triggers state dump)
+//!  1. Build contracts (local only — Docker image has pre-built artifacts)
+//!  2. Start Anvil with `--dump-state`
+//!  3. Deploy L1 contracts via `protocol_ops ecosystem init`
+//!  4. Register gateway chain via `protocol_ops chain init`
+//!  5. Register gateway-settling chains (with `--pause-deposits --skip-priority-txs`)
+//!  6. Register L1-settling chains
+//!  7. Fund all operator accounts on L1
+//!  8. Generate genesis.json, per-chain config files, and wallets.yaml
+//!  9. Start gateway server
+//! 10. Fund gateway L2 (test account + operators)
+//! 11. Wait for gateway executed batches
+//! 12. Convert gateway chain (forge + protocol_ops)
+//! 13. Migrate gateway-settling chains, enable validators, fund operators
+//! 14. Submit L1 deposits for L1-settling chains
+//! 15. Stop gateway server, archive RocksDB as ephemeral state
+//! 16. Stop Anvil (triggers state dump), write ecosystem.yaml + metadata.json
 //!
 //! Result: 1 gateway chain + N gateway-settling chains + M L1-settling chains.
 
@@ -265,6 +273,11 @@ fn run_forge_deploy_and_set_gateway_transaction_filterer(
 #[derive(serde::Deserialize)]
 struct ForceDeploymentsDumpToml {
     force_deployments_data: String,
+}
+
+#[derive(serde::Deserialize)]
+struct VotePrepOutput {
+    relayed_sl_da_validator: String,
 }
 
 /// Dump force deployments data.
@@ -594,11 +607,778 @@ fn run_wallets_gen(contracts_backend: &EraContractsBackend, chains_arg: &str) ->
 }
 
 // ---------------------------------------------------------------------------
-// Compression
+// Generation flow (Steps 3–15)
 // ---------------------------------------------------------------------------
 
+struct FlowResult {
+    bridgehub: String,
+    bytecodes_supplier: String,
+    gw_diamond_proxy: String,
+    gw_settling_diamond_proxies: Vec<String>,
+    l1_settling_diamond_proxies: Vec<String>,
+    gateway_ephemeral_state: PathBuf,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_generation_flow(
+    contracts_backend: &EraContractsBackend,
+    l1_rpc_url: &str,
+    gw_ops: &ChainOperators,
+    gw_settling_ops: &[ChainOperators],
+    l1_settling_ops: &[ChainOperators],
+    output_dir: &Path,
+    output_path: &Path,
+    preset: &integration_tests::presets::Preset,
+    anvil_port: u16,
+) -> Result<FlowResult> {
+    // ----------------------------------------------------------------
+    // Step 3: Ecosystem init
+    // ----------------------------------------------------------------
+    println!("\n=== protocol_ops ecosystem init ===");
+    let ecosystem_out_arg = contracts_backend.work_path("ecosystem_init_out.json");
+    contracts_backend.protocol_ops(&[
+        "ecosystem",
+        "init",
+        "--l1-rpc-url",
+        l1_rpc_url,
+        "--private-key",
+        DEFAULT_ANVIL_PRIVATE_KEY,
+        "--out",
+        &ecosystem_out_arg,
+    ])?;
+
+    let ecosystem_json: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(contracts_backend.work_dir().join("ecosystem_init_out.json"))
+            .context("read ecosystem init output")?,
+    )?;
+    let output = ecosystem_json
+        .get("output")
+        .ok_or_else(|| anyhow::anyhow!("Missing 'output' in ecosystem init JSON"))?;
+
+    let bridgehub = extract_json_value(
+        output,
+        "hub.deployed_addresses.bridgehub.bridgehub_proxy_addr",
+    )?;
+    let ctm_proxy = extract_json_value(
+        output,
+        "ctm.deployed_addresses.state_transition.state_transition_proxy_addr",
+    )?;
+    let l1_da_validator = extract_json_value(
+        output,
+        "ctm.deployed_addresses.blobs_zksync_os_l1_da_validator_addr",
+    )
+    .or_else(|_| {
+        extract_json_value(output, "ctm.deployed_addresses.rollup_l1_da_validator_addr")
+    })?;
+    let bytecodes_supplier = extract_json_value(
+        output,
+        "ctm.deployed_addresses.state_transition.bytecodes_supplier_addr",
+    )?;
+    let deployer_addr = extract_json_value(output, "hub.deployer_addr")?;
+    let governance_addr = extract_json_value(output, "hub.deployed_addresses.governance_addr")?;
+    let stm_tracker = extract_json_value(
+        output,
+        "hub.deployed_addresses.bridgehub.ctm_deployment_tracker_proxy_addr",
+    )?;
+
+    if l1_da_validator.is_empty()
+        || l1_da_validator == "0x0000000000000000000000000000000000000000"
+    {
+        anyhow::bail!("L1 DA validator address is empty or zero");
+    }
+
+    println!("  bridgehub = {bridgehub}");
+    println!("  ctm_proxy = {ctm_proxy}");
+    println!("  bytecodes_supplier = {bytecodes_supplier}");
+
+    // ----------------------------------------------------------------
+    // Step 4: Chain init — gateway chain
+    // ----------------------------------------------------------------
+    println!(
+        "\n=== protocol_ops chain init: gateway chain {} ===",
+        GATEWAY_CHAIN_ID
+    );
+    let gw_chain_out_arg = contracts_backend.work_path("chain_init_gateway.json");
+    contracts_backend.protocol_ops(&[
+        "chain",
+        "init",
+        "--ctm-proxy",
+        &ctm_proxy,
+        "--l1-da-validator",
+        &l1_da_validator,
+        "--commit-operator",
+        &gw_ops.commit_addr,
+        "--prove-operator",
+        &gw_ops.prove_addr,
+        "--execute-operator",
+        &gw_ops.execute_addr,
+        "--chain-id",
+        &GATEWAY_CHAIN_ID.to_string(),
+        "--l1-rpc-url",
+        l1_rpc_url,
+        "--private-key",
+        DEFAULT_ANVIL_PRIVATE_KEY,
+        "--out",
+        &gw_chain_out_arg,
+    ])?;
+    let gw_chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+        contracts_backend.work_dir().join("chain_init_gateway.json"),
+    )?)?;
+    let gw_chain_output = gw_chain_json
+        .get("output")
+        .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
+    let gw_diamond_proxy = extract_json_value(gw_chain_output, "diamond_proxy_addr")?;
+
+    // ----------------------------------------------------------------
+    // Step 5: Chain init — gateway-settling chains
+    // ----------------------------------------------------------------
+    let mut gw_settling_diamond_proxies = Vec::new();
+    for ops in gw_settling_ops {
+        println!(
+            "\n=== protocol_ops chain init: gateway-settling chain {} ===",
+            ops.chain_id
+        );
+        let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
+        let chain_out_arg = contracts_backend.work_path(&chain_out_name);
+        // --pause-deposits + --skip-priority-txs: keep the priority queue empty
+        // so migrate-to-gateway doesn't fail with PriorityQueueNotFullyProcessed.
+        // This avoids needing a pre-migration server to drain the queue.
+        contracts_backend.protocol_ops(&[
+            "chain",
+            "init",
+            "--ctm-proxy",
+            &ctm_proxy,
+            "--l1-da-validator",
+            &l1_da_validator,
+            "--commit-operator",
+            &ops.commit_addr,
+            "--prove-operator",
+            &ops.prove_addr,
+            "--execute-operator",
+            &ops.execute_addr,
+            "--chain-id",
+            &ops.chain_id.to_string(),
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--private-key",
+            DEFAULT_ANVIL_PRIVATE_KEY,
+            "--pause-deposits",
+            "--skip-priority-txs",
+            "--out",
+            &chain_out_arg,
+        ])?;
+        let chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+            contracts_backend.work_dir().join(&chain_out_name),
+        )?)?;
+        let chain_output = chain_json
+            .get("output")
+            .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
+        gw_settling_diamond_proxies
+            .push(extract_json_value(chain_output, "diamond_proxy_addr")?);
+    }
+
+    // ----------------------------------------------------------------
+    // Step 6: Chain init — L1-settling chains
+    // ----------------------------------------------------------------
+    let mut l1_settling_diamond_proxies = Vec::new();
+    for ops in l1_settling_ops {
+        println!(
+            "\n=== protocol_ops chain init: L1-settling chain {} ===",
+            ops.chain_id
+        );
+        let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
+        let chain_out_arg = contracts_backend.work_path(&chain_out_name);
+        contracts_backend.protocol_ops(&[
+            "chain",
+            "init",
+            "--ctm-proxy",
+            &ctm_proxy,
+            "--l1-da-validator",
+            &l1_da_validator,
+            "--commit-operator",
+            &ops.commit_addr,
+            "--prove-operator",
+            &ops.prove_addr,
+            "--execute-operator",
+            &ops.execute_addr,
+            "--chain-id",
+            &ops.chain_id.to_string(),
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--private-key",
+            DEFAULT_ANVIL_PRIVATE_KEY,
+            "--out",
+            &chain_out_arg,
+        ])?;
+        let chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
+            contracts_backend.work_dir().join(&chain_out_name),
+        )?)?;
+        let chain_output = chain_json
+            .get("output")
+            .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
+        l1_settling_diamond_proxies
+            .push(extract_json_value(chain_output, "diamond_proxy_addr")?);
+    }
+
+    // ----------------------------------------------------------------
+    // Step 7: Fund all operator accounts on L1
+    // ----------------------------------------------------------------
+    println!("\n=== Funding L1 operator accounts ===");
+    let all_ops: Vec<&ChainOperators> = std::iter::once(gw_ops)
+        .chain(gw_settling_ops.iter())
+        .chain(l1_settling_ops.iter())
+        .collect();
+    for ops in &all_ops {
+        for addr in ops.all_addresses() {
+            fund_account(addr, "100ether", l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
+                .with_context(|| {
+                    format!("fund operator {} for chain {}", addr, ops.chain_id)
+                })?;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Step 8: Generate genesis.json into output directory
+    // ----------------------------------------------------------------
+    let work_genesis = run_genesis_gen(contracts_backend)?;
+    let genesis_path = output_dir.join("genesis.json");
+    fs::copy(&work_genesis, &genesis_path)
+        .with_context(|| format!("copy genesis to {}", genesis_path.display()))?;
+    let genesis_path = genesis_path.canonicalize()?;
+
+    // ----------------------------------------------------------------
+    // Step 8b: Write per-chain config files into output directory
+    //   gateway.yaml, gateway_settling_a.yaml, gateway_settling_b.yaml, l1_settling.yaml
+    // ----------------------------------------------------------------
+    println!("\n=== Writing chain configs ===");
+    // Gateway config
+    fs::write(
+        output_dir.join(format!("{}.yaml", gw_ops.dir_name)),
+        integration_tests::server_config::ServerConfigBuilder::new(
+            &bridgehub,
+            &bytecodes_supplier,
+            &genesis_path,
+            GATEWAY_CHAIN_ID,
+            &gw_ops.commit_pk,
+            &gw_ops.prove_pk,
+            &gw_ops.execute_pk,
+        )
+        .build(),
+    )?;
+    println!("  {}.yaml (gateway)", gw_ops.dir_name);
+
+    // Gateway-settling chain configs (gateway_rpc_url set at runtime via env var)
+    for ops in gw_settling_ops {
+        fs::write(
+            output_dir.join(format!("{}.yaml", ops.dir_name)),
+            integration_tests::server_config::ServerConfigBuilder::new(
+                &bridgehub,
+                &bytecodes_supplier,
+                &genesis_path,
+                ops.chain_id,
+                &ops.commit_pk,
+                &ops.prove_pk,
+                &ops.execute_pk,
+            )
+            .gateway("RUNTIME", GATEWAY_CHAIN_ID)
+            .build(),
+        )?;
+        println!("  {}.yaml (gateway-settling)", ops.dir_name);
+    }
+
+    // L1-settling chain configs
+    for ops in l1_settling_ops {
+        fs::write(
+            output_dir.join(format!("{}.yaml", ops.dir_name)),
+            integration_tests::server_config::ServerConfigBuilder::new(
+                &bridgehub,
+                &bytecodes_supplier,
+                &genesis_path,
+                ops.chain_id,
+                &ops.commit_pk,
+                &ops.prove_pk,
+                &ops.execute_pk,
+            )
+            .build(),
+        )?;
+        println!("  {}.yaml (L1-settling)", ops.dir_name);
+    }
+
+    // ----------------------------------------------------------------
+    // Step 8c: Generate wallets.yaml
+    // ----------------------------------------------------------------
+    println!("\n=== Generating wallets.yaml ===");
+    let all_chain_names: Vec<&str> = std::iter::once(gw_ops.dir_name.as_str())
+        .chain(gw_settling_ops.iter().map(|o| o.dir_name.as_str()))
+        .chain(l1_settling_ops.iter().map(|o| o.dir_name.as_str()))
+        .collect();
+    let chains_arg = all_chain_names.join(",");
+    let work_wallets = run_wallets_gen(contracts_backend, &chains_arg)?;
+    let wallets_path = output_dir.join("wallets.yaml");
+    fs::copy(&work_wallets, &wallets_path)
+        .with_context(|| format!("copy wallets to {}", wallets_path.display()))?;
+    println!("  wallets.yaml -> {}", wallets_path.display());
+
+    // ----------------------------------------------------------------
+    // Step 9: Start gateway server
+    // ----------------------------------------------------------------
+    println!(
+        "\n=== Starting gateway server (chain {}) ===",
+        GATEWAY_CHAIN_ID
+    );
+    let gw_config_path = output_dir.join(format!("{}.yaml", gw_ops.dir_name));
+
+    let anvil_handle = integration_tests::anvil::Anvil::wrap_external(anvil_port);
+    let gw_rocks_db = contracts_backend.work_dir().join("gateway_rocksdb");
+    let logs_dir = output_dir.join("logs");
+    fs::create_dir_all(&logs_dir).context("create logs dir for state generation")?;
+    let gw_server =
+        integration_tests::server::ServerBuilder::new(preset.clone(), "generate_l1_state")
+            .config_path(&gw_config_path)
+            .rocks_db_path(&gw_rocks_db)
+            .logs_dir(&logs_dir)
+            .spawn(&anvil_handle)
+            .context("Failed to start gateway server")?;
+    let gw_l2_rpc = gw_server.rpc_url();
+    println!("  Gateway server ready at {gw_l2_rpc}");
+
+    // ----------------------------------------------------------------
+    // Step 10: Fund gateway L2 (test account + gateway operators)
+    // ----------------------------------------------------------------
+    println!("\n=== Funding gateway L2 ===");
+    // Flush docker logs to host before deposit calls so the diagnostic
+    // reader can find the file if the server crashes mid-operation.
+    let _ = gw_server.save_logs();
+    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
+    fund_l2_via_l1_deposit(
+        l1_rpc_url,
+        &gw_l2_rpc,
+        &bridgehub,
+        GATEWAY_CHAIN_ID,
+        &test_address,
+        0.1,
+        Duration::from_secs(120),
+        Some(gw_server.logs_path().as_path()),
+    )
+    .context("fund gateway L2 test account")?;
+
+    for addr_name in ["commit", "prove", "execute"] {
+        let addr = match addr_name {
+            "commit" => &gw_ops.commit_addr,
+            "prove" => &gw_ops.prove_addr,
+            "execute" => &gw_ops.execute_addr,
+            _ => unreachable!(),
+        };
+        let _ = gw_server.save_logs();
+        fund_l2_via_l1_deposit(
+            l1_rpc_url,
+            &gw_l2_rpc,
+            &bridgehub,
+            GATEWAY_CHAIN_ID,
+            addr,
+            5.0,
+            Duration::from_secs(120),
+            Some(gw_server.logs_path().as_path()),
+        )
+        .with_context(|| format!("fund gateway L2 for operator {addr_name}"))?;
+    }
+
+    // ----------------------------------------------------------------
+    // Step 11: Wait for gateway batches
+    // ----------------------------------------------------------------
+    println!("\n=== Waiting for gateway batches ===");
+    wait_for_executed_batches_with_traffic(
+        &gw_l2_rpc,
+        l1_rpc_url,
+        &gw_diamond_proxy,
+        DEFAULT_ANVIL_PRIVATE_KEY,
+        3,
+        Duration::from_secs(120),
+    )
+    .context("gateway executed batches")?;
+
+    // ----------------------------------------------------------------
+    // Step 12: Convert gateway chain
+    // ----------------------------------------------------------------
+    println!("\n=== Converting chain {} to gateway ===", GATEWAY_CHAIN_ID);
+
+    let force_hex =
+        run_forge_dump_force_deployments(contracts_backend, l1_rpc_url, &ctm_proxy)?;
+    let vote_output_path_rel = "/script-out/gateway_vote_prep_out.toml".to_string();
+    run_forge_deploy_and_set_gateway_transaction_filterer(
+        contracts_backend,
+        l1_rpc_url,
+        &bridgehub,
+        GATEWAY_CHAIN_ID,
+    )?;
+    run_convert_to_gateway(
+        contracts_backend,
+        l1_rpc_url,
+        &bridgehub,
+        GATEWAY_CHAIN_ID,
+        &governance_addr,
+        &deployer_addr,
+        &stm_tracker,
+        &force_hex,
+        &vote_output_path_rel,
+    )?;
+
+    // ----------------------------------------------------------------
+    // Step 13: Gateway-settling chains — migrate, finalize, enable validators
+    // ----------------------------------------------------------------
+
+    // 13a: Migrate + confirm transfer for all chains
+    for ops in gw_settling_ops {
+        let chain_id = ops.chain_id;
+        println!("\n=== Migrating chain {} to gateway ===", chain_id);
+        run_forge_deploy_and_set_gateway_transaction_filterer(
+            contracts_backend,
+            l1_rpc_url,
+            &bridgehub,
+            chain_id,
+        )?;
+        run_migrate_to_gateway(
+            contracts_backend,
+            l1_rpc_url,
+            &bridgehub,
+            chain_id,
+            GATEWAY_CHAIN_ID,
+            &vote_output_path_rel,
+            &deployer_addr,
+            true,
+        )?;
+        // Confirm transfer on L1 (finishMigrateChainToGateway only, no validators yet)
+        println!("  Confirming transfer for chain {chain_id}");
+        contracts_backend
+            .protocol_ops(&[
+                "chain",
+                "finalize-migration-to-gateway",
+                "--bridgehub-proxy-address",
+                &bridgehub,
+                "--chain-id",
+                &chain_id.to_string(),
+                "--gateway-chain-id",
+                &GATEWAY_CHAIN_ID.to_string(),
+                "--gateway-rpc-url",
+                &gw_l2_rpc,
+                "--gateway-diamond-proxy",
+                &gw_diamond_proxy,
+                "--l1-rpc-url",
+                l1_rpc_url,
+                "--private-key",
+                DEFAULT_ANVIL_PRIVATE_KEY,
+                "--vote-preparation-output-path",
+                &vote_output_path_rel,
+                // No --commit/prove/execute-operator: skip validator enablement for now
+                "--commit-operator",
+                "0x0000000000000000000000000000000000000000",
+                "--prove-operator",
+                "0x0000000000000000000000000000000000000000",
+                "--execute-operator",
+                "0x0000000000000000000000000000000000000000",
+                "--gateway-validator-timelock",
+                "0x0000000000000000000000000000000000000000",
+            ])
+            .with_context(|| format!("finalize migration (confirm) for chain {chain_id}"))?;
+    }
+
+    // 13b: Wait for gateway to process all migration L1->L2 priority txs
+    println!("\n=== Waiting for gateway to process chain migrations ===");
+    {
+        let cast_out = contracts_backend.cast(&[
+            "call",
+            &gw_diamond_proxy,
+            "getTotalBatchesExecuted()(uint256)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])?;
+        let current = cast_out.trim().parse::<u64>().unwrap_or(0);
+        wait_for_executed_batches_with_traffic(
+            &gw_l2_rpc,
+            l1_rpc_url,
+            &gw_diamond_proxy,
+            DEFAULT_ANVIL_PRIVATE_KEY,
+            current + 3,
+            Duration::from_secs(120),
+        )
+        .context("gateway batches after migration")?;
+    }
+
+    // 13c: Resolve gateway ValidatorTimelock (now chains are registered on gateway)
+    let gw_validator_timelock = {
+        let first_chain_id = gw_settling_ops[0].chain_id;
+        let ctm = contracts_backend
+            .cast(&[
+                "call",
+                "0x0000000000000000000000000000000000010002",
+                "chainTypeManager(uint256)(address)",
+                &first_chain_id.to_string(),
+                "--rpc-url",
+                &gw_l2_rpc,
+            ])
+            .context("query gateway L2 chainTypeManager")?;
+        let ctm = ctm.trim().to_string();
+        anyhow::ensure!(
+            !ctm.is_empty() && ctm != "0x0000000000000000000000000000000000000000",
+            "chain {} not registered on gateway yet",
+            first_chain_id
+        );
+        let vtl = contracts_backend
+            .cast(&[
+                "call",
+                &ctm,
+                "validatorTimelockPostV29()(address)",
+                "--rpc-url",
+                &gw_l2_rpc,
+            ])
+            .context("query validatorTimelockPostV29")?;
+        vtl.trim().to_string()
+    };
+    println!("  Gateway L2 ValidatorTimelock: {gw_validator_timelock}");
+
+    // Read gateway's relayed SL DA validator from vote preparation output.
+    // Both modes write to work_dir/script-out/ (local via sync, Docker via mount).
+    let gw_vote_output_file = contracts_backend
+        .work_dir()
+        .join("script-out/gateway_vote_prep_out.toml");
+    let gw_vote_toml = fs::read_to_string(&gw_vote_output_file)
+        .with_context(|| format!("read vote prep output {}", gw_vote_output_file.display()))?;
+    let vote_prep: VotePrepOutput = toml::from_str(&gw_vote_toml)
+        .context("parse vote preparation output TOML")?;
+    let relayed_sl_da_validator = vote_prep.relayed_sl_da_validator;
+    println!("  Gateway relayed SL DA validator: {relayed_sl_da_validator}");
+
+    // 13d: Enable validators + fund operators for each chain
+    // Call AdminFunctions.enableValidatorViaGateway directly via forge
+    for (i, ops) in gw_settling_ops.iter().enumerate() {
+        let chain_id = ops.chain_id;
+        println!("\n=== Enabling validators for chain {} ===", chain_id);
+        let mut seen = std::collections::HashSet::new();
+        for (name, addr) in [
+            ("commit", &ops.commit_addr),
+            ("prove", &ops.prove_addr),
+            ("execute", &ops.execute_addr),
+        ] {
+            if !seen.insert(addr.clone()) {
+                continue;
+            }
+            println!("  Enabling {name} operator {addr}");
+            let chain_id_str = chain_id.to_string();
+            let gw_chain_id_str = GATEWAY_CHAIN_ID.to_string();
+            contracts_backend.forge_script(&[
+                "deploy-scripts/AdminFunctions.s.sol",
+                "--sig", "enableValidatorViaGateway(address,uint256,uint256,uint256,address,address,address,bool)",
+                &bridgehub,
+                "1000000000",
+                &chain_id_str,
+                &gw_chain_id_str,
+                addr,
+                &gw_validator_timelock,
+                &deployer_addr,
+                "true",
+                "--rpc-url", l1_rpc_url,
+                "--broadcast", "--ffi",
+                "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
+            ], &[])
+            .with_context(|| format!("enableValidatorViaGateway for {name} operator {addr} on chain {chain_id}"))?;
+        }
+
+        // Set DA validator pair via gateway
+        println!("  Setting DA validator pair via gateway for chain {chain_id}");
+        let chain_diamond_on_gw = {
+            let out = contracts_backend
+                .cast(&[
+                    "call",
+                    "0x0000000000000000000000000000000000010002",
+                    "getZKChain(uint256)(address)",
+                    &chain_id.to_string(),
+                    "--rpc-url",
+                    &gw_l2_rpc,
+                ])
+                .context("query chain diamond on gateway")?;
+            out.trim().to_string()
+        };
+        // Update with the post-migration gateway address (replaces the
+        // pre-migration L1 address captured during chain init).
+        println!(
+            "  Chain {} diamond proxy on gateway: {}",
+            chain_id, chain_diamond_on_gw
+        );
+        gw_settling_diamond_proxies[i] = chain_diamond_on_gw.clone();
+        // L2DACommitmentScheme: 3 = BLOBS_AND_PUBDATA_KECCAK256
+        let chain_id_str = chain_id.to_string();
+        let gw_chain_id_str = GATEWAY_CHAIN_ID.to_string();
+        contracts_backend.forge_script(&[
+            "deploy-scripts/AdminFunctions.s.sol",
+            "--sig", "setDAValidatorPairWithGateway(address,uint256,uint256,uint256,address,uint8,address,address,bool)",
+            &bridgehub,
+            "1000000000",
+            &chain_id_str,
+            &gw_chain_id_str,
+            &relayed_sl_da_validator,
+            "3",
+            &chain_diamond_on_gw,
+            &deployer_addr,
+            "true",
+            "--rpc-url", l1_rpc_url,
+            "--broadcast", "--ffi",
+            "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
+        ], &[])
+        .with_context(|| format!("setDAValidatorPairWithGateway for chain {chain_id}"))?;
+
+        println!("  Funding gateway L2 for chain {} operators", chain_id);
+        for addr in [&ops.commit_addr, &ops.prove_addr, &ops.execute_addr] {
+            let _ = gw_server.save_logs();
+            fund_l2_via_l1_deposit(
+                l1_rpc_url,
+                &gw_l2_rpc,
+                &bridgehub,
+                GATEWAY_CHAIN_ID,
+                addr,
+                5.0,
+                Duration::from_secs(120),
+                Some(gw_server.logs_path().as_path()),
+            )
+            .context("fund gateway L2 for migrated-chain operator")?;
+        }
+    }
+
+    // 13e: Wait for gateway to drain its priority queue (validator + DA validator txs)
+    println!("\n=== Waiting for gateway to drain priority queue ===");
+    {
+        let deadline = std::time::Instant::now() + Duration::from_secs(180);
+        loop {
+            let raw = contracts_backend.cast(&[
+                "call",
+                &gw_diamond_proxy,
+                "getPriorityQueueSize()(uint256)",
+                "--rpc-url",
+                l1_rpc_url,
+            ])?;
+            let queue_size = raw.trim().parse::<u64>().unwrap_or(u64::MAX);
+            if queue_size == 0 {
+                println!("  Gateway priority queue drained");
+                break;
+            }
+            if std::time::Instant::now() > deadline {
+                anyhow::bail!(
+                    "Timed out waiting for gateway priority queue to drain (size={})",
+                    queue_size
+                );
+            }
+            println!("  Gateway priority queue size: {queue_size}, sending traffic...");
+            let _ = contracts_backend.cast(&[
+                "send",
+                "0x0000000000000000000000000000000000000001",
+                "--value",
+                "1",
+                "--private-key",
+                DEFAULT_ANVIL_PRIVATE_KEY,
+                "--rpc-url",
+                &gw_l2_rpc,
+            ]);
+            std::thread::sleep(Duration::from_secs(3));
+        }
+        // Now wait for enough batches to be executed on L1 so the state is visible
+        let cast_out = contracts_backend.cast(&[
+            "call",
+            &gw_diamond_proxy,
+            "getTotalBatchesExecuted()(uint256)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])?;
+        let current = cast_out.trim().parse::<u64>().unwrap_or(0);
+        wait_for_executed_batches_with_traffic(
+            &gw_l2_rpc,
+            l1_rpc_url,
+            &gw_diamond_proxy,
+            DEFAULT_ANVIL_PRIVATE_KEY,
+            current + 3,
+            Duration::from_secs(120),
+        )
+        .context("gateway batches after priority queue drain")?;
+    }
+
+    // ----------------------------------------------------------------
+    // Step 14: L1-settling chains — submit L1 deposit (no server needed)
+    //
+    // Unlike gateway-settling chains, L1-settling chains do not require
+    // a running server during state generation. We only submit an L1->L2
+    // deposit so the priority queue has a transaction ready for the
+    // server when the test starts it later.
+    // ----------------------------------------------------------------
+    for ops in l1_settling_ops {
+        let chain_id = ops.chain_id;
+        println!("\n=== L1-settling chain {chain_id}: submitting L1 deposit ===");
+        let test_addr = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
+        integration_tests::l1_l2_deposit::submit_l1_to_l2_deposit_to(
+            l1_rpc_url,
+            &bridgehub,
+            chain_id,
+            DEFAULT_ANVIL_PRIVATE_KEY,
+            0.1,
+            Some(&test_addr),
+        )
+        .with_context(|| format!("L1 deposit for L1-settling chain {chain_id}"))?;
+    }
+
+    // ----------------------------------------------------------------
+    // Step 15: Stop gateway server
+    // ----------------------------------------------------------------
+    println!("\n=== Stopping gateway server ===");
+    gw_server
+        .kill()
+        .context("kill gateway server")?;
+
+    // Archive gateway RocksDB so tests can load it via ephemeral_state.
+    // The server's unpack_ephemeral_state strips the first path component
+    // (expects a wrapping directory like `node/`), so we wrap everything
+    // under a `node/` prefix.
+    let gw_state_archive = output_path.with_extension("gateway-state.tar.gz");
+    println!(
+        "Archiving gateway RocksDB -> {}",
+        gw_state_archive.display()
+    );
+    {
+        let tar_file = fs::File::create(&gw_state_archive)?;
+        let enc = flate2::write::GzEncoder::new(tar_file, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(enc);
+        tar.append_dir_all("node", &gw_rocks_db)?;
+        tar.finish()?;
+    }
+
+    // Rewrite gateway config with ephemeral mode now that the archive exists
+    let gw_state_archive_abs = gw_state_archive
+        .canonicalize()
+        .unwrap_or_else(|_| gw_state_archive.clone());
+    fs::write(
+        output_dir.join(format!("{}.yaml", gw_ops.dir_name)),
+        integration_tests::server_config::ServerConfigBuilder::new(
+            &bridgehub,
+            &bytecodes_supplier,
+            &genesis_path,
+            GATEWAY_CHAIN_ID,
+            &gw_ops.commit_pk,
+            &gw_ops.prove_pk,
+            &gw_ops.execute_pk,
+        )
+        .ephemeral(gw_state_archive_abs.to_string_lossy())
+        .build(),
+    )?;
+    println!("  Updated {}.yaml with ephemeral state", gw_ops.dir_name);
+
+    Ok(FlowResult {
+        bridgehub,
+        bytecodes_supplier,
+        gw_diamond_proxy,
+        gw_settling_diamond_proxies,
+        l1_settling_diamond_proxies,
+        gateway_ephemeral_state: gw_state_archive,
+    })
+}
+
 // ---------------------------------------------------------------------------
-// Main flow
+// Main
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {
@@ -742,775 +1522,18 @@ fn main() -> Result<()> {
     let l1_rpc_url = anvil.rpc_url().to_string();
     println!("  Anvil ready at {}", l1_rpc_url);
 
-    // Wrap the rest in a closure so we can terminate Anvil even on error.
-    // Returns addresses needed for the metadata file.
-    struct FlowResult {
-        bridgehub: String,
-        bytecodes_supplier: String,
-        gw_diamond_proxy: String,
-        gw_settling_diamond_proxies: Vec<String>,
-        l1_settling_diamond_proxies: Vec<String>,
-        gateway_ephemeral_state: PathBuf,
-    }
-    let result = (|| -> Result<FlowResult> {
-        // ----------------------------------------------------------------
-        // Step 3: Ecosystem init
-        // ----------------------------------------------------------------
-        println!("\n=== protocol_ops ecosystem init ===");
-        let ecosystem_out_arg = contracts_backend.work_path("ecosystem_init_out.json");
-        contracts_backend.protocol_ops(&[
-            "ecosystem",
-            "init",
-            "--l1-rpc-url",
-            &l1_rpc_url,
-            "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
-            "--out",
-            &ecosystem_out_arg,
-        ])?;
-
-        let ecosystem_json: serde_json::Value = serde_json::from_str(
-            &fs::read_to_string(contracts_backend.work_dir().join("ecosystem_init_out.json"))
-                .context("read ecosystem init output")?,
-        )?;
-        let output = ecosystem_json
-            .get("output")
-            .ok_or_else(|| anyhow::anyhow!("Missing 'output' in ecosystem init JSON"))?;
-
-        let bridgehub = extract_json_value(
-            output,
-            "hub.deployed_addresses.bridgehub.bridgehub_proxy_addr",
-        )?;
-        let ctm_proxy = extract_json_value(
-            output,
-            "ctm.deployed_addresses.state_transition.state_transition_proxy_addr",
-        )?;
-        let l1_da_validator = extract_json_value(
-            output,
-            "ctm.deployed_addresses.blobs_zksync_os_l1_da_validator_addr",
-        )
-        .or_else(|_| {
-            extract_json_value(output, "ctm.deployed_addresses.rollup_l1_da_validator_addr")
-        })?;
-        let bytecodes_supplier = extract_json_value(
-            output,
-            "ctm.deployed_addresses.state_transition.bytecodes_supplier_addr",
-        )?;
-        let deployer_addr = extract_json_value(output, "hub.deployer_addr")?;
-        let governance_addr = extract_json_value(output, "hub.deployed_addresses.governance_addr")?;
-        let stm_tracker = extract_json_value(
-            output,
-            "hub.deployed_addresses.bridgehub.ctm_deployment_tracker_proxy_addr",
-        )?;
-
-        if l1_da_validator.is_empty()
-            || l1_da_validator == "0x0000000000000000000000000000000000000000"
-        {
-            anyhow::bail!("L1 DA validator address is empty or zero");
-        }
-
-        println!("  bridgehub = {bridgehub}");
-        println!("  ctm_proxy = {ctm_proxy}");
-        println!("  bytecodes_supplier = {bytecodes_supplier}");
-
-        // ----------------------------------------------------------------
-        // Step 4: Chain init — gateway chain
-        // ----------------------------------------------------------------
-        println!(
-            "\n=== protocol_ops chain init: gateway chain {} ===",
-            GATEWAY_CHAIN_ID
-        );
-        let gw_chain_out_arg = contracts_backend.work_path("chain_init_gateway.json");
-        contracts_backend.protocol_ops(&[
-            "chain",
-            "init",
-            "--ctm-proxy",
-            &ctm_proxy,
-            "--l1-da-validator",
-            &l1_da_validator,
-            "--commit-operator",
-            &gw_ops.commit_addr,
-            "--prove-operator",
-            &gw_ops.prove_addr,
-            "--execute-operator",
-            &gw_ops.execute_addr,
-            "--chain-id",
-            &GATEWAY_CHAIN_ID.to_string(),
-            "--l1-rpc-url",
-            &l1_rpc_url,
-            "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
-            "--out",
-            &gw_chain_out_arg,
-        ])?;
-        let gw_chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
-            contracts_backend.work_dir().join("chain_init_gateway.json"),
-        )?)?;
-        let gw_chain_output = gw_chain_json
-            .get("output")
-            .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-        let gw_diamond_proxy = extract_json_value(gw_chain_output, "diamond_proxy_addr")?;
-
-        // ----------------------------------------------------------------
-        // Step 5: Chain init — gateway-settling chains
-        // ----------------------------------------------------------------
-        let mut gw_settling_diamond_proxies = Vec::new();
-        for ops in &gw_settling_ops {
-            println!(
-                "\n=== protocol_ops chain init: gateway-settling chain {} ===",
-                ops.chain_id
-            );
-            let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
-            let chain_out_arg = contracts_backend.work_path(&chain_out_name);
-            // --pause-deposits + --skip-priority-txs: keep the priority queue empty
-            // so migrate-to-gateway doesn't fail with PriorityQueueNotFullyProcessed.
-            // This avoids needing a pre-migration server to drain the queue.
-            contracts_backend.protocol_ops(&[
-                "chain",
-                "init",
-                "--ctm-proxy",
-                &ctm_proxy,
-                "--l1-da-validator",
-                &l1_da_validator,
-                "--commit-operator",
-                &ops.commit_addr,
-                "--prove-operator",
-                &ops.prove_addr,
-                "--execute-operator",
-                &ops.execute_addr,
-                "--chain-id",
-                &ops.chain_id.to_string(),
-                "--l1-rpc-url",
-                &l1_rpc_url,
-                "--private-key",
-                DEFAULT_ANVIL_PRIVATE_KEY,
-                "--pause-deposits",
-                "--skip-priority-txs",
-                "--out",
-                &chain_out_arg,
-            ])?;
-            let chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
-                contracts_backend.work_dir().join(&chain_out_name),
-            )?)?;
-            let chain_output = chain_json
-                .get("output")
-                .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-            gw_settling_diamond_proxies
-                .push(extract_json_value(chain_output, "diamond_proxy_addr")?);
-        }
-
-        // ----------------------------------------------------------------
-        // Step 6: Chain init — L1-settling chains
-        // ----------------------------------------------------------------
-        let mut l1_settling_diamond_proxies = Vec::new();
-        for ops in &l1_settling_ops {
-            println!(
-                "\n=== protocol_ops chain init: L1-settling chain {} ===",
-                ops.chain_id
-            );
-            let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
-            let chain_out_arg = contracts_backend.work_path(&chain_out_name);
-            contracts_backend.protocol_ops(&[
-                "chain",
-                "init",
-                "--ctm-proxy",
-                &ctm_proxy,
-                "--l1-da-validator",
-                &l1_da_validator,
-                "--commit-operator",
-                &ops.commit_addr,
-                "--prove-operator",
-                &ops.prove_addr,
-                "--execute-operator",
-                &ops.execute_addr,
-                "--chain-id",
-                &ops.chain_id.to_string(),
-                "--l1-rpc-url",
-                &l1_rpc_url,
-                "--private-key",
-                DEFAULT_ANVIL_PRIVATE_KEY,
-                "--out",
-                &chain_out_arg,
-            ])?;
-            let chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
-                contracts_backend.work_dir().join(&chain_out_name),
-            )?)?;
-            let chain_output = chain_json
-                .get("output")
-                .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-            l1_settling_diamond_proxies
-                .push(extract_json_value(chain_output, "diamond_proxy_addr")?);
-        }
-
-        // ----------------------------------------------------------------
-        // Step 7: Fund all operator accounts on L1
-        // ----------------------------------------------------------------
-        println!("\n=== Funding L1 operator accounts ===");
-        let all_ops: Vec<&ChainOperators> = std::iter::once(&gw_ops)
-            .chain(gw_settling_ops.iter())
-            .chain(l1_settling_ops.iter())
-            .collect();
-        for ops in &all_ops {
-            for addr in ops.all_addresses() {
-                fund_account(addr, "100ether", &l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
-                    .with_context(|| {
-                        format!("fund operator {} for chain {}", addr, ops.chain_id)
-                    })?;
-            }
-        }
-        let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-        fund_account(
-            &test_address,
-            "10ether",
-            &l1_rpc_url,
-            DEFAULT_ANVIL_PRIVATE_KEY,
-        )
-        .context("fund test account")?;
-
-        // ----------------------------------------------------------------
-        // Step 8: Generate genesis.json into output directory
-        // ----------------------------------------------------------------
-        let output_dir = output_path.parent().unwrap_or(Path::new("."));
-        let work_genesis = run_genesis_gen(&contracts_backend)?;
-        let genesis_path = output_dir.join("genesis.json");
-        fs::copy(&work_genesis, &genesis_path)
-            .with_context(|| format!("copy genesis to {}", genesis_path.display()))?;
-        let genesis_path = genesis_path.canonicalize()?;
-
-        // ----------------------------------------------------------------
-        // Step 8b: Write per-chain config files into output directory
-        //   gateway.yaml, gateway_settling_a.yaml, gateway_settling_b.yaml, l1_settling.yaml
-        // ----------------------------------------------------------------
-        println!("\n=== Writing chain configs ===");
-        // Gateway config
-        fs::write(
-            output_dir.join(format!("{}.yaml", gw_ops.dir_name)),
-            integration_tests::server_config::ServerConfigBuilder::new(
-                &bridgehub,
-                &bytecodes_supplier,
-                &genesis_path,
-                GATEWAY_CHAIN_ID,
-                &gw_ops.commit_pk,
-                &gw_ops.prove_pk,
-                &gw_ops.execute_pk,
-            )
-            .build(),
-        )?;
-        println!("  {}.yaml (gateway)", gw_ops.dir_name);
-
-        // Gateway-settling chain configs (gateway_rpc_url set at runtime via env var)
-        for ops in &gw_settling_ops {
-            fs::write(
-                output_dir.join(format!("{}.yaml", ops.dir_name)),
-                integration_tests::server_config::ServerConfigBuilder::new(
-                    &bridgehub,
-                    &bytecodes_supplier,
-                    &genesis_path,
-                    ops.chain_id,
-                    &ops.commit_pk,
-                    &ops.prove_pk,
-                    &ops.execute_pk,
-                )
-                .gateway("RUNTIME", GATEWAY_CHAIN_ID)
-                .build(),
-            )?;
-            println!("  {}.yaml (gateway-settling)", ops.dir_name);
-        }
-
-        // L1-settling chain configs
-        for ops in &l1_settling_ops {
-            fs::write(
-                output_dir.join(format!("{}.yaml", ops.dir_name)),
-                integration_tests::server_config::ServerConfigBuilder::new(
-                    &bridgehub,
-                    &bytecodes_supplier,
-                    &genesis_path,
-                    ops.chain_id,
-                    &ops.commit_pk,
-                    &ops.prove_pk,
-                    &ops.execute_pk,
-                )
-                .build(),
-            )?;
-            println!("  {}.yaml (L1-settling)", ops.dir_name);
-        }
-
-        // ----------------------------------------------------------------
-        // Step 8c: Generate wallets.yaml
-        // ----------------------------------------------------------------
-        println!("\n=== Generating wallets.yaml ===");
-        let all_chain_names: Vec<&str> = std::iter::once(gw_ops.dir_name.as_str())
-            .chain(gw_settling_ops.iter().map(|o| o.dir_name.as_str()))
-            .chain(l1_settling_ops.iter().map(|o| o.dir_name.as_str()))
-            .collect();
-        let chains_arg = all_chain_names.join(",");
-        let work_wallets = run_wallets_gen(&contracts_backend, &chains_arg)?;
-        let wallets_path = output_dir.join("wallets.yaml");
-        fs::copy(&work_wallets, &wallets_path)
-            .with_context(|| format!("copy wallets to {}", wallets_path.display()))?;
-        println!("  wallets.yaml -> {}", wallets_path.display());
-
-        // ----------------------------------------------------------------
-        // Step 9: Start gateway server
-        // ----------------------------------------------------------------
-        println!(
-            "\n=== Starting gateway server (chain {}) ===",
-            GATEWAY_CHAIN_ID
-        );
-        let gw_config_path = output_dir.join(format!("{}.yaml", gw_ops.dir_name));
-
-        let anvil_handle = integration_tests::anvil::Anvil::wrap_external(anvil_port);
-        let gw_rocks_db = contracts_backend.work_dir().join("gateway_rocksdb");
-        let logs_dir = output_path.parent().unwrap_or(Path::new(".")).join("logs");
-        fs::create_dir_all(&logs_dir).context("create logs dir for state generation")?;
-        let gw_server =
-            integration_tests::server::ServerBuilder::new(preset.clone(), "generate_l1_state")
-                .config_path(&gw_config_path)
-                .rocks_db_path(&gw_rocks_db)
-                .logs_dir(&logs_dir)
-                .spawn(&anvil_handle)
-                .map_err(|e| anyhow::anyhow!("Failed to start gateway server: {:?}", e))?;
-        let gw_l2_rpc = gw_server.rpc_url();
-        println!("  Gateway server ready at {gw_l2_rpc}");
-
-        // ----------------------------------------------------------------
-        // Step 10: Fund gateway L2 (test account + gateway operators)
-        // ----------------------------------------------------------------
-        println!("\n=== Funding gateway L2 ===");
-        // Flush docker logs to host before deposit calls so the diagnostic
-        // reader can find the file if the server crashes mid-operation.
-        let _ = gw_server.save_logs();
-        let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-        fund_l2_via_l1_deposit(
-            &l1_rpc_url,
-            &gw_l2_rpc,
-            &bridgehub,
-            GATEWAY_CHAIN_ID,
-            &test_address,
-            0.1,
-            Duration::from_secs(120),
-            Some(gw_server.logs_path().as_path()),
-        )
-        .context("fund gateway L2 test account")?;
-
-        for addr_name in ["commit", "prove", "execute"] {
-            let addr = match addr_name {
-                "commit" => &gw_ops.commit_addr,
-                "prove" => &gw_ops.prove_addr,
-                "execute" => &gw_ops.execute_addr,
-                _ => unreachable!(),
-            };
-            let _ = gw_server.save_logs();
-            fund_l2_via_l1_deposit(
-                &l1_rpc_url,
-                &gw_l2_rpc,
-                &bridgehub,
-                GATEWAY_CHAIN_ID,
-                addr,
-                5.0,
-                Duration::from_secs(120),
-                Some(gw_server.logs_path().as_path()),
-            )
-            .with_context(|| format!("fund gateway L2 for operator {addr_name}"))?;
-        }
-
-        // ----------------------------------------------------------------
-        // Step 11: Wait for gateway batches
-        // ----------------------------------------------------------------
-        println!("\n=== Waiting for gateway batches ===");
-        wait_for_executed_batches_with_traffic(
-            &gw_l2_rpc,
-            &l1_rpc_url,
-            &gw_diamond_proxy,
-            DEFAULT_ANVIL_PRIVATE_KEY,
-            3,
-            Duration::from_secs(120),
-        )
-        .context("gateway executed batches")?;
-
-        // ----------------------------------------------------------------
-        // Step 12: Convert gateway chain
-        // ----------------------------------------------------------------
-        println!("\n=== Converting chain {} to gateway ===", GATEWAY_CHAIN_ID);
-
-        let force_hex =
-            run_forge_dump_force_deployments(&contracts_backend, &l1_rpc_url, &ctm_proxy)?;
-        let vote_output_path = "/script-out/gateway_vote_prep_out.toml".to_string();
-        run_forge_deploy_and_set_gateway_transaction_filterer(
-            &contracts_backend,
-            &l1_rpc_url,
-            &bridgehub,
-            GATEWAY_CHAIN_ID,
-        )?;
-        run_convert_to_gateway(
-            &contracts_backend,
-            &l1_rpc_url,
-            &bridgehub,
-            GATEWAY_CHAIN_ID,
-            &governance_addr,
-            &deployer_addr,
-            &stm_tracker,
-            &force_hex,
-            &vote_output_path,
-        )?;
-
-        // ----------------------------------------------------------------
-        // Step 13: Gateway-settling chains — migrate, finalize, enable validators
-        // ----------------------------------------------------------------
-
-        // 13a: Migrate + confirm transfer for all chains
-        for ops in &gw_settling_ops {
-            let chain_id = ops.chain_id;
-            println!("\n=== Migrating chain {} to gateway ===", chain_id);
-            run_forge_deploy_and_set_gateway_transaction_filterer(
-                &contracts_backend,
-                &l1_rpc_url,
-                &bridgehub,
-                chain_id,
-            )?;
-            run_migrate_to_gateway(
-                &contracts_backend,
-                &l1_rpc_url,
-                &bridgehub,
-                chain_id,
-                GATEWAY_CHAIN_ID,
-                &vote_output_path,
-                &deployer_addr,
-                true,
-            )?;
-            // Confirm transfer on L1 (finishMigrateChainToGateway only, no validators yet)
-            println!("  Confirming transfer for chain {chain_id}");
-            contracts_backend
-                .protocol_ops(&[
-                    "chain",
-                    "finalize-migration-to-gateway",
-                    "--bridgehub-proxy-address",
-                    &bridgehub,
-                    "--chain-id",
-                    &chain_id.to_string(),
-                    "--gateway-chain-id",
-                    &GATEWAY_CHAIN_ID.to_string(),
-                    "--gateway-rpc-url",
-                    &gw_l2_rpc,
-                    "--gateway-diamond-proxy",
-                    &gw_diamond_proxy,
-                    "--l1-rpc-url",
-                    &l1_rpc_url,
-                    "--private-key",
-                    DEFAULT_ANVIL_PRIVATE_KEY,
-                    "--vote-preparation-output-path",
-                    &vote_output_path,
-                    // No --commit/prove/execute-operator: skip validator enablement for now
-                    "--commit-operator",
-                    "0x0000000000000000000000000000000000000000",
-                    "--prove-operator",
-                    "0x0000000000000000000000000000000000000000",
-                    "--execute-operator",
-                    "0x0000000000000000000000000000000000000000",
-                    "--gateway-validator-timelock",
-                    "0x0000000000000000000000000000000000000000",
-                ])
-                .with_context(|| format!("finalize migration (confirm) for chain {chain_id}"))?;
-        }
-
-        // 13b: Wait for gateway to process all migration L1→L2 priority txs
-        println!("\n=== Waiting for gateway to process chain migrations ===");
-        {
-            let cast_out = contracts_backend.cast(&[
-                "call",
-                &gw_diamond_proxy,
-                "getTotalBatchesExecuted()(uint256)",
-                "--rpc-url",
-                &l1_rpc_url,
-            ])?;
-            let current = cast_out.trim().parse::<u64>().unwrap_or(0);
-            wait_for_executed_batches_with_traffic(
-                &gw_l2_rpc,
-                &l1_rpc_url,
-                &gw_diamond_proxy,
-                DEFAULT_ANVIL_PRIVATE_KEY,
-                current + 3,
-                Duration::from_secs(120),
-            )
-            .context("gateway batches after migration")?;
-        }
-
-        // 13c: Resolve gateway ValidatorTimelock (now chains are registered on gateway)
-        let gw_validator_timelock = {
-            let first_chain_id = gw_settling_ops[0].chain_id;
-            let ctm = contracts_backend
-                .cast(&[
-                    "call",
-                    "0x0000000000000000000000000000000000010002",
-                    "chainTypeManager(uint256)(address)",
-                    &first_chain_id.to_string(),
-                    "--rpc-url",
-                    &gw_l2_rpc,
-                ])
-                .context("query gateway L2 chainTypeManager")?;
-            let ctm = ctm.trim().to_string();
-            anyhow::ensure!(
-                !ctm.is_empty() && ctm != "0x0000000000000000000000000000000000000000",
-                "chain {} not registered on gateway yet",
-                first_chain_id
-            );
-            let vtl = contracts_backend
-                .cast(&[
-                    "call",
-                    &ctm,
-                    "validatorTimelockPostV29()(address)",
-                    "--rpc-url",
-                    &gw_l2_rpc,
-                ])
-                .context("query validatorTimelockPostV29")?;
-            vtl.trim().to_string()
-        };
-        println!("  Gateway L2 ValidatorTimelock: {gw_validator_timelock}");
-
-        // Read gateway's relayed SL DA validator from vote preparation output.
-        // Both modes write to work_dir/script-out/ (local via sync, Docker via mount).
-        let gw_vote_output_file = contracts_backend
-            .work_dir()
-            .join("script-out/gateway_vote_prep_out.toml");
-        let gw_vote_toml = fs::read_to_string(&gw_vote_output_file)
-            .with_context(|| format!("read vote prep output {}", gw_vote_output_file.display()))?;
-        let relayed_sl_da_validator = gw_vote_toml
-            .lines()
-            .find(|l| l.starts_with("relayed_sl_da_validator"))
-            .and_then(|l| l.split('"').nth(1))
-            .context("relayed_sl_da_validator not found in vote preparation output")?
-            .to_string();
-        println!("  Gateway relayed SL DA validator: {relayed_sl_da_validator}");
-
-        // 13d: Enable validators + fund operators for each chain
-        // Call AdminFunctions.enableValidatorViaGateway directly via forge
-        let deployer_addr_short = &deployer_addr;
-        for (i, ops) in gw_settling_ops.iter().enumerate() {
-            let chain_id = ops.chain_id;
-            println!("\n=== Enabling validators for chain {} ===", chain_id);
-            let mut seen = std::collections::HashSet::new();
-            for (name, addr) in [
-                ("commit", &ops.commit_addr),
-                ("prove", &ops.prove_addr),
-                ("execute", &ops.execute_addr),
-            ] {
-                if !seen.insert(addr.clone()) {
-                    continue;
-                }
-                println!("  Enabling {name} operator {addr}");
-                let chain_id_str = chain_id.to_string();
-                let gw_chain_id_str = GATEWAY_CHAIN_ID.to_string();
-                contracts_backend.forge_script(&[
-                    "deploy-scripts/AdminFunctions.s.sol",
-                    "--sig", "enableValidatorViaGateway(address,uint256,uint256,uint256,address,address,address,bool)",
-                    &bridgehub,
-                    "1000000000",
-                    &chain_id_str,
-                    &gw_chain_id_str,
-                    addr,
-                    &gw_validator_timelock,
-                    deployer_addr_short,
-                    "true",
-                    "--rpc-url", &l1_rpc_url,
-                    "--broadcast", "--ffi",
-                    "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
-                ], &[])
-                .with_context(|| format!("enableValidatorViaGateway for {name} operator {addr} on chain {chain_id}"))?;
-            }
-
-            // Set DA validator pair via gateway
-            println!("  Setting DA validator pair via gateway for chain {chain_id}");
-            let chain_diamond_on_gw = {
-                let out = contracts_backend
-                    .cast(&[
-                        "call",
-                        "0x0000000000000000000000000000000000010002",
-                        "getZKChain(uint256)(address)",
-                        &chain_id.to_string(),
-                        "--rpc-url",
-                        &gw_l2_rpc,
-                    ])
-                    .context("query chain diamond on gateway")?;
-                out.trim().to_string()
-            };
-            // Update with the post-migration gateway address (replaces the
-            // pre-migration L1 address captured during chain init).
-            println!(
-                "  Chain {} diamond proxy on gateway: {}",
-                chain_id, chain_diamond_on_gw
-            );
-            gw_settling_diamond_proxies[i] = chain_diamond_on_gw.clone();
-            // L2DACommitmentScheme: 3 = BLOBS_AND_PUBDATA_KECCAK256
-            let chain_id_str = chain_id.to_string();
-            let gw_chain_id_str = GATEWAY_CHAIN_ID.to_string();
-            contracts_backend.forge_script(&[
-                "deploy-scripts/AdminFunctions.s.sol",
-                "--sig", "setDAValidatorPairWithGateway(address,uint256,uint256,uint256,address,uint8,address,address,bool)",
-                &bridgehub,
-                "1000000000",
-                &chain_id_str,
-                &gw_chain_id_str,
-                &relayed_sl_da_validator,
-                "3",
-                &chain_diamond_on_gw,
-                deployer_addr_short,
-                "true",
-                "--rpc-url", &l1_rpc_url,
-                "--broadcast", "--ffi",
-                "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
-            ], &[])
-            .with_context(|| format!("setDAValidatorPairWithGateway for chain {chain_id}"))?;
-
-            println!("  Funding gateway L2 for chain {} operators", chain_id);
-            for addr in [&ops.commit_addr, &ops.prove_addr, &ops.execute_addr] {
-                let _ = gw_server.save_logs();
-                fund_l2_via_l1_deposit(
-                    &l1_rpc_url,
-                    &gw_l2_rpc,
-                    &bridgehub,
-                    GATEWAY_CHAIN_ID,
-                    addr,
-                    5.0,
-                    Duration::from_secs(120),
-                    Some(gw_server.logs_path().as_path()),
-                )
-                .context("fund gateway L2 for migrated-chain operator")?;
-            }
-        }
-
-        // 13e: Wait for gateway to drain its priority queue (validator + DA validator txs)
-        println!("\n=== Waiting for gateway to drain priority queue ===");
-        {
-            let deadline = std::time::Instant::now() + Duration::from_secs(180);
-            loop {
-                let raw = contracts_backend.cast(&[
-                    "call",
-                    &gw_diamond_proxy,
-                    "getPriorityQueueSize()(uint256)",
-                    "--rpc-url",
-                    &l1_rpc_url,
-                ])?;
-                let queue_size = raw.trim().parse::<u64>().unwrap_or(u64::MAX);
-                if queue_size == 0 {
-                    println!("  Gateway priority queue drained");
-                    break;
-                }
-                if std::time::Instant::now() > deadline {
-                    anyhow::bail!(
-                        "Timed out waiting for gateway priority queue to drain (size={})",
-                        queue_size
-                    );
-                }
-                println!("  Gateway priority queue size: {queue_size}, sending traffic...");
-                let _ = contracts_backend.cast(&[
-                    "send",
-                    "0x0000000000000000000000000000000000000001",
-                    "--value",
-                    "1",
-                    "--private-key",
-                    DEFAULT_ANVIL_PRIVATE_KEY,
-                    "--rpc-url",
-                    &gw_l2_rpc,
-                ]);
-                std::thread::sleep(Duration::from_secs(3));
-            }
-            // Now wait for enough batches to be executed on L1 so the state is visible
-            let cast_out = contracts_backend.cast(&[
-                "call",
-                &gw_diamond_proxy,
-                "getTotalBatchesExecuted()(uint256)",
-                "--rpc-url",
-                &l1_rpc_url,
-            ])?;
-            let current = cast_out.trim().parse::<u64>().unwrap_or(0);
-            wait_for_executed_batches_with_traffic(
-                &gw_l2_rpc,
-                &l1_rpc_url,
-                &gw_diamond_proxy,
-                DEFAULT_ANVIL_PRIVATE_KEY,
-                current + 3,
-                Duration::from_secs(120),
-            )
-            .context("gateway batches after priority queue drain")?;
-        }
-
-        // ----------------------------------------------------------------
-        // Step 14: L1-settling chains — submit L1 deposit (no server needed)
-        //
-        // Unlike gateway-settling chains, L1-settling chains do not require
-        // a running server during state generation. We only submit an L1→L2
-        // deposit so the priority queue has a transaction ready for the
-        // server when the test starts it later.
-        // ----------------------------------------------------------------
-        for ops in &l1_settling_ops {
-            let chain_id = ops.chain_id;
-            println!("\n=== L1-settling chain {chain_id}: submitting L1 deposit ===");
-            let test_addr = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-            integration_tests::l1_l2_deposit::submit_l1_to_l2_deposit_to(
-                &l1_rpc_url,
-                &bridgehub,
-                chain_id,
-                DEFAULT_ANVIL_PRIVATE_KEY,
-                0.1,
-                Some(&test_addr),
-            )
-            .with_context(|| format!("L1 deposit for L1-settling chain {chain_id}"))?;
-        }
-
-        // ----------------------------------------------------------------
-        // Step 15: Stop gateway server
-        // ----------------------------------------------------------------
-        println!("\n=== Stopping gateway server ===");
-        gw_server
-            .kill()
-            .map_err(|e| anyhow::anyhow!("kill gateway server: {:?}", e))?;
-
-        // Archive gateway RocksDB so tests can load it via ephemeral_state.
-        // The server's unpack_ephemeral_state strips the first path component
-        // (expects a wrapping directory like `node/`), so we wrap everything
-        // under a `node/` prefix.
-        let gw_state_archive = output_path.with_extension("gateway-state.tar.gz");
-        println!(
-            "Archiving gateway RocksDB -> {}",
-            gw_state_archive.display()
-        );
-        {
-            let tar_file = fs::File::create(&gw_state_archive)?;
-            let enc = flate2::write::GzEncoder::new(tar_file, flate2::Compression::fast());
-            let mut tar = tar::Builder::new(enc);
-            tar.append_dir_all("node", &gw_rocks_db)?;
-            tar.finish()?;
-        }
-
-        // Rewrite gateway config with ephemeral mode now that the archive exists
-        let gw_state_archive_abs = gw_state_archive
-            .canonicalize()
-            .unwrap_or_else(|_| gw_state_archive.clone());
-        fs::write(
-            output_dir.join(format!("{}.yaml", gw_ops.dir_name)),
-            integration_tests::server_config::ServerConfigBuilder::new(
-                &bridgehub,
-                &bytecodes_supplier,
-                &genesis_path,
-                GATEWAY_CHAIN_ID,
-                &gw_ops.commit_pk,
-                &gw_ops.prove_pk,
-                &gw_ops.execute_pk,
-            )
-            .ephemeral(gw_state_archive_abs.to_string_lossy())
-            .build(),
-        )?;
-        println!("  Updated {}.yaml with ephemeral state", gw_ops.dir_name);
-
-        Ok(FlowResult {
-            bridgehub,
-            bytecodes_supplier,
-            gw_diamond_proxy,
-            gw_settling_diamond_proxies,
-            l1_settling_diamond_proxies,
-            gateway_ephemeral_state: gw_state_archive,
-        })
-    })();
+    // Run Steps 3–15; terminate Anvil even on error.
+    let result = run_generation_flow(
+        &contracts_backend,
+        &l1_rpc_url,
+        &gw_ops,
+        &gw_settling_ops,
+        &l1_settling_ops,
+        &output_dir,
+        &output_path,
+        &preset,
+        anvil_port,
+    );
 
     // ----------------------------------------------------------------
     // Step 16: Stop Anvil (triggers state dump)

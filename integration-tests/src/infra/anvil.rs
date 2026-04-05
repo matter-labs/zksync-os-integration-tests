@@ -78,6 +78,8 @@ pub fn resolve_l1_state_in_version_dir(version_dir: &std::path::Path) -> anyhow:
 /// The provider is stored to keep the anvil process alive
 pub struct Anvil {
     _provider: Box<dyn std::any::Any + Send + Sync>,
+    /// Held to prevent other tests from acquiring the same port while anvil is running.
+    _locked_port: Option<LockedPort>,
     port: u16,
     rpc_url: String,
 }
@@ -88,6 +90,7 @@ impl Anvil {
     pub fn wrap_external(port: u16) -> Self {
         Self {
             _provider: Box::new(()),
+            _locked_port: None,
             port,
             rpc_url: format!("http://localhost:{}", port),
         }
@@ -125,6 +128,7 @@ impl Anvil {
 
         Ok(Self {
             _provider: provider,
+            _locked_port: Some(locked_port),
             port,
             rpc_url,
         })
@@ -162,6 +166,7 @@ impl Anvil {
 
         Ok(Self {
             _provider: provider,
+            _locked_port: None,
             port,
             rpc_url,
         })
@@ -190,6 +195,7 @@ impl Anvil {
 
         Ok(Self {
             _provider: provider,
+            _locked_port: Some(locked_port),
             port,
             rpc_url,
         })

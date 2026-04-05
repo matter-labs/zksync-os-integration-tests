@@ -194,6 +194,25 @@ fn send_l2_traffic(l2_rpc_url: &str, private_key: &str) -> Result<()> {
     Ok(())
 }
 
+/// Poll `eth_blockNumber` via `cast`.
+fn poll_block_number(l2_rpc_url: &str) -> Result<u64> {
+    let output = std::process::Command::new("cast")
+        .args(["block-number", "--rpc-url", l2_rpc_url])
+        .output()
+        .context("cast block-number")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "cast block-number failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let n = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<u64>()
+        .context("parse block number")?;
+    Ok(n)
+}
+
 // ---------------------------------------------------------------------------
 // Test
 // ---------------------------------------------------------------------------
@@ -316,6 +335,28 @@ async fn run_interop_message_test() -> Result<()> {
     )
     .context("fund chain A test wallet via L1 deposit")?;
 
+    // Wait for chain A to start producing blocks before sending regular L2 txs.
+    // The L1 deposit above was processed as a priority queue item, but the chain
+    // may not yet be ready to include regular transactions.
+    println!("\n=== Waiting for chain A to produce blocks ===");
+    {
+        let start = std::time::Instant::now();
+        let min_blocks = 3u64;
+        loop {
+            if start.elapsed() > Duration::from_secs(120) {
+                anyhow::bail!("Timed out waiting for chain A to produce blocks");
+            }
+            if let Ok(n) = poll_block_number(&chain_a_l2_rpc) {
+                if n >= min_blocks {
+                    println!("  Chain A reached block {n}");
+                    break;
+                }
+            }
+            send_l2_traffic(&chain_a_l2_rpc, DEFAULT_ANVIL_PRIVATE_KEY).ok();
+            tokio::time::sleep(Duration::from_secs(2)).await;
+        }
+    }
+
     // ---- Send L2→L1 message on chain A ----
     println!("\n=== Sending L2→L1 message on chain A ===");
     let wallet = EthereumWallet::new(
@@ -331,17 +372,24 @@ async fn run_interop_message_test() -> Result<()> {
     let messenger = IL1Messenger::new(L1_MESSENGER_ADDRESS, &chain_a_provider);
     let message_data = Bytes::from(b"hello interop".to_vec());
 
-    let receipt = messenger
-        .sendToL1(message_data.clone())
-        .gas(100_000)
-        .max_fee_per_gas(1_000_000_000)
-        .max_priority_fee_per_gas(0)
-        .send()
-        .await
-        .context("send L2→L1 message")?
-        .get_receipt()
-        .await
-        .context("get L2→L1 message receipt")?;
+    let receipt = tokio::time::timeout(
+        Duration::from_secs(60),
+        async {
+            messenger
+                .sendToL1(message_data.clone())
+                .gas(100_000)
+                .max_fee_per_gas(1_000_000_000)
+                .max_priority_fee_per_gas(0)
+                .send()
+                .await
+                .context("send L2→L1 message")?
+                .get_receipt()
+                .await
+                .context("get L2→L1 message receipt")
+        },
+    )
+    .await
+    .context("L2→L1 message timed out after 60s")??;
 
     anyhow::ensure!(receipt.status(), "L2→L1 message transaction reverted");
     let block_number = receipt.block_number.context("missing block_number")?;

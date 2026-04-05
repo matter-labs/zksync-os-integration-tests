@@ -7,7 +7,7 @@ pub const RICH_ACCOUNT_PRIVATE_KEY: &str =
 
 /// Enable Anvil account impersonation
 pub fn impersonate_account(address: &str, l1_rpc_url: &str) -> Result<()> {
-    Command::new("cast")
+    let output = Command::new("cast")
         .args([
             "rpc",
             "anvil_impersonateAccount",
@@ -17,6 +17,11 @@ pub fn impersonate_account(address: &str, l1_rpc_url: &str) -> Result<()> {
         ])
         .output()
         .context("Failed to enable impersonation")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "impersonate_account failed for {address}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 
@@ -40,7 +45,7 @@ pub fn fund_account(
     l1_rpc_url: &str,
     private_key: &str,
 ) -> Result<()> {
-    Command::new("cast")
+    let output = Command::new("cast")
         .args([
             "send",
             address,
@@ -55,6 +60,11 @@ pub fn fund_account(
         ])
         .output()
         .context("Failed to fund account")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "fund_account failed for {address} (amount={amount}): {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 
@@ -71,10 +81,15 @@ pub fn call_contract_from(
     cmd_args.extend_from_slice(args);
     cmd_args.extend_from_slice(&["--from", from, "--rpc-url", l1_rpc_url, "--unlocked"]);
 
-    Command::new("cast")
+    let output = Command::new("cast")
         .args(&cmd_args)
         .output()
         .with_context(|| context_msg.to_string())?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{context_msg}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     Ok(())
 }
 
@@ -100,8 +115,14 @@ pub fn call_contract_view(
     context_msg: &str,
     l1_rpc_url: &str,
 ) -> Result<std::process::Output> {
-    Command::new("cast")
+    let output = Command::new("cast")
         .args(["call", contract, function_sig, "--rpc-url", l1_rpc_url])
         .output()
-        .with_context(|| context_msg.to_string())
+        .with_context(|| context_msg.to_string())?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{context_msg}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    Ok(output)
 }

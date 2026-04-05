@@ -9,7 +9,7 @@ use integration_tests::server::ServerBuilder;
 use integration_tests::server_utils::{
     address_from_private_key, fund_l2_via_l1_deposit, wait_for_executed_batches_with_traffic,
 };
-use integration_tests::upgrade_config::{Contracts, Wallets};
+use integration_tests::upgrade_config::{Contracts, WalletsFile};
 use integration_tests::upgrade_yaml_output_generator;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -215,14 +215,14 @@ fn transfer_governance_ownership_to_governor(
     _root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
-    wallets: &Wallets,
+    wallets: &WalletsFile,
 ) -> Result<()> {
     println!("\n  Transferring governance ownership to governor wallet...");
 
     let ecosystem_governance = &contracts.ecosystem_contracts.governance;
     println!("    Ecosystem governance: {}", ecosystem_governance);
 
-    let governor_address = wallets.governor.address.as_str();
+    let governor_address = wallets.ecosystem.governor.address.as_str();
     println!("    Governor wallet: {}", governor_address);
 
     // Read current owner of governance
@@ -270,7 +270,7 @@ fn transfer_governance_ownership_to_governor(
     stop_impersonating_account(&current_owner, l1_rpc_url);
 
     // Accept ownership as governor
-    let governor_private_key = wallets.governor.private_key.as_str();
+    let governor_private_key = wallets.ecosystem.governor.private_key.as_str();
 
     contracts_backend
         .cast(&[
@@ -509,7 +509,7 @@ fn run_ecosystem_upgrades(
     root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
-    wallets: &Wallets,
+    wallets: &WalletsFile,
 ) -> Result<NoGovernancePrepareOutput> {
     println!("\n=== Running Ecosystem Upgrades ===");
     let era_path = get_era_contracts_path();
@@ -518,7 +518,7 @@ fn run_ecosystem_upgrades(
 
     // Stage 0: no-governance-prepare in simulate mode, then execute transactions from --out file
     println!("\n  Running no-governance-prepare (protocol_ops) in simulate mode...");
-    let deployer_key = wallets.deployer.private_key.as_str();
+    let deployer_key = wallets.ecosystem.deployer.private_key.as_str();
     let bridgehub_proxy_address = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
     let ctm_proxy_address = contracts
         .ecosystem_contracts
@@ -597,7 +597,7 @@ fn run_ecosystem_upgrades(
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Path contains invalid UTF-8"))?;
 
-    let governor_key = wallets.governor.private_key.as_str();
+    let governor_key = wallets.ecosystem.governor.private_key.as_str();
     let governance_addr = contracts.ecosystem_contracts.governance.as_str();
 
     let governance_stage0_out = "governance_stage0_out.json";
@@ -765,11 +765,11 @@ fn run_chain_upgrade(
     _root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
-    wallets: &Wallets,
+    wallets: &WalletsFile,
 ) -> Result<()> {
     // Chain upgrade (via protocol_ops)
     println!("\n  Running chain upgrade (protocol_ops)...");
-    let governor_key = wallets.governor.private_key.as_str();
+    let governor_key = wallets.ecosystem.governor.private_key.as_str();
     let chain_address = contracts.l1.diamond_proxy_addr.as_str();
     let admin_address = contracts.l1.chain_admin_addr.as_str();
     let access_control_restriction = contracts.l1.access_control_restriction_addr.as_str();
@@ -799,10 +799,10 @@ fn run_final_upgrade_stages(
     _root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
-    wallets: &Wallets,
+    wallets: &WalletsFile,
 ) -> Result<()> {
     // Stage 2 (via protocol_ops). Must succeed.
-    let governor_key = wallets.governor.private_key.as_str();
+    let governor_key = wallets.ecosystem.governor.private_key.as_str();
     let governance_addr = contracts.ecosystem_contracts.governance.as_str();
     contracts_backend
         .protocol_ops(&[
@@ -964,7 +964,7 @@ fn schedule_upgrade_timestamp(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
     contracts: &Contracts,
-    wallets: &Wallets,
+    wallets: &WalletsFile,
 ) -> Result<()> {
     let raw = contracts_backend
         .cast(&[
@@ -1008,7 +1008,7 @@ fn schedule_upgrade_timestamp(
         .build()
         .context("set-upgrade-timestamp build failed")?;
     println!("\n  Executing set-upgrade-timestamp transaction...");
-    txs.execute_transactions(wallets.governor.private_key.as_str())
+    txs.execute_transactions(wallets.ecosystem.governor.private_key.as_str())
         .context("execute_transactions (set-upgrade-timestamp) failed")?;
 
     let scheduled_timestamp = read_u64_from_cast_call_with_args(
@@ -1061,7 +1061,8 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     let config_path = chain_dir.join("config.yaml");
 
     println!("Loading wallets and contracts configuration...");
-    let wallets = Wallets::load_from_path(&wallets_path).context("Failed to load wallets.yaml")?;
+    let wallets = integration_tests::upgrade_config::load_wallets(&wallets_path)
+        .context("Failed to load wallets.yaml")?;
     let contracts =
         Contracts::load_from_path(&contracts_path).context("Failed to load contracts.yaml")?;
     println!("✓ Wallets and contracts loaded");
@@ -1079,7 +1080,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         &test_address,
         "1ether",
         l1_rpc_url,
-        wallets.deployer.private_key.as_str(),
+        wallets.ecosystem.deployer.private_key.as_str(),
     )
     .context("Failed to fund DEFAULT_ANVIL_PRIVATE_KEY on L1 for bridge")?;
     let server_logs = server.logs_path();

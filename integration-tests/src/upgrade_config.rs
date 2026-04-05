@@ -2,33 +2,14 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WalletEntry {
-    pub address: String,
-    pub private_key: String,
-}
+// Re-export canonical wallet types from l1_state.
+pub use crate::l1_state::{ChainWallets, EcosystemWallets, WalletEntry, WalletsFile};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Wallets {
-    pub deployer: WalletEntry,
-    pub operator: WalletEntry,
-    pub blob_operator: WalletEntry,
-    pub prove_operator: WalletEntry,
-    pub execute_operator: WalletEntry,
-    pub fee_account: WalletEntry,
-    pub governor: WalletEntry,
-    pub token_multiplier_setter: WalletEntry,
-}
-
-impl Wallets {
-    pub fn load_from_path(wallets_path: &Path) -> Result<Self> {
-        use std::fs;
-        let content = fs::read_to_string(wallets_path)
-            .with_context(|| format!("Failed to read wallets file: {}", wallets_path.display()))?;
-        let wallets: Wallets =
-            serde_yaml::from_str(&content).context("Failed to parse wallets.yaml")?;
-        Ok(wallets)
-    }
+/// Load wallets.yaml from the given path.
+pub fn load_wallets(wallets_path: &Path) -> Result<WalletsFile> {
+    let content = std::fs::read_to_string(wallets_path)
+        .with_context(|| format!("Failed to read wallets file: {}", wallets_path.display()))?;
+    serde_yaml::from_str(&content).context("Failed to parse wallets.yaml")
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
