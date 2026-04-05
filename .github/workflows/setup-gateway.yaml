@@ -1,0 +1,58 @@
+name: Setup Gateway
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: ['main']
+  workflow_dispatch:
+    inputs:
+      protocol_ops_tag:
+        description: 'protocol-ops Docker image tag'
+        required: false
+        default: 'gateway-commands-in-protocol-ops'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-gateway-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  setup-gateway:
+    runs-on: matterlabs-ci-runner-high-performance
+    timeout-minutes: 30
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      PROTOCOL_OPS_TAG: ${{ github.event.inputs.protocol_ops_tag || 'gateway-commands-in-protocol-ops' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Install Foundry
+        run: |
+          mkdir -p foundry
+          curl -LO https://github.com/foundry-rs/foundry/releases/download/v1.5.1/foundry_v1.5.1_linux_amd64.tar.gz
+          tar zxf foundry_v1.5.1_linux_amd64.tar.gz -C ./foundry
+          chmod +x ./foundry/*
+          echo "${PWD}/foundry" >> "${GITHUB_PATH}"
+
+      - name: Pull protocol-ops Docker image
+        run: docker pull "ghcr.io/matter-labs/protocol-ops:${PROTOCOL_OPS_TAG}"
+
+      - name: Run setup_gateway.sh
+        run: ./setup_gateway.sh
+
+      - name: Upload workdir on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: setup-gateway-workdir
+          path: protocol-ops-workdir/
