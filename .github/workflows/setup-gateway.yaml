@@ -47,8 +47,8 @@ jobs:
       - name: Pull protocol-ops Docker image
         run: docker pull "ghcr.io/matter-labs/protocol-ops:${PROTOCOL_OPS_TAG}"
 
-      - name: Run setup_gateway.sh
-        run: ./setup_gateway.sh
+      - name: Run setup-gateway-ecosystem.sh
+        run: ./setup-gateway-ecosystem.sh
 
       - name: Upload workdir on failure
         if: failure()

@@ -14,3 +14,6 @@ local-chains/*/l1-state.json.sha256
 
 # Generated l1-state cache
 l1-state-cache/
+
+# Protocol ops workdir for gateway setup script
+protocol-ops-workdir/
