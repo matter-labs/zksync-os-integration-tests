@@ -194,25 +194,6 @@ fn send_l2_traffic(l2_rpc_url: &str, private_key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Poll `eth_blockNumber` via `cast`.
-fn poll_block_number(l2_rpc_url: &str) -> Result<u64> {
-    let output = std::process::Command::new("cast")
-        .args(["block-number", "--rpc-url", l2_rpc_url])
-        .output()
-        .context("cast block-number")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cast block-number failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let n = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse::<u64>()
-        .context("parse block number")?;
-    Ok(n)
-}
-
 // ---------------------------------------------------------------------------
 // Test
 // ---------------------------------------------------------------------------
