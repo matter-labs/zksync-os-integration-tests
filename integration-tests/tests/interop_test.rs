@@ -337,9 +337,6 @@ async fn run_interop_message_test() -> Result<()> {
     let receipt = tokio::time::timeout(Duration::from_secs(120), async {
         messenger
             .sendToL1(message_data.clone())
-            .gas(100_000)
-            .max_fee_per_gas(1_000_000_000)
-            .max_priority_fee_per_gas(0)
             .send()
             .await
             .context("send L2→L1 message")?
