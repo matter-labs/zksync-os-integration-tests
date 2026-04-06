@@ -420,6 +420,20 @@ async fn run_interop_message_test() -> Result<()> {
     anyhow::ensure!(included, "Message was NOT included in the interop proof");
     println!("\n=== Message verified on chain B ===");
 
+    // Fund test wallet on chain B so traffic txs can pay for gas.
+    println!("\n=== Funding test wallet on chain B ===");
+    integration_tests::server_utils::fund_l2_via_l1_deposit(
+        &l1_rpc_url,
+        &chain_b_l2_rpc,
+        &eco.bridgehub,
+        chain_b.chain_id,
+        &test_address,
+        10.0,
+        Duration::from_secs(120),
+        Some(chain_b_server.logs_path().as_path()),
+    )
+    .context("fund chain B test wallet via L1 deposit")?;
+
     // ---- Verify chain B produces executed batches ----
     println!("\n=== Waiting for chain B progress ===");
     integration_tests::server_utils::wait_for_executed_batches_with_traffic(
