@@ -681,8 +681,7 @@ fn run_generation_flow(
         "hub.deployed_addresses.bridgehub.ctm_deployment_tracker_proxy_addr",
     )?;
 
-    if l1_da_validator.is_empty()
-        || l1_da_validator == "0x0000000000000000000000000000000000000000"
+    if l1_da_validator.is_empty() || l1_da_validator == "0x0000000000000000000000000000000000000000"
     {
         anyhow::bail!("L1 DA validator address is empty or zero");
     }
@@ -773,8 +772,7 @@ fn run_generation_flow(
         let chain_output = chain_json
             .get("output")
             .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-        gw_settling_diamond_proxies
-            .push(extract_json_value(chain_output, "diamond_proxy_addr")?);
+        gw_settling_diamond_proxies.push(extract_json_value(chain_output, "diamond_proxy_addr")?);
     }
 
     // ----------------------------------------------------------------
@@ -816,8 +814,7 @@ fn run_generation_flow(
         let chain_output = chain_json
             .get("output")
             .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-        l1_settling_diamond_proxies
-            .push(extract_json_value(chain_output, "diamond_proxy_addr")?);
+        l1_settling_diamond_proxies.push(extract_json_value(chain_output, "diamond_proxy_addr")?);
     }
 
     // ----------------------------------------------------------------
@@ -831,9 +828,7 @@ fn run_generation_flow(
     for ops in &all_ops {
         for addr in ops.all_addresses() {
             fund_account(addr, "100ether", l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
-                .with_context(|| {
-                    format!("fund operator {} for chain {}", addr, ops.chain_id)
-                })?;
+                .with_context(|| format!("fund operator {} for chain {}", addr, ops.chain_id))?;
         }
     }
 
@@ -1003,8 +998,7 @@ fn run_generation_flow(
     // ----------------------------------------------------------------
     println!("\n=== Converting chain {} to gateway ===", GATEWAY_CHAIN_ID);
 
-    let force_hex =
-        run_forge_dump_force_deployments(contracts_backend, l1_rpc_url, &ctm_proxy)?;
+    let force_hex = run_forge_dump_force_deployments(contracts_backend, l1_rpc_url, &ctm_proxy)?;
     let vote_output_path_rel = "/script-out/gateway_vote_prep_out.toml".to_string();
     run_forge_deploy_and_set_gateway_transaction_filterer(
         contracts_backend,
@@ -1144,8 +1138,8 @@ fn run_generation_flow(
         .join("script-out/gateway_vote_prep_out.toml");
     let gw_vote_toml = fs::read_to_string(&gw_vote_output_file)
         .with_context(|| format!("read vote prep output {}", gw_vote_output_file.display()))?;
-    let vote_prep: VotePrepOutput = toml::from_str(&gw_vote_toml)
-        .context("parse vote preparation output TOML")?;
+    let vote_prep: VotePrepOutput =
+        toml::from_str(&gw_vote_toml).context("parse vote preparation output TOML")?;
     let relayed_sl_da_validator = vote_prep.relayed_sl_da_validator;
     println!("  Gateway relayed SL DA validator: {relayed_sl_da_validator}");
 
@@ -1327,9 +1321,7 @@ fn run_generation_flow(
     // Step 15: Stop gateway server
     // ----------------------------------------------------------------
     println!("\n=== Stopping gateway server ===");
-    gw_server
-        .kill()
-        .context("kill gateway server")?;
+    gw_server.kill().context("kill gateway server")?;
 
     // Archive gateway RocksDB so tests can load it via ephemeral_state.
     // The server's unpack_ephemeral_state strips the first path component

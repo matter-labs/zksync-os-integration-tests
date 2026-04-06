@@ -48,20 +48,36 @@ case "$1" in
     ;;
 esac
 
-# ── Build docker run command ────────────────────────────────────────────
-# --network=host: container shares the host network namespace, so
-# localhost inside the container reaches host services (e.g. Anvil)
-# directly. No URL rewriting needed.
+# ── Platform-specific networking ──────────────────────────────────────
+# Linux: --network=host lets the container reach localhost directly.
+# macOS (Docker Desktop): host network mode doesn't work; use
+#   host.docker.internal and rewrite localhost URLs in arguments.
 docker_args=(
   run --rm
   --platform=linux/amd64
-  --network=host
   -e FOUNDRY_DISABLE_NIGHTLY_WARNING=1
   -e FOUNDRY_OFFLINE=true
-  -e ETH_RPC_URL="${ETH_RPC_URL:-http://localhost:8545}"
   -v "${WORK_DIR}:${CONTAINER_WORK}"
   -v "${WORK_DIR}/script-out:/contracts/l1-contracts/script-out"
 )
+
+run_args=("$@")
+
+if [[ "$(uname -s)" == "Linux" ]]; then
+  docker_args+=(--network=host)
+  docker_args+=(-e ETH_RPC_URL="${ETH_RPC_URL:-http://localhost:8545}")
+else
+  # macOS / Docker Desktop: rewrite localhost → host.docker.internal
+  docker_args+=(--add-host=host.docker.internal:host-gateway)
+  docker_args+=(-e ETH_RPC_URL="${ETH_RPC_URL:-http://host.docker.internal:8545}")
+  rewritten=()
+  for arg in "$@"; do
+    arg="${arg//:\/\/localhost:/:\/\/host.docker.internal:}"
+    arg="${arg//:\/\/127.0.0.1:/:\/\/host.docker.internal:}"
+    rewritten+=("$arg")
+  done
+  run_args=("${rewritten[@]}")
+fi
 
 # Extra mounts from env (space-separated "host:container" pairs)
 for mount in ${EXTRA_MOUNTS:-}; do
@@ -74,4 +90,4 @@ fi
 
 docker_args+=("${IMAGE}")
 
-exec docker "${docker_args[@]}" "$@"
+exec docker "${docker_args[@]}" "${run_args[@]}"

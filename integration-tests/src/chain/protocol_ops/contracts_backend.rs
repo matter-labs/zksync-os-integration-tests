@@ -68,13 +68,9 @@ impl EraContractsBackend {
     /// Create a Docker backend. The host-side work_dir lives under
     /// `test-run-logs/{run_id}/contracts_artifacts/` in the project tree so
     /// it is captured alongside other test artifacts.
-    pub fn docker(
-        image: &str,
-        run_name: &str,
-        extra_mounts: &[(&Path, &str)],
-    ) -> Result<Self> {
-        let project_root = crate::infra::utils::find_project_root()
-            .map_err(|e| anyhow::anyhow!("{e}"))?;
+    pub fn docker(image: &str, run_name: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
+        let project_root =
+            crate::infra::utils::find_project_root().map_err(|e| anyhow::anyhow!("{e}"))?;
         let run_id = crate::infra::server::get_or_create_run_id(run_name);
         let work_dir = project_root
             .join("test-run-logs")
