@@ -332,33 +332,11 @@ async fn run_interop_message_test() -> Result<()> {
         &eco.bridgehub,
         chain_a.chain_id,
         &test_address,
-        1.0,
+        10.0,
         Duration::from_secs(120),
         Some(chain_a_server.logs_path().as_path()),
     )
     .context("fund chain A test wallet via L1 deposit")?;
-
-    // Wait for chain A to start producing blocks before sending regular L2 txs.
-    // The L1 deposit above was processed as a priority queue item, but the chain
-    // may not yet be ready to include regular transactions.
-    println!("\n=== Waiting for chain A to produce blocks ===");
-    {
-        let start = std::time::Instant::now();
-        let min_blocks = 3u64;
-        loop {
-            if start.elapsed() > Duration::from_secs(120) {
-                anyhow::bail!("Timed out waiting for chain A to produce blocks");
-            }
-            if let Ok(n) = poll_block_number(&chain_a_l2_rpc) {
-                if n >= min_blocks {
-                    println!("  Chain A reached block {n}");
-                    break;
-                }
-            }
-            send_l2_traffic(&chain_a_l2_rpc, DEFAULT_ANVIL_PRIVATE_KEY).ok();
-            tokio::time::sleep(Duration::from_secs(2)).await;
-        }
-    }
 
     // ---- Send L2→L1 message on chain A ----
     println!("\n=== Sending L2→L1 message on chain A ===");
@@ -375,16 +353,6 @@ async fn run_interop_message_test() -> Result<()> {
     let messenger = IL1Messenger::new(L1_MESSENGER_ADDRESS, &chain_a_provider);
     let message_data = Bytes::from(b"hello interop".to_vec());
 
-    // Send background traffic so the server keeps producing blocks while
-    // we wait for the sendToL1 receipt (CI runners can be slow).
-    let chain_a_rpc_for_l2_msg_traffic = chain_a_l2_rpc.clone();
-    let l2_msg_traffic = tokio::spawn(async move {
-        loop {
-            let _ = send_l2_traffic(&chain_a_rpc_for_l2_msg_traffic, DEFAULT_ANVIL_PRIVATE_KEY);
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
-    });
-
     let receipt = tokio::time::timeout(Duration::from_secs(120), async {
         messenger
             .sendToL1(message_data.clone())
@@ -400,8 +368,6 @@ async fn run_interop_message_test() -> Result<()> {
     })
     .await
     .context("L2→L1 message timed out after 120s")??;
-
-    l2_msg_traffic.abort();
 
     anyhow::ensure!(receipt.status(), "L2→L1 message transaction reverted");
     let block_number = receipt.block_number.context("missing block_number")?;
