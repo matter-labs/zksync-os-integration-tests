@@ -9,6 +9,7 @@
 #   ./run-tests.sh --test l1_settling_test       # run a single test across all presets that include it
 #   ./run-tests.sh --preset v31_draft --test l1_settling_test
 #   ./run-tests.sh --skip-generate               # skip l1-state generation, tests find cached state
+#   ./run-tests.sh --rebuild-cache               # delete cached l1-state before generating
 #
 set -euo pipefail
 
@@ -16,6 +17,7 @@ PRESETS_FILE="presets.yaml"
 FILTER_PRESET=""
 FILTER_TEST=""
 SKIP_GENERATE=false
+REBUILD_CACHE=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -23,8 +25,9 @@ while [[ $# -gt 0 ]]; do
     --preset)          FILTER_PRESET="$2"; shift 2 ;;
     --test)            FILTER_TEST="$2";   shift 2 ;;
     --skip-generate)   SKIP_GENERATE=true; shift ;;
+    --rebuild-cache)   REBUILD_CACHE=true; shift ;;
     -h|--help)
-      sed -n '3,12p' "$0"
+      sed -n '3,13p' "$0"
       exit 0
       ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
@@ -96,8 +99,6 @@ total_pass=0
 total_fail=0
 failed_list=""
 
-# Clear previous test run logs
-rm -rf test-run-logs
 mkdir -p test-run-logs
 
 for preset in $all_presets; do
@@ -108,8 +109,22 @@ for preset in $all_presets; do
   echo "Preset: $preset"
   echo "========================================"
 
+  # Clean stale test-run-logs (server logs, rocksdb) but keep contracts_artifacts/.
+  # We must preserve contracts_artifacts/ because of a macOS Docker/VirtioFS bug:
+  # newly created host directories are invisible to the container VM, so the
+  # Docker session bind-mounts the stable parent (test-run-logs/) and creates
+  # sub-directories inside the container. Deleting contracts_artifacts/ would
+  # force a new mkdir that the running container cannot see.
+  if [[ -d test-run-logs ]]; then
+    find test-run-logs -mindepth 2 -maxdepth 2 ! -name contracts_artifacts -exec rm -rf {} + 2>/dev/null || true
+  fi
+
   # Generate ecosystem (tests resolve the cache dir themselves via preset)
   if ! $SKIP_GENERATE; then
+    if $REBUILD_CACHE; then
+      echo "--- [$preset] Clearing l1-state cache ---"
+      rm -rf l1-state-cache
+    fi
     echo "--- [$preset] Generating ecosystem ---"
     if ! cargo run --release -p generate-l1-state -- "$preset"; then
       echo "ERROR: generate-l1-state failed for preset '$preset'"

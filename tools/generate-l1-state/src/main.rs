@@ -31,11 +31,12 @@ use clap::Parser;
 use integration_tests::anvil_utils::fund_account;
 use integration_tests::docker::docker_pull_image;
 use integration_tests::keys_from_seed::{
+    chain_owner_private_key, deployer_private_key, ecosystem_owner_private_key,
     operator_commit_private_key, operator_execute_private_key, operator_prove_private_key,
 };
 use integration_tests::presets::RepoRef;
 use integration_tests::server_utils::{
-    address_from_private_key, fund_l2_via_l1_deposit, wait_for_executed_batches_with_traffic,
+    address_from_private_key, fund_l2_via_l1_deposit_ex, wait_for_executed_batches_with_traffic,
 };
 
 // ---------------------------------------------------------------------------
@@ -61,6 +62,34 @@ const L1_SETTLING_CHAIN_IDS: &[u64] = &[6565];
 // ---------------------------------------------------------------------------
 
 use integration_tests::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
+
+/// Deployer + ecosystem owner keys, derived from deterministic seeds.
+struct KeySet {
+    deployer_pk: String,
+    deployer_addr: String,
+    ecosystem_owner_pk: String,
+    ecosystem_owner_addr: String,
+}
+
+impl KeySet {
+    fn new() -> Result<Self> {
+        let deployer_pk = deployer_private_key();
+        let deployer_addr = address_from_private_key(&deployer_pk)?;
+        let ecosystem_owner_pk = ecosystem_owner_private_key();
+        let ecosystem_owner_addr = address_from_private_key(&ecosystem_owner_pk)?;
+        Ok(Self {
+            deployer_pk,
+            deployer_addr,
+            ecosystem_owner_pk,
+            ecosystem_owner_addr,
+        })
+    }
+}
+
+/// CREATE2 salt for ZK token deployment.
+const ERC20_SALT: &str = "0000000000000000000000000000000000000000000000000000000000000001";
+/// Deterministic CREATE2 deployer address.
+const CREATE2_DEPLOYER: &str = "0x4e59b44847b379578588920ca78fbf26c0b4956c";
 
 /// Anvil-typical L1 gas price (wei) for migration calldata.
 const MIGRATE_L1_GAS_PRICE_WEI: u64 = 1_000_000_000;
@@ -211,6 +240,8 @@ struct ChainOperators {
     chain_id: u64,
     /// Human-readable chain name, also used as subdirectory for config files.
     dir_name: String,
+    owner_pk: String,
+    owner_addr: String,
     commit_pk: String,
     prove_pk: String,
     execute_pk: String,
@@ -221,6 +252,8 @@ struct ChainOperators {
 
 impl ChainOperators {
     fn new(chain_id: u64, seed_name: &str, dir_name: &str) -> Result<Self> {
+        let owner_pk = chain_owner_private_key(dir_name);
+        let owner_addr = address_from_private_key(&owner_pk)?;
         let commit_pk = operator_commit_private_key(seed_name);
         let prove_pk = operator_prove_private_key(seed_name);
         let execute_pk = operator_execute_private_key(seed_name);
@@ -230,6 +263,8 @@ impl ChainOperators {
         Ok(Self {
             chain_id,
             dir_name: dir_name.to_string(),
+            owner_pk,
+            owner_addr,
             commit_pk,
             prove_pk,
             execute_pk,
@@ -253,6 +288,7 @@ fn run_forge_deploy_and_set_gateway_transaction_filterer(
     l1_rpc_url: &str,
     bridgehub: &str,
     chain_id: u64,
+    chain_owner_pk: &str,
 ) -> Result<()> {
     println!("  Forge: DeployAndSetGatewayTransactionFilterer for chain {chain_id}");
     contracts_backend.forge_script(
@@ -263,7 +299,7 @@ fn run_forge_deploy_and_set_gateway_transaction_filterer(
             &chain_id.to_string(),
             "--rpc-url", l1_rpc_url,
             "--broadcast", "--ffi",
-            "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
+            "--private-key", chain_owner_pk,
         ],
         &[],
     ).with_context(|| format!("DeployAndSetGatewayTransactionFilterer for chain {chain_id}"))?;
@@ -281,7 +317,7 @@ struct VotePrepOutput {
 }
 
 /// Dump force deployments data.
-/// Output lands in `work_dir/script-out/` for both local and Docker modes.
+/// Output lands in `l1-contracts/script-out/` (symlinked to work_dir in Docker).
 fn run_forge_dump_force_deployments(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
@@ -299,12 +335,8 @@ fn run_forge_dump_force_deployments(
         ],
         &[("FORCE_DEPLOYMENTS_DUMP_TOML_REL_PATH", &dump_rel)],
     )?;
-    let host_path = contracts_backend
-        .work_dir()
-        .join("script-out")
-        .join(dump_filename);
-    let raw =
-        fs::read_to_string(&host_path).with_context(|| format!("read {}", host_path.display()))?;
+    let raw = contracts_backend
+        .read_repo_file(&format!("l1-contracts/script-out/{}", dump_filename))?;
     let parsed: ForceDeploymentsDumpToml = toml::from_str(&raw)?;
     Ok(parsed.force_deployments_data)
 }
@@ -317,10 +349,11 @@ fn run_forge_dump_force_deployments(
 fn run_convert_to_gateway(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
+    keys: &KeySet,
+    gw_owner_pk: &str,
     bridgehub: &str,
     gateway_chain_id: u64,
     governance_addr: &str,
-    deployer_addr: &str,
     stm_tracker: &str,
     force_deployments_data: &str,
     vote_output_path: &str,
@@ -337,7 +370,7 @@ fn run_convert_to_gateway(
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            gw_owner_pk,
             "--bridgehub-proxy-address",
             bridgehub,
             "--gateway-chain-id",
@@ -345,7 +378,7 @@ fn run_convert_to_gateway(
             "--whitelist-grantees",
             governance_addr,
             "--whitelist-grantees",
-            deployer_addr,
+            &keys.deployer_addr,
             "--whitelist-grantees",
             stm_tracker,
         ])
@@ -361,7 +394,7 @@ fn run_convert_to_gateway(
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            &keys.deployer_pk,
             "--bridgehub-proxy-address",
             bridgehub,
             "--gateway-chain-id",
@@ -371,7 +404,7 @@ fn run_convert_to_gateway(
             "--force-deployments-data",
             force_deployments_data,
             "--refund-recipient",
-            deployer_addr,
+            &keys.deployer_addr,
             "--testnet-verifier",
             "true",
             "--is-zk-sync-os",
@@ -391,7 +424,7 @@ fn run_convert_to_gateway(
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            &keys.ecosystem_owner_pk,
             "--bridgehub-proxy-address",
             bridgehub,
             "--gateway-chain-id",
@@ -413,13 +446,13 @@ fn run_convert_to_gateway(
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            gw_owner_pk,
             "--bridgehub-proxy-address",
             bridgehub,
             "--gateway-chain-id",
             &gw_str,
             "--revoke-address",
-            deployer_addr,
+            &keys.deployer_addr,
         ])
         .context("convert-to-gateway revoke-whitelist")?;
 
@@ -430,6 +463,7 @@ fn run_convert_to_gateway(
 fn run_migrate_to_gateway(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
+    chain_owner_pk: &str,
     bridgehub: &str,
     chain_id: u64,
     gateway_chain_id: u64,
@@ -452,7 +486,7 @@ fn run_migrate_to_gateway(
                 "--l1-rpc-url",
                 l1_rpc_url,
                 "--private-key",
-                DEFAULT_ANVIL_PRIVATE_KEY,
+                chain_owner_pk,
                 "--bridgehub-proxy-address",
                 bridgehub,
                 "--chain-id",
@@ -471,7 +505,7 @@ fn run_migrate_to_gateway(
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            chain_owner_pk,
             "--bridgehub-proxy-address",
             bridgehub,
             "--chain-id",
@@ -497,7 +531,7 @@ fn run_migrate_to_gateway(
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            chain_owner_pk,
             "--bridgehub-proxy-address",
             bridgehub,
             "--chain-id",
@@ -607,6 +641,122 @@ fn run_wallets_gen(contracts_backend: &EraContractsBackend, chains_arg: &str) ->
 }
 
 // ---------------------------------------------------------------------------
+// Wallets merge
+// ---------------------------------------------------------------------------
+
+/// Merge `owner` entries into wallets.yaml produced by wallets-gen.
+fn merge_owner_wallets(
+    wallets_path: &Path,
+    keys: &KeySet,
+    gw_ops: &ChainOperators,
+    gw_settling_ops: &[ChainOperators],
+    l1_settling_ops: &[ChainOperators],
+) -> Result<()> {
+    let content = fs::read_to_string(wallets_path)?;
+    let mut doc: serde_yaml::Value = serde_yaml::from_str(&content)?;
+
+    let wallet_yaml = |addr: &str, pk: &str| -> serde_yaml::Value {
+        let mut m = serde_yaml::Mapping::new();
+        m.insert("address".into(), addr.into());
+        m.insert("private_key".into(), pk.into());
+        serde_yaml::Value::Mapping(m)
+    };
+
+    // ecosystem.owner
+    if let Some(eco) = doc.get_mut("ecosystem").and_then(|v| v.as_mapping_mut()) {
+        eco.insert(
+            "owner".into(),
+            wallet_yaml(&keys.ecosystem_owner_addr, &keys.ecosystem_owner_pk),
+        );
+    }
+
+    // per-chain owner
+    for ops in std::iter::once(gw_ops)
+        .chain(gw_settling_ops.iter())
+        .chain(l1_settling_ops.iter())
+    {
+        if let Some(chain) = doc.get_mut(&ops.dir_name).and_then(|v| v.as_mapping_mut()) {
+            chain.insert(
+                "owner".into(),
+                wallet_yaml(&ops.owner_addr, &ops.owner_pk),
+            );
+        }
+    }
+
+    fs::write(wallets_path, serde_yaml::to_string(&doc)?)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// ZK token deployment
+// ---------------------------------------------------------------------------
+
+/// Deploy a TestnetERC20Token ("ZK") via CREATE2, mint to deployer and
+/// governance. Returns the token address.
+fn deploy_zk_token(
+    contracts_backend: &EraContractsBackend,
+    l1_rpc_url: &str,
+    keys: &KeySet,
+    governance_addr: &str,
+) -> Result<String> {
+    println!("\n=== Deploying ZK token ===");
+
+    let erc20_bytecode = contracts_backend
+        .forge(&[
+            "inspect",
+            "contracts/dev-contracts/TestnetERC20Token.sol:TestnetERC20Token",
+            "bytecode",
+        ])
+        .context("forge inspect ERC20 bytecode")?;
+
+    let constructor_args = contracts_backend
+        .cast(&["abi-encode", "constructor(string,string,uint8)", "ZK", "ZK", "18"])
+        .context("abi-encode ERC20 constructor")?;
+    let constructor_args = constructor_args.trim();
+
+    let deploy_data = format!(
+        "0x{}{}{}",
+        ERC20_SALT,
+        &erc20_bytecode[2..],
+        &constructor_args[2..]
+    );
+    contracts_backend
+        .cast(&[
+            "send", CREATE2_DEPLOYER, &deploy_data,
+            "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+        ])
+        .context("CREATE2 deploy ERC20")?;
+
+    let init_code = format!("0x{}{}", &erc20_bytecode[2..], &constructor_args[2..]);
+    let zk_token_address = contracts_backend
+        .cast(&[
+            "create2",
+            &format!("--salt=0x{}", ERC20_SALT),
+            &format!("--init-code={}", init_code),
+            &format!("--deployer={}", CREATE2_DEPLOYER),
+        ])
+        .context("compute CREATE2 address")?;
+    let zk_token_address = zk_token_address.trim().to_string();
+    println!("  ZK token: {zk_token_address}");
+
+    let mint_amount = "1000000000000000000000000000000000000000";
+    for (name, addr) in [
+        ("ecosystem_owner", keys.ecosystem_owner_addr.as_str()),
+        ("deployer", keys.deployer_addr.as_str()),
+        ("governance", governance_addr),
+    ] {
+        contracts_backend
+            .cast(&[
+                "send", &zk_token_address, "mint(address,uint256)", addr, mint_amount,
+                "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+            ])
+            .with_context(|| format!("mint ZK to {name}"))?;
+    }
+
+    Ok(zk_token_address)
+}
+
+// ---------------------------------------------------------------------------
 // Generation flow (Steps 3–15)
 // ---------------------------------------------------------------------------
 
@@ -623,6 +773,7 @@ struct FlowResult {
 fn run_generation_flow(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
+    keys: &KeySet,
     gw_ops: &ChainOperators,
     gw_settling_ops: &[ChainOperators],
     l1_settling_ops: &[ChainOperators],
@@ -632,6 +783,24 @@ fn run_generation_flow(
     anvil_port: u16,
 ) -> Result<FlowResult> {
     // ----------------------------------------------------------------
+    // Step 3a: Fund deployer and ecosystem owner from Anvil default account
+    // ----------------------------------------------------------------
+    println!("\n=== Funding deployer and ecosystem owner ===");
+    fund_account(&keys.deployer_addr, "4000ether", l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
+        .context("fund deployer")?;
+    fund_account(&keys.ecosystem_owner_addr, "4000ether", l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
+        .context("fund ecosystem owner")?;
+    // Fund per-chain owners from the deployer (smaller amounts — they only
+    // need gas for governance txs, not deployments).
+    for ops in std::iter::once(gw_ops)
+        .chain(gw_settling_ops.iter())
+        .chain(l1_settling_ops.iter())
+    {
+        fund_account(&ops.owner_addr, "100ether", l1_rpc_url, &keys.deployer_pk)
+            .with_context(|| format!("fund chain owner for {}", ops.dir_name))?;
+    }
+
+    // ----------------------------------------------------------------
     // Step 3: Ecosystem init
     // ----------------------------------------------------------------
     println!("\n=== protocol_ops ecosystem init ===");
@@ -639,17 +808,20 @@ fn run_generation_flow(
     contracts_backend.protocol_ops(&[
         "ecosystem",
         "init",
+        "--owner",
+        &keys.ecosystem_owner_addr,
+        "--private-key",
+        &keys.deployer_pk,
+        "--owner-pk",
+        &keys.ecosystem_owner_pk,
         "--l1-rpc-url",
         l1_rpc_url,
-        "--private-key",
-        DEFAULT_ANVIL_PRIVATE_KEY,
         "--out",
         &ecosystem_out_arg,
     ])?;
 
     let ecosystem_json: serde_json::Value = serde_json::from_str(
-        &fs::read_to_string(contracts_backend.work_dir().join("ecosystem_init_out.json"))
-            .context("read ecosystem init output")?,
+        &contracts_backend.read_protocol_ops_output("ecosystem_init_out.json")?,
     )?;
     let output = ecosystem_json
         .get("output")
@@ -680,6 +852,7 @@ fn run_generation_flow(
         output,
         "hub.deployed_addresses.bridgehub.ctm_deployment_tracker_proxy_addr",
     )?;
+    let create2_factory = extract_json_value(output, "hub.contracts.create2_factory_addr")?;
 
     if l1_da_validator.is_empty() || l1_da_validator == "0x0000000000000000000000000000000000000000"
     {
@@ -691,7 +864,24 @@ fn run_generation_flow(
     println!("  bytecodes_supplier = {bytecodes_supplier}");
 
     // ----------------------------------------------------------------
-    // Step 4: Chain init — gateway chain
+    // Step 3b: Deploy ZK token, register on NTV
+    // ----------------------------------------------------------------
+    let zk_token_address = deploy_zk_token(contracts_backend, l1_rpc_url, keys, &governance_addr)?;
+
+    let shared_bridge = contracts_backend
+        .cast(&["call", &bridgehub, "sharedBridge()(address)", "--rpc-url", l1_rpc_url])?
+        .trim().to_string();
+    let ntv = contracts_backend
+        .cast(&["call", &shared_bridge, "nativeTokenVault()(address)", "--rpc-url", l1_rpc_url])?
+        .trim().to_string();
+
+    contracts_backend.cast(&[
+        "send", &ntv, "registerToken(address)", &zk_token_address,
+        "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+    ]).context("register ZK token on NTV")?;
+
+    // ----------------------------------------------------------------
+    // Step 4: Chain init — gateway chain (ZK base token)
     // ----------------------------------------------------------------
     println!(
         "\n=== protocol_ops chain init: gateway chain {} ===",
@@ -705,6 +895,8 @@ fn run_generation_flow(
         &ctm_proxy,
         "--l1-da-validator",
         &l1_da_validator,
+        "--owner",
+        &gw_ops.owner_addr,
         "--commit-operator",
         &gw_ops.commit_addr,
         "--prove-operator",
@@ -713,16 +905,25 @@ fn run_generation_flow(
         &gw_ops.execute_addr,
         "--chain-id",
         &GATEWAY_CHAIN_ID.to_string(),
+        "--base-token-addr",
+        &zk_token_address,
+        "--vm-type",
+        "zksyncos",
         "--l1-rpc-url",
         l1_rpc_url,
         "--private-key",
-        DEFAULT_ANVIL_PRIVATE_KEY,
+        &keys.deployer_pk,
+        "--owner-pk",
+        &gw_ops.owner_pk,
+        "--bridgehub-admin-pk",
+        &keys.ecosystem_owner_pk,
+        "--create2-factory-addr",
+        &create2_factory,
         "--out",
         &gw_chain_out_arg,
     ])?;
-    let gw_chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
-        contracts_backend.work_dir().join("chain_init_gateway.json"),
-    )?)?;
+    let gw_chain_json: serde_json::Value =
+        serde_json::from_str(&contracts_backend.read_protocol_ops_output("chain_init_gateway.json")?)?;
     let gw_chain_output = gw_chain_json
         .get("output")
         .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
@@ -749,6 +950,8 @@ fn run_generation_flow(
             &ctm_proxy,
             "--l1-da-validator",
             &l1_da_validator,
+            "--owner",
+            &ops.owner_addr,
             "--commit-operator",
             &ops.commit_addr,
             "--prove-operator",
@@ -757,18 +960,25 @@ fn run_generation_flow(
             &ops.execute_addr,
             "--chain-id",
             &ops.chain_id.to_string(),
+            "--vm-type",
+            "zksyncos",
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            &keys.deployer_pk,
+            "--owner-pk",
+            &ops.owner_pk,
+            "--bridgehub-admin-pk",
+            &keys.ecosystem_owner_pk,
+            "--create2-factory-addr",
+            &create2_factory,
             "--pause-deposits",
             "--skip-priority-txs",
             "--out",
             &chain_out_arg,
         ])?;
-        let chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
-            contracts_backend.work_dir().join(&chain_out_name),
-        )?)?;
+        let chain_json: serde_json::Value =
+            serde_json::from_str(&contracts_backend.read_protocol_ops_output(&chain_out_name)?)?;
         let chain_output = chain_json
             .get("output")
             .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
@@ -793,6 +1003,8 @@ fn run_generation_flow(
             &ctm_proxy,
             "--l1-da-validator",
             &l1_da_validator,
+            "--owner",
+            &ops.owner_addr,
             "--commit-operator",
             &ops.commit_addr,
             "--prove-operator",
@@ -801,16 +1013,23 @@ fn run_generation_flow(
             &ops.execute_addr,
             "--chain-id",
             &ops.chain_id.to_string(),
+            "--vm-type",
+            "zksyncos",
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
-            DEFAULT_ANVIL_PRIVATE_KEY,
+            &keys.deployer_pk,
+            "--owner-pk",
+            &ops.owner_pk,
+            "--bridgehub-admin-pk",
+            &keys.ecosystem_owner_pk,
+            "--create2-factory-addr",
+            &create2_factory,
             "--out",
             &chain_out_arg,
         ])?;
-        let chain_json: serde_json::Value = serde_json::from_str(&fs::read_to_string(
-            contracts_backend.work_dir().join(&chain_out_name),
-        )?)?;
+        let chain_json: serde_json::Value =
+            serde_json::from_str(&contracts_backend.read_protocol_ops_output(&chain_out_name)?)?;
         let chain_output = chain_json
             .get("output")
             .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
@@ -827,8 +1046,23 @@ fn run_generation_flow(
         .collect();
     for ops in &all_ops {
         for addr in ops.all_addresses() {
-            fund_account(addr, "100ether", l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
+            fund_account(addr, "100ether", l1_rpc_url, &keys.deployer_pk)
                 .with_context(|| format!("fund operator {} for chain {}", addr, ops.chain_id))?;
+        }
+    }
+
+    // Fund chain admins with ZK tokens for migration L1→L2 priority tx gas.
+    println!("\n=== Funding chain admins with ZK tokens ===");
+    let zk_mint_amount = "1000000000000000000000000";
+    for proxies in [&gw_settling_diamond_proxies, &l1_settling_diamond_proxies] {
+        for diamond_proxy in proxies {
+            let admin = contracts_backend
+                .cast(&["call", diamond_proxy, "getAdmin()(address)", "--rpc-url", l1_rpc_url])?
+                .trim().to_string();
+            contracts_backend.cast(&[
+                "send", &zk_token_address, "mint(address,uint256)", &admin, zk_mint_amount,
+                "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+            ]).with_context(|| format!("mint ZK to chain admin {admin}"))?;
         }
     }
 
@@ -858,6 +1092,7 @@ fn run_generation_flow(
             &gw_ops.prove_pk,
             &gw_ops.execute_pk,
         )
+        .forced_price(&zk_token_address, 3000)
         .build(),
     )?;
     println!("  {}.yaml (gateway)", gw_ops.dir_name);
@@ -876,6 +1111,7 @@ fn run_generation_flow(
                 &ops.execute_pk,
             )
             .gateway("RUNTIME", GATEWAY_CHAIN_ID)
+            .forced_price(&zk_token_address, 3000)
             .build(),
         )?;
         println!("  {}.yaml (gateway-settling)", ops.dir_name);
@@ -912,6 +1148,7 @@ fn run_generation_flow(
     let wallets_path = output_dir.join("wallets.yaml");
     fs::copy(&work_wallets, &wallets_path)
         .with_context(|| format!("copy wallets to {}", wallets_path.display()))?;
+    merge_owner_wallets(&wallets_path, keys, gw_ops, gw_settling_ops, l1_settling_ops)?;
     println!("  wallets.yaml -> {}", wallets_path.display());
 
     // ----------------------------------------------------------------
@@ -925,6 +1162,11 @@ fn run_generation_flow(
 
     let anvil_handle = integration_tests::anvil::Anvil::wrap_external(anvil_port);
     let gw_rocks_db = contracts_backend.work_dir().join("gateway_rocksdb");
+    // Remove stale RocksDB from a previous run so the server starts fresh
+    // against the newly-deployed L1 contracts.
+    if gw_rocks_db.exists() {
+        fs::remove_dir_all(&gw_rocks_db).context("remove stale gateway_rocksdb")?;
+    }
     let logs_dir = output_dir.join("logs");
     fs::create_dir_all(&logs_dir).context("create logs dir for state generation")?;
     let gw_server =
@@ -942,11 +1184,36 @@ fn run_generation_flow(
     // Step 10: Fund gateway L2 (test account + gateway operators)
     // ----------------------------------------------------------------
     println!("\n=== Funding gateway L2 ===");
+
+    // The gateway uses ZK base token. Mint ZK tokens to the test account
+    // and approve the bridgehub so L1→L2 deposits can pay in ZK.
+    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
+    let zk_mint = "1000000000000000000000000000000000000000";
+    contracts_backend
+        .cast(&[
+            "send", &zk_token_address, "mint(address,uint256)", &test_address, zk_mint,
+            "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+        ])
+        .context("mint ZK to test account")?;
+    // The deposit path is: Bridgehub → SharedBridge → NativeTokenVault.
+    // Approve all three so whichever contract calls transferFrom succeeds.
+    for (label, spender) in [
+        ("bridgehub", bridgehub.as_str()),
+        ("shared_bridge", shared_bridge.as_str()),
+        ("ntv", ntv.as_str()),
+    ] {
+        contracts_backend
+            .cast(&[
+                "send", &zk_token_address, "approve(address,uint256)", spender, zk_mint,
+                "--private-key", DEFAULT_ANVIL_PRIVATE_KEY, "--rpc-url", l1_rpc_url,
+            ])
+            .with_context(|| format!("approve {label} for ZK tokens"))?;
+    }
+
     // Flush docker logs to host before deposit calls so the diagnostic
     // reader can find the file if the server crashes mid-operation.
     let _ = gw_server.save_logs();
-    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-    fund_l2_via_l1_deposit(
+    fund_l2_via_l1_deposit_ex(
         l1_rpc_url,
         &gw_l2_rpc,
         &bridgehub,
@@ -955,6 +1222,7 @@ fn run_generation_flow(
         0.1,
         Duration::from_secs(120),
         Some(gw_server.logs_path().as_path()),
+        false,
     )
     .context("fund gateway L2 test account")?;
 
@@ -966,7 +1234,7 @@ fn run_generation_flow(
             _ => unreachable!(),
         };
         let _ = gw_server.save_logs();
-        fund_l2_via_l1_deposit(
+        fund_l2_via_l1_deposit_ex(
             l1_rpc_url,
             &gw_l2_rpc,
             &bridgehub,
@@ -975,6 +1243,7 @@ fn run_generation_flow(
             5.0,
             Duration::from_secs(120),
             Some(gw_server.logs_path().as_path()),
+            false,
         )
         .with_context(|| format!("fund gateway L2 for operator {addr_name}"))?;
     }
@@ -999,20 +1268,25 @@ fn run_generation_flow(
     println!("\n=== Converting chain {} to gateway ===", GATEWAY_CHAIN_ID);
 
     let force_hex = run_forge_dump_force_deployments(contracts_backend, l1_rpc_url, &ctm_proxy)?;
+    // Must be /script-out/... — protocol_ops strips the leading "/" and passes
+    // the remainder to forge which checks it against fs_permissions (only
+    // "script-out" relative to the project root is whitelisted).
     let vote_output_path_rel = "/script-out/gateway_vote_prep_out.toml".to_string();
     run_forge_deploy_and_set_gateway_transaction_filterer(
         contracts_backend,
         l1_rpc_url,
         &bridgehub,
         GATEWAY_CHAIN_ID,
+        &gw_ops.owner_pk,
     )?;
     run_convert_to_gateway(
         contracts_backend,
         l1_rpc_url,
+        keys,
+        &gw_ops.owner_pk,
         &bridgehub,
         GATEWAY_CHAIN_ID,
         &governance_addr,
-        &deployer_addr,
         &stm_tracker,
         &force_hex,
         &vote_output_path_rel,
@@ -1031,10 +1305,12 @@ fn run_generation_flow(
             l1_rpc_url,
             &bridgehub,
             chain_id,
+            &ops.owner_pk,
         )?;
         run_migrate_to_gateway(
             contracts_backend,
             l1_rpc_url,
+            &ops.owner_pk,
             &bridgehub,
             chain_id,
             GATEWAY_CHAIN_ID,
@@ -1061,7 +1337,7 @@ fn run_generation_flow(
                 "--l1-rpc-url",
                 l1_rpc_url,
                 "--private-key",
-                DEFAULT_ANVIL_PRIVATE_KEY,
+                &ops.owner_pk,
                 "--vote-preparation-output-path",
                 &vote_output_path_rel,
                 // No --commit/prove/execute-operator: skip validator enablement for now
@@ -1132,12 +1408,10 @@ fn run_generation_flow(
     println!("  Gateway L2 ValidatorTimelock: {gw_validator_timelock}");
 
     // Read gateway's relayed SL DA validator from vote preparation output.
-    // Both modes write to work_dir/script-out/ (local via sync, Docker via mount).
-    let gw_vote_output_file = contracts_backend
-        .work_dir()
-        .join("script-out/gateway_vote_prep_out.toml");
-    let gw_vote_toml = fs::read_to_string(&gw_vote_output_file)
-        .with_context(|| format!("read vote prep output {}", gw_vote_output_file.display()))?;
+    // protocol_ops writes to l1-contracts/script-out/ (symlinked to work_dir
+    // in Docker).
+    let gw_vote_toml = contracts_backend
+        .read_repo_file("l1-contracts/script-out/gateway_vote_prep_out.toml")?;
     let vote_prep: VotePrepOutput =
         toml::from_str(&gw_vote_toml).context("parse vote preparation output TOML")?;
     let relayed_sl_da_validator = vote_prep.relayed_sl_da_validator;
@@ -1173,7 +1447,7 @@ fn run_generation_flow(
                 "true",
                 "--rpc-url", l1_rpc_url,
                 "--broadcast", "--ffi",
-                "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
+                "--private-key", &ops.owner_pk,
             ], &[])
             .with_context(|| format!("enableValidatorViaGateway for {name} operator {addr} on chain {chain_id}"))?;
         }
@@ -1217,14 +1491,14 @@ fn run_generation_flow(
             "true",
             "--rpc-url", l1_rpc_url,
             "--broadcast", "--ffi",
-            "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
+            "--private-key", &ops.owner_pk,
         ], &[])
         .with_context(|| format!("setDAValidatorPairWithGateway for chain {chain_id}"))?;
 
         println!("  Funding gateway L2 for chain {} operators", chain_id);
         for addr in [&ops.commit_addr, &ops.prove_addr, &ops.execute_addr] {
             let _ = gw_server.save_logs();
-            fund_l2_via_l1_deposit(
+            fund_l2_via_l1_deposit_ex(
                 l1_rpc_url,
                 &gw_l2_rpc,
                 &bridgehub,
@@ -1233,6 +1507,7 @@ fn run_generation_flow(
                 5.0,
                 Duration::from_secs(120),
                 Some(gw_server.logs_path().as_path()),
+                false,
             )
             .context("fund gateway L2 for migrated-chain operator")?;
         }
@@ -1356,6 +1631,7 @@ fn run_generation_flow(
             &gw_ops.execute_pk,
         )
         .ephemeral(gw_state_archive_abs.to_string_lossy())
+        .forced_price(&zk_token_address, 3000)
         .build(),
     )?;
     println!("  Updated {}.yaml with ephemeral state", gw_ops.dir_name);
@@ -1510,10 +1786,17 @@ fn main() -> Result<()> {
     let l1_rpc_url = anvil.rpc_url().to_string();
     println!("  Anvil ready at {}", l1_rpc_url);
 
+    let keys = KeySet::new()?;
+    println!(
+        "  deployer = {}, ecosystem_owner = {}",
+        keys.deployer_addr, keys.ecosystem_owner_addr
+    );
+
     // Run Steps 3–15; terminate Anvil even on error.
     let result = run_generation_flow(
         &contracts_backend,
         &l1_rpc_url,
+        &keys,
         &gw_ops,
         &gw_settling_ops,
         &l1_settling_ops,

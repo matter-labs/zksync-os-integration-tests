@@ -499,13 +499,42 @@ pub fn fund_l2_via_l1_deposit(
     balance_poll_timeout: Duration,
     server_logs_path: Option<&Path>,
 ) -> Result<u128> {
-    if let Err(err) = crate::l1_l2_deposit::submit_l1_to_l2_deposit_to(
+    fund_l2_via_l1_deposit_ex(
+        l1_rpc_url,
+        l2_rpc_url,
+        bridgehub_addr,
+        chain_id,
+        l2_recipient,
+        amount_ether,
+        balance_poll_timeout,
+        server_logs_path,
+        true,
+    )
+}
+
+/// Like [`fund_l2_via_l1_deposit`] but with explicit `base_token_is_eth`.
+/// When `false`, the caller must have pre-approved the base token to the
+/// bridgehub.
+#[allow(clippy::too_many_arguments)]
+pub fn fund_l2_via_l1_deposit_ex(
+    l1_rpc_url: &str,
+    l2_rpc_url: &str,
+    bridgehub_addr: &str,
+    chain_id: u64,
+    l2_recipient: &str,
+    amount_ether: f64,
+    balance_poll_timeout: Duration,
+    server_logs_path: Option<&Path>,
+    base_token_is_eth: bool,
+) -> Result<u128> {
+    if let Err(err) = crate::l1_l2_deposit::submit_l1_to_l2_deposit_ex(
         l1_rpc_url,
         bridgehub_addr,
         chain_id,
         crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY,
         amount_ether,
         Some(l2_recipient),
+        base_token_is_eth,
     ) {
         print_deposit_failure_server_logs(server_logs_path);
         return Err(err).context("Bridgehub L1→L2 deposit");

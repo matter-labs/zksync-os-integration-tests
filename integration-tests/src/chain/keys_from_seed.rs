@@ -20,6 +20,21 @@ pub fn private_key_from_seed(seed: &str) -> String {
     out
 }
 
+/// Deployer key — matches the `deployer|ecosystem` seed used by wallets-gen.
+pub fn deployer_private_key() -> String {
+    private_key_from_seed("deployer|ecosystem")
+}
+
+/// Ecosystem-level owner (bridgehub admin, governance operations).
+pub fn ecosystem_owner_private_key() -> String {
+    private_key_from_seed("owner|ecosystem")
+}
+
+/// Per-chain owner. `chain_name` is the wallets-gen chain name (e.g. `"gateway"`).
+pub fn chain_owner_private_key(chain_name: &str) -> String {
+    private_key_from_seed(&format!("owner|{chain_name}"))
+}
+
 /// ZKsync OS L1 operators (commit / prove / execute). `_chain_name` disambiguates keys per chain
 /// (e.g. `"gateway chain"` vs `"chain 1"`) so L1 nonces are not shared across concurrent servers.
 pub fn operator_commit_private_key(_chain_name: &str) -> String {

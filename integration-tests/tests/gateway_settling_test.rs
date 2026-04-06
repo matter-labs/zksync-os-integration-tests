@@ -9,7 +9,7 @@ use integration_tests::presets::load_current_preset;
 use integration_tests::protocol_ops::EraContractsBackend;
 use integration_tests::server::ServerBuilder;
 use integration_tests::server_utils::{
-    address_from_private_key, fund_l2_via_l1_deposit, wait_for_executed_batches_with_traffic,
+    address_from_private_key, fund_l2_via_l1_deposit_ex, wait_for_executed_batches_with_traffic,
 };
 use std::time::Duration;
 
@@ -96,10 +96,51 @@ async fn run_gateway_settling_test() -> Result<()> {
     let gw_log = gw_server.logs_path();
     println!("Gateway server ready at {gw_l2_rpc}");
 
+    // The gateway uses ZK as its base token. Read it on-chain, then mint
+    // and approve so L1→L2 deposits can pay in ZK.
+    println!("\n=== Minting & approving base token for deposits ===");
+    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
+    let zk_token = contracts_backend
+        .cast(&[
+            "call", &eco.bridgehub, "baseToken(uint256)(address)",
+            &gw.chain_id.to_string(), "--rpc-url", &l1_rpc_url,
+        ])?
+        .trim().to_string();
+    let base_token_is_eth = zk_token == "0x0000000000000000000000000000000000000001";
+    println!("  Base token: {zk_token} (is_eth={base_token_is_eth})");
+    if !base_token_is_eth {
+        let zk_mint = "1000000000000000000000000000000000000000";
+        // Fund the deployer (who has minting rights) so it can pay for gas.
+        fund_account(
+            &wallets.ecosystem.deployer.address,
+            "10ether",
+            &l1_rpc_url,
+            DEFAULT_ANVIL_PRIVATE_KEY,
+        )?;
+        contracts_backend.cast(&[
+            "send", &zk_token, "mint(address,uint256)", &test_address, zk_mint,
+            "--private-key", &wallets.ecosystem.deployer.private_key,
+            "--rpc-url", &l1_rpc_url,
+        ]).context("mint base token to test account")?;
+        // Approve bridgehub + shared bridge + NTV
+        let shared_bridge = contracts_backend
+            .cast(&["call", &eco.bridgehub, "sharedBridge()(address)", "--rpc-url", &l1_rpc_url])?
+            .trim().to_string();
+        let ntv = contracts_backend
+            .cast(&["call", &shared_bridge, "nativeTokenVault()(address)", "--rpc-url", &l1_rpc_url])?
+            .trim().to_string();
+        for spender in [eco.bridgehub.as_str(), shared_bridge.as_str(), ntv.as_str()] {
+            contracts_backend.cast(&[
+                "send", &zk_token, "approve(address,uint256)", spender, zk_mint,
+                "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
+                "--rpc-url", &l1_rpc_url,
+            ]).context("approve base token")?;
+        }
+    }
+
     // Fund gateway L2
     println!("\n=== Funding gateway L2 ===");
-    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-    fund_l2_via_l1_deposit(
+    fund_l2_via_l1_deposit_ex(
         &l1_rpc_url,
         &gw_l2_rpc,
         &eco.bridgehub,
@@ -108,6 +149,7 @@ async fn run_gateway_settling_test() -> Result<()> {
         0.1,
         Duration::from_secs(120),
         Some(gw_log.as_path()),
+        base_token_is_eth,
     )
     .context("fund gateway L2 test account")?;
 
@@ -117,7 +159,7 @@ async fn run_gateway_settling_test() -> Result<()> {
         &chain_wallets.prove_operator.address,
         &chain_wallets.execute_operator.address,
     ] {
-        fund_l2_via_l1_deposit(
+        fund_l2_via_l1_deposit_ex(
             &l1_rpc_url,
             &gw_l2_rpc,
             &eco.bridgehub,
@@ -126,6 +168,7 @@ async fn run_gateway_settling_test() -> Result<()> {
             5.0,
             Duration::from_secs(120),
             Some(gw_log.as_path()),
+            base_token_is_eth,
         )
         .context("fund gateway L2 for chain operator")?;
     }

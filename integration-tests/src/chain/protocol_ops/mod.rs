@@ -49,7 +49,7 @@ const PROTOCOL_OPS_DOCKER_ENV: &[(&str, &str)] = &[("FOUNDRY_DISABLE_NIGHTLY_WAR
 ///
 /// Avoids repeated `docker run` overhead (significant on Apple Silicon where
 /// the amd64 image runs under Rosetta). Start once, exec many.
-pub struct EraContainerSession {
+pub struct ContractsContainerSession {
     container_name: String,
     /// Host-side work directory.
     host_work_dir: PathBuf,
@@ -57,20 +57,30 @@ pub struct EraContainerSession {
     container_work_dir: String,
 }
 
-impl EraContainerSession {
+impl ContractsContainerSession {
     /// Start a detached container with `work_dir` mounted at `container_work_dir`
     /// and `work_dir/script-out` mounted at `/contracts/l1-contracts/script-out`
     /// (for forge `fs_permissions`). Additional mounts may be passed.
+    ///
+    /// `mount_root` / `container_mount_root` is a stable, pre-existing directory
+    /// (typically `test-run-logs/`) that is bind-mounted once.  `work_dir` must
+    /// live somewhere beneath `mount_root`.  Sub-directories are created *inside*
+    /// the container after startup so that Docker never needs to bind-mount a
+    /// freshly-created host path (works around a macOS Docker/VirtioFS bug where
+    /// newly created directories are invisible to the VM).
     pub fn start(
         image: &str,
         work_dir: &Path,
         container_work_dir: &str,
+        mount_root: &Path,
+        container_mount_root: &str,
         extra_mounts: &[(&Path, &str)],
     ) -> anyhow::Result<Self> {
+        // Ensure host dirs exist (for reading outputs back later).
         let script_out = work_dir.join("script-out");
         fs::create_dir_all(&script_out)?;
         let abs_work = fs::canonicalize(work_dir)?;
-        let abs_script_out = fs::canonicalize(&script_out)?;
+        let abs_mount_root = fs::canonicalize(mount_root)?;
 
         let name = format!("era-session-{}", uuid::Uuid::new_v4());
         let mut cmd = Command::new("docker");
@@ -83,13 +93,11 @@ impl EraContainerSession {
         for (k, v) in PROTOCOL_OPS_DOCKER_ENV {
             cmd.arg("-e").arg(format!("{}={}", k, v));
         }
-        // Core mounts: work_dir and script-out overlay
+        // Single stable bind-mount: mount_root → container_mount_root.
+        // Docker can always see this directory because it existed before
+        // the current process created any new sub-directories.
         cmd.arg("-v")
-            .arg(format!("{}:{}", abs_work.display(), container_work_dir));
-        cmd.arg("-v").arg(format!(
-            "{}:/contracts/l1-contracts/script-out",
-            abs_script_out.display()
-        ));
+            .arg(format!("{}:{}", abs_mount_root.display(), container_mount_root));
         for (host, container) in extra_mounts {
             fs::create_dir_all(host)?;
             let abs = fs::canonicalize(host)?;
@@ -100,15 +108,32 @@ impl EraContainerSession {
         let output = cmd.output().context("docker run (era session)")?;
         if !output.status.success() {
             anyhow::bail!(
-                "failed to start era container session:\n{}",
+                "failed to start contracts container session:\n{}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        Ok(Self {
+
+        let session = Self {
             container_name: name,
             host_work_dir: abs_work,
             container_work_dir: container_work_dir.to_string(),
-        })
+        };
+
+        // Create the work directory and script-out symlink inside the
+        // container.  The directories appear on the host via the bind-mount.
+        let container_script_out = format!("{}/script-out", container_work_dir);
+        session.exec(
+            &["mkdir", "-p", &container_script_out],
+            &[],
+            None,
+        ).context("mkdir work_dir inside container")?;
+        session.exec(
+            &["ln", "-sfn", &container_script_out, "/contracts/l1-contracts/script-out"],
+            &[],
+            None,
+        ).context("symlink script-out inside container")?;
+
+        Ok(session)
     }
 
     pub fn container_work_dir(&self) -> &str {
@@ -243,7 +268,7 @@ impl EraContainerSession {
     }
 }
 
-impl Drop for EraContainerSession {
+impl Drop for ContractsContainerSession {
     fn drop(&mut self) {
         let _ = Command::new("docker")
             .args(["rm", "-f", &self.container_name])

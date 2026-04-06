@@ -33,6 +33,7 @@ pub struct ServerConfigBuilder {
     status_port: Option<u16>,
     prover_api_port: Option<u16>,
     prometheus_port: Option<u16>,
+    extra_forced_prices: Vec<(String, u64)>,
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +55,7 @@ struct ServerConfig {
     observability: Option<ObservabilitySection>,
     sequencer: SequencerSection,
     external_price_api_client: ExternalPriceSection,
+    base_token_price_updater: BaseTokenPriceUpdaterSection,
 }
 
 #[derive(Serialize)]
@@ -135,6 +137,11 @@ struct ExternalPriceSection {
     forced_prices: BTreeMap<String, u64>,
 }
 
+#[derive(Serialize)]
+struct BaseTokenPriceUpdaterSection {
+    fallback_prices: BTreeMap<String, u64>,
+}
+
 // ---------------------------------------------------------------------------
 // Builder impl
 // ---------------------------------------------------------------------------
@@ -165,6 +172,7 @@ impl ServerConfigBuilder {
             status_port: None,
             prover_api_port: None,
             prometheus_port: None,
+            extra_forced_prices: Vec::new(),
         }
     }
 
@@ -201,6 +209,12 @@ impl ServerConfigBuilder {
         self
     }
 
+    /// Add a forced price for a token address (e.g. ZK base token).
+    pub fn forced_price(mut self, token_addr: impl Into<String>, price_usd: u64) -> Self {
+        self.extra_forced_prices.push((token_addr.into(), price_usd));
+        self
+    }
+
     pub fn build(&self) -> String {
         let general = if self.ephemeral || self.gateway_rpc_url.is_some() {
             Some(GeneralSection {
@@ -218,6 +232,9 @@ impl ServerConfigBuilder {
             "0x0000000000000000000000000000000000000001".to_string(),
             3000,
         );
+        for (addr, price) in &self.extra_forced_prices {
+            forced_prices.insert(addr.to_lowercase(), *price);
+        }
 
         let config = ServerConfig {
             general,
@@ -260,7 +277,10 @@ impl ServerConfigBuilder {
             },
             external_price_api_client: ExternalPriceSection {
                 source: "Forced".to_string(),
-                forced_prices,
+                forced_prices: forced_prices.clone(),
+            },
+            base_token_price_updater: BaseTokenPriceUpdaterSection {
+                fallback_prices: forced_prices,
             },
         };
 

@@ -86,6 +86,31 @@ pub fn submit_l1_to_l2_deposit_to(
     amount_ether: f64,
     l2_recipient: Option<&str>,
 ) -> Result<()> {
+    submit_l1_to_l2_deposit_ex(
+        l1_rpc_url,
+        bridgehub_addr,
+        chain_id,
+        private_key,
+        amount_ether,
+        l2_recipient,
+        true,
+    )
+}
+
+/// Like [`submit_l1_to_l2_deposit_to`] but allows specifying whether the
+/// chain's base token is ETH.  When `base_token_is_eth` is `false` the
+/// caller must have already approved the base token to the bridgehub for at
+/// least `amount + l2TransactionBaseCost`.  The transaction will be sent
+/// with `msg.value = 0`.
+pub fn submit_l1_to_l2_deposit_ex(
+    l1_rpc_url: &str,
+    bridgehub_addr: &str,
+    chain_id: u64,
+    private_key: &str,
+    amount_ether: f64,
+    l2_recipient: Option<&str>,
+    base_token_is_eth: bool,
+) -> Result<()> {
     let l1_rpc_url = l1_rpc_url.to_string();
     let bridgehub_addr = bridgehub_addr.to_string();
     let private_key = private_key.to_string();
@@ -102,6 +127,7 @@ pub fn submit_l1_to_l2_deposit_to(
                     private_key.as_str(),
                     amount_ether,
                     l2_recipient.as_deref(),
+                    base_token_is_eth,
                 ))
         })
         .map_err(|e| anyhow::anyhow!("spawn l1-l2-deposit thread: {e}"))?
@@ -127,6 +153,7 @@ async fn submit_l1_to_l2_deposit_via_bridgehub_inner(
     private_key: &str,
     amount_ether: f64,
     l2_recipient: Option<&str>,
+    base_token_is_eth: bool,
 ) -> Result<()> {
     let bridgehub_address: Address = bridgehub_addr
         .parse()
@@ -183,9 +210,14 @@ async fn submit_l1_to_l2_deposit_via_bridgehub_inner(
         refundRecipient: recipient,
     };
 
+    let msg_value = if base_token_is_eth {
+        amount + tx_base_cost
+    } else {
+        U256::ZERO
+    };
     let l1_deposit_request = bridgehub
         .requestL2TransactionDirect(request)
-        .value(amount + tx_base_cost)
+        .value(msg_value)
         .max_fee_per_gas(max_fee_per_gas)
         .max_priority_fee_per_gas(max_priority_fee_per_gas)
         .into_transaction_request();

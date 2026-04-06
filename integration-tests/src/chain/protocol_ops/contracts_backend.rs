@@ -5,7 +5,7 @@ use anyhow::{Context, Result};
 
 use crate::presets::{Preset, RepoRef};
 
-use super::{run_protocol_ops_local, EraContainerSession, ERA_CONTRACTS_PROTOCOL_IMAGE_REPO};
+use super::{run_protocol_ops_local, ContractsContainerSession, ERA_CONTRACTS_PROTOCOL_IMAGE_REPO};
 
 /// Unified backend for running era-contracts tools (protocol_ops, forge, cast).
 /// Local mode runs binaries from the source tree; Docker mode execs into a
@@ -20,13 +20,13 @@ pub enum EraContractsBackend {
         work_dir: PathBuf,
     },
     Docker {
-        session: EraContainerSession,
+        session: ContractsContainerSession,
         work_dir: PathBuf,
     },
 }
 
-/// Container-side path prefix for the work directory.
-const CONTAINER_WORK_PREFIX: &str = "/contracts/work";
+/// Container-side mount point for the stable `test-run-logs` directory.
+const CONTAINER_LOGS_MOUNT: &str = "/contracts/test-run-logs";
 
 impl EraContractsBackend {
     /// Create an `EraContractsBackend` from a preset configuration.
@@ -68,18 +68,37 @@ impl EraContractsBackend {
     /// Create a Docker backend. The host-side work_dir lives under
     /// `test-run-logs/{run_id}/contracts_artifacts/` in the project tree so
     /// it is captured alongside other test artifacts.
+    ///
+    /// Only the stable `test-run-logs/` directory is bind-mounted into Docker;
+    /// sub-directories are created inside the container after startup, working
+    /// around a macOS Docker/VirtioFS bug where newly-created host directories
+    /// are invisible to the VM.
     pub fn docker(image: &str, run_name: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
         let project_root =
             crate::infra::utils::find_project_root().map_err(|e| anyhow::anyhow!("{e}"))?;
         let run_id = crate::infra::server::get_or_create_run_id(run_name);
-        let work_dir = project_root
-            .join("test-run-logs")
-            .join(run_id)
-            .join("contracts_artifacts");
+        let logs_root = project_root.join("test-run-logs");
+        fs::create_dir_all(&logs_root)?;
+        let work_dir = logs_root.join(run_id).join("contracts_artifacts");
         fs::create_dir_all(&work_dir)?;
         let work_dir = fs::canonicalize(&work_dir)?;
-        let container_work = format!("{}/{}", CONTAINER_WORK_PREFIX, run_name);
-        let session = EraContainerSession::start(image, &work_dir, &container_work, extra_mounts)?;
+        // container_work_dir is a sub-path under the logs mount.
+        let relative = work_dir
+            .strip_prefix(fs::canonicalize(&logs_root)?)
+            .context("work_dir must be under test-run-logs")?;
+        let container_work = format!(
+            "{}/{}",
+            CONTAINER_LOGS_MOUNT,
+            relative.display()
+        );
+        let session = ContractsContainerSession::start(
+            image,
+            &work_dir,
+            &container_work,
+            &logs_root,
+            CONTAINER_LOGS_MOUNT,
+            extra_mounts,
+        )?;
         Ok(EraContractsBackend::Docker { session, work_dir })
     }
 
@@ -118,6 +137,44 @@ impl EraContractsBackend {
                 era_path.join(relative).to_string_lossy().to_string()
             }
             EraContractsBackend::Docker { .. } => format!("/contracts/{}", relative),
+        }
+    }
+
+    /// Read a protocol_ops output file (written via `--out`) from the work directory.
+    ///
+    /// - Local: `fs::read_to_string({work_dir}/{relative})`
+    /// - Docker: `docker exec cat {container_work_dir}/{relative}`
+    pub fn read_protocol_ops_output(&self, relative: &str) -> Result<String> {
+        match self {
+            EraContractsBackend::Local { work_dir, .. } => {
+                let path = work_dir.join(relative);
+                fs::read_to_string(&path)
+                    .with_context(|| format!("read {}", path.display()))
+            }
+            EraContractsBackend::Docker { session, .. } => {
+                let path = format!("{}/{}", session.container_work_dir(), relative);
+                session.exec(&["cat", &path], &[], None)
+                    .with_context(|| format!("read {}", relative))
+            }
+        }
+    }
+
+    /// Read a file relative to the era-contracts repo root.
+    ///
+    /// - Local: `fs::read_to_string({era_path}/{relative})`
+    /// - Docker: `docker exec cat /contracts/{relative}`
+    pub fn read_repo_file(&self, relative: &str) -> Result<String> {
+        match self {
+            EraContractsBackend::Local { era_path, .. } => {
+                let path = era_path.join(relative);
+                fs::read_to_string(&path)
+                    .with_context(|| format!("read {}", path.display()))
+            }
+            EraContractsBackend::Docker { session, .. } => {
+                let path = format!("/contracts/{}", relative);
+                session.exec(&["cat", &path], &[], None)
+                    .with_context(|| format!("read {}", relative))
+            }
         }
     }
 
@@ -181,6 +238,39 @@ impl EraContractsBackend {
                 Ok(String::from_utf8_lossy(&output.stdout).to_string())
             }
             EraContractsBackend::Docker { session, .. } => session.forge_script(args, envs),
+        }
+    }
+
+    /// Run `forge <args>` from the `l1-contracts` directory.
+    /// Unlike `forge_script`, this runs an arbitrary forge subcommand (e.g. `inspect`).
+    pub fn forge(&self, args: &[&str]) -> Result<String> {
+        match self {
+            EraContractsBackend::Local { era_path, .. } => {
+                let l1_contracts = era_path.join("l1-contracts");
+                let output = std::process::Command::new("forge")
+                    .current_dir(&l1_contracts)
+                    .args(args)
+                    .output()
+                    .context("forge")?;
+                if !output.status.success() {
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    anyhow::bail!(
+                        "forge {:?} failed:\n\nSTDOUT:\n{}\n\nSTDERR:\n{}",
+                        args,
+                        stdout,
+                        stderr
+                    );
+                }
+                Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+            }
+            EraContractsBackend::Docker { session, .. } => {
+                let mut command: Vec<String> = vec!["forge".into()];
+                command.extend(args.iter().map(|a| a.to_string()));
+                let cmd_refs: Vec<&str> = command.iter().map(|s| s.as_str()).collect();
+                session.exec(&cmd_refs, &[], Some("/contracts/l1-contracts"))
+                    .map(|s| s.trim().to_string())
+            }
         }
     }
 

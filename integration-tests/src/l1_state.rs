@@ -61,6 +61,9 @@ pub struct EcosystemWallets {
     pub deployer: WalletEntry,
     pub governor: WalletEntry,
     pub token_multiplier_setter: WalletEntry,
+    /// Ecosystem owner (bridgehub admin, governance). Optional for backward compat.
+    #[serde(default)]
+    pub owner: Option<WalletEntry>,
 }
 
 /// Per-chain wallets.
@@ -72,6 +75,9 @@ pub struct ChainWallets {
     pub prove_operator: WalletEntry,
     pub execute_operator: WalletEntry,
     pub fee_account: WalletEntry,
+    /// Chain owner (controls ChainAdmin). Optional for backward compat.
+    #[serde(default)]
+    pub owner: Option<WalletEntry>,
 }
 
 /// Full wallets.yaml — ecosystem keys + per-chain keys keyed by chain name.
