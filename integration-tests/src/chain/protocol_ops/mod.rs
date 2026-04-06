@@ -96,8 +96,11 @@ impl ContractsContainerSession {
         // Single stable bind-mount: mount_root → container_mount_root.
         // Docker can always see this directory because it existed before
         // the current process created any new sub-directories.
-        cmd.arg("-v")
-            .arg(format!("{}:{}", abs_mount_root.display(), container_mount_root));
+        cmd.arg("-v").arg(format!(
+            "{}:{}",
+            abs_mount_root.display(),
+            container_mount_root
+        ));
         for (host, container) in extra_mounts {
             fs::create_dir_all(host)?;
             let abs = fs::canonicalize(host)?;
@@ -122,16 +125,21 @@ impl ContractsContainerSession {
         // Create the work directory and script-out symlink inside the
         // container.  The directories appear on the host via the bind-mount.
         let container_script_out = format!("{}/script-out", container_work_dir);
-        session.exec(
-            &["mkdir", "-p", &container_script_out],
-            &[],
-            None,
-        ).context("mkdir work_dir inside container")?;
-        session.exec(
-            &["ln", "-sfn", &container_script_out, "/contracts/l1-contracts/script-out"],
-            &[],
-            None,
-        ).context("symlink script-out inside container")?;
+        session
+            .exec(&["mkdir", "-p", &container_script_out], &[], None)
+            .context("mkdir work_dir inside container")?;
+        session
+            .exec(
+                &[
+                    "ln",
+                    "-sfn",
+                    &container_script_out,
+                    "/contracts/l1-contracts/script-out",
+                ],
+                &[],
+                None,
+            )
+            .context("symlink script-out inside container")?;
 
         Ok(session)
     }

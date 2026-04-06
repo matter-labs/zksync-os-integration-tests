@@ -329,8 +329,8 @@ fn run_forge_dump_force_deployments(
         ],
         &[("FORCE_DEPLOYMENTS_DUMP_TOML_REL_PATH", &dump_rel)],
     )?;
-    let raw = contracts_backend
-        .read_repo_file(&format!("l1-contracts/script-out/{}", dump_filename))?;
+    let raw =
+        contracts_backend.read_repo_file(&format!("l1-contracts/script-out/{}", dump_filename))?;
     let parsed: ForceDeploymentsDumpToml = toml::from_str(&raw)?;
     Ok(parsed.force_deployments_data)
 }
@@ -657,7 +657,13 @@ fn deploy_zk_token(
         .context("forge inspect ERC20 bytecode")?;
 
     let constructor_args = contracts_backend
-        .cast(&["abi-encode", "constructor(string,string,uint8)", "ZK", "ZK", "18"])
+        .cast(&[
+            "abi-encode",
+            "constructor(string,string,uint8)",
+            "ZK",
+            "ZK",
+            "18",
+        ])
         .context("abi-encode ERC20 constructor")?;
     let constructor_args = constructor_args.trim();
 
@@ -669,8 +675,13 @@ fn deploy_zk_token(
     );
     contracts_backend
         .cast(&[
-            "send", CREATE2_DEPLOYER, &deploy_data,
-            "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+            "send",
+            CREATE2_DEPLOYER,
+            &deploy_data,
+            "--private-key",
+            &keys.deployer_pk,
+            "--rpc-url",
+            l1_rpc_url,
         ])
         .context("CREATE2 deploy ERC20")?;
 
@@ -694,8 +705,15 @@ fn deploy_zk_token(
     ] {
         contracts_backend
             .cast(&[
-                "send", &zk_token_address, "mint(address,uint256)", addr, mint_amount,
-                "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+                "send",
+                &zk_token_address,
+                "mint(address,uint256)",
+                addr,
+                mint_amount,
+                "--private-key",
+                &keys.deployer_pk,
+                "--rpc-url",
+                l1_rpc_url,
             ])
             .with_context(|| format!("mint ZK to {name}"))?;
     }
@@ -733,10 +751,20 @@ fn run_generation_flow(
     // Step 3a: Fund deployer and ecosystem owner from Anvil default account
     // ----------------------------------------------------------------
     println!("\n=== Funding deployer and ecosystem owner ===");
-    fund_account(&keys.deployer_addr, "4000ether", l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
-        .context("fund deployer")?;
-    fund_account(&keys.ecosystem_owner_addr, "4000ether", l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
-        .context("fund ecosystem owner")?;
+    fund_account(
+        &keys.deployer_addr,
+        "4000ether",
+        l1_rpc_url,
+        DEFAULT_ANVIL_PRIVATE_KEY,
+    )
+    .context("fund deployer")?;
+    fund_account(
+        &keys.ecosystem_owner_addr,
+        "4000ether",
+        l1_rpc_url,
+        DEFAULT_ANVIL_PRIVATE_KEY,
+    )
+    .context("fund ecosystem owner")?;
     // Fund per-chain owners from the deployer (smaller amounts — they only
     // need gas for governance txs, not deployments).
     for ops in std::iter::once(gw_ops)
@@ -816,16 +844,38 @@ fn run_generation_flow(
     let zk_token_address = deploy_zk_token(contracts_backend, l1_rpc_url, keys, &governance_addr)?;
 
     let shared_bridge = contracts_backend
-        .cast(&["call", &bridgehub, "sharedBridge()(address)", "--rpc-url", l1_rpc_url])?
-        .trim().to_string();
+        .cast(&[
+            "call",
+            &bridgehub,
+            "sharedBridge()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])?
+        .trim()
+        .to_string();
     let ntv = contracts_backend
-        .cast(&["call", &shared_bridge, "nativeTokenVault()(address)", "--rpc-url", l1_rpc_url])?
-        .trim().to_string();
+        .cast(&[
+            "call",
+            &shared_bridge,
+            "nativeTokenVault()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])?
+        .trim()
+        .to_string();
 
-    contracts_backend.cast(&[
-        "send", &ntv, "registerToken(address)", &zk_token_address,
-        "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
-    ]).context("register ZK token on NTV")?;
+    contracts_backend
+        .cast(&[
+            "send",
+            &ntv,
+            "registerToken(address)",
+            &zk_token_address,
+            "--private-key",
+            &keys.deployer_pk,
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("register ZK token on NTV")?;
 
     // ----------------------------------------------------------------
     // Step 4: Chain init — gateway chain (ZK base token)
@@ -869,8 +919,9 @@ fn run_generation_flow(
         "--out",
         &gw_chain_out_arg,
     ])?;
-    let gw_chain_json: serde_json::Value =
-        serde_json::from_str(&contracts_backend.read_protocol_ops_output("chain_init_gateway.json")?)?;
+    let gw_chain_json: serde_json::Value = serde_json::from_str(
+        &contracts_backend.read_protocol_ops_output("chain_init_gateway.json")?,
+    )?;
     let gw_chain_output = gw_chain_json
         .get("output")
         .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
@@ -1004,12 +1055,28 @@ fn run_generation_flow(
     for proxies in [&gw_settling_diamond_proxies, &l1_settling_diamond_proxies] {
         for diamond_proxy in proxies {
             let admin = contracts_backend
-                .cast(&["call", diamond_proxy, "getAdmin()(address)", "--rpc-url", l1_rpc_url])?
-                .trim().to_string();
-            contracts_backend.cast(&[
-                "send", &zk_token_address, "mint(address,uint256)", &admin, zk_mint_amount,
-                "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
-            ]).with_context(|| format!("mint ZK to chain admin {admin}"))?;
+                .cast(&[
+                    "call",
+                    diamond_proxy,
+                    "getAdmin()(address)",
+                    "--rpc-url",
+                    l1_rpc_url,
+                ])?
+                .trim()
+                .to_string();
+            contracts_backend
+                .cast(&[
+                    "send",
+                    &zk_token_address,
+                    "mint(address,uint256)",
+                    &admin,
+                    zk_mint_amount,
+                    "--private-key",
+                    &keys.deployer_pk,
+                    "--rpc-url",
+                    l1_rpc_url,
+                ])
+                .with_context(|| format!("mint ZK to chain admin {admin}"))?;
         }
     }
 
@@ -1131,8 +1198,15 @@ fn run_generation_flow(
     let zk_mint = "1000000000000000000000000000000000000000";
     contracts_backend
         .cast(&[
-            "send", &zk_token_address, "mint(address,uint256)", &test_address, zk_mint,
-            "--private-key", &keys.deployer_pk, "--rpc-url", l1_rpc_url,
+            "send",
+            &zk_token_address,
+            "mint(address,uint256)",
+            &test_address,
+            zk_mint,
+            "--private-key",
+            &keys.deployer_pk,
+            "--rpc-url",
+            l1_rpc_url,
         ])
         .context("mint ZK to test account")?;
     // The deposit path is: Bridgehub → SharedBridge → NativeTokenVault.
@@ -1144,8 +1218,15 @@ fn run_generation_flow(
     ] {
         contracts_backend
             .cast(&[
-                "send", &zk_token_address, "approve(address,uint256)", spender, zk_mint,
-                "--private-key", DEFAULT_ANVIL_PRIVATE_KEY, "--rpc-url", l1_rpc_url,
+                "send",
+                &zk_token_address,
+                "approve(address,uint256)",
+                spender,
+                zk_mint,
+                "--private-key",
+                DEFAULT_ANVIL_PRIVATE_KEY,
+                "--rpc-url",
+                l1_rpc_url,
             ])
             .with_context(|| format!("approve {label} for ZK tokens"))?;
     }
@@ -1350,8 +1431,8 @@ fn run_generation_flow(
     // Read gateway's relayed SL DA validator from vote preparation output.
     // protocol_ops writes to l1-contracts/script-out/ (symlinked to work_dir
     // in Docker).
-    let gw_vote_toml = contracts_backend
-        .read_repo_file("l1-contracts/script-out/gateway_vote_prep_out.toml")?;
+    let gw_vote_toml =
+        contracts_backend.read_repo_file("l1-contracts/script-out/gateway_vote_prep_out.toml")?;
     let vote_prep: VotePrepOutput =
         toml::from_str(&gw_vote_toml).context("parse vote preparation output TOML")?;
     let relayed_sl_da_validator = vote_prep.relayed_sl_da_validator;
@@ -1702,7 +1783,9 @@ fn main() -> Result<()> {
     );
 
     // Chain operator contexts (from wallets.yaml)
-    let gw_wallets = wallets.chains.get("gateway")
+    let gw_wallets = wallets
+        .chains
+        .get("gateway")
         .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain 'gateway'"))?;
     let gw_ops = ChainOperators::from_wallets(GATEWAY_CHAIN_ID, "gateway", gw_wallets)?;
     let gw_settling_ops: Vec<ChainOperators> = GATEWAY_SETTLING_CHAIN_IDS
@@ -1710,7 +1793,9 @@ fn main() -> Result<()> {
         .enumerate()
         .map(|(i, &id)| {
             let name = gw_settling_dir_names[i];
-            let w = wallets.chains.get(name)
+            let w = wallets
+                .chains
+                .get(name)
                 .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain '{name}'"))?;
             ChainOperators::from_wallets(id, name, w)
         })
@@ -1719,7 +1804,9 @@ fn main() -> Result<()> {
         .iter()
         .enumerate()
         .map(|(i, &_id)| {
-            let w = wallets.chains.get("l1_settling")
+            let w = wallets
+                .chains
+                .get("l1_settling")
                 .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain 'l1_settling'"))?;
             ChainOperators::from_wallets(L1_SETTLING_CHAIN_IDS[i], "l1_settling", w)
         })

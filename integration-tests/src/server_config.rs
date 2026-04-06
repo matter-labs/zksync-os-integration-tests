@@ -211,7 +211,8 @@ impl ServerConfigBuilder {
 
     /// Add a forced price for a token address (e.g. ZK base token).
     pub fn forced_price(mut self, token_addr: impl Into<String>, price_usd: u64) -> Self {
-        self.extra_forced_prices.push((token_addr.into(), price_usd));
+        self.extra_forced_prices
+            .push((token_addr.into(), price_usd));
         self
     }
 

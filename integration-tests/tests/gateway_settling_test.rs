@@ -102,10 +102,15 @@ async fn run_gateway_settling_test() -> Result<()> {
     let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
     let zk_token = contracts_backend
         .cast(&[
-            "call", &eco.bridgehub, "baseToken(uint256)(address)",
-            &gw.chain_id.to_string(), "--rpc-url", &l1_rpc_url,
+            "call",
+            &eco.bridgehub,
+            "baseToken(uint256)(address)",
+            &gw.chain_id.to_string(),
+            "--rpc-url",
+            &l1_rpc_url,
         ])?
-        .trim().to_string();
+        .trim()
+        .to_string();
     let base_token_is_eth = zk_token == "0x0000000000000000000000000000000000000001";
     println!("  Base token: {zk_token} (is_eth={base_token_is_eth})");
     if !base_token_is_eth {
@@ -117,24 +122,54 @@ async fn run_gateway_settling_test() -> Result<()> {
             &l1_rpc_url,
             DEFAULT_ANVIL_PRIVATE_KEY,
         )?;
-        contracts_backend.cast(&[
-            "send", &zk_token, "mint(address,uint256)", &test_address, zk_mint,
-            "--private-key", &wallets.ecosystem.deployer.private_key,
-            "--rpc-url", &l1_rpc_url,
-        ]).context("mint base token to test account")?;
+        contracts_backend
+            .cast(&[
+                "send",
+                &zk_token,
+                "mint(address,uint256)",
+                &test_address,
+                zk_mint,
+                "--private-key",
+                &wallets.ecosystem.deployer.private_key,
+                "--rpc-url",
+                &l1_rpc_url,
+            ])
+            .context("mint base token to test account")?;
         // Approve bridgehub + shared bridge + NTV
         let shared_bridge = contracts_backend
-            .cast(&["call", &eco.bridgehub, "sharedBridge()(address)", "--rpc-url", &l1_rpc_url])?
-            .trim().to_string();
+            .cast(&[
+                "call",
+                &eco.bridgehub,
+                "sharedBridge()(address)",
+                "--rpc-url",
+                &l1_rpc_url,
+            ])?
+            .trim()
+            .to_string();
         let ntv = contracts_backend
-            .cast(&["call", &shared_bridge, "nativeTokenVault()(address)", "--rpc-url", &l1_rpc_url])?
-            .trim().to_string();
+            .cast(&[
+                "call",
+                &shared_bridge,
+                "nativeTokenVault()(address)",
+                "--rpc-url",
+                &l1_rpc_url,
+            ])?
+            .trim()
+            .to_string();
         for spender in [eco.bridgehub.as_str(), shared_bridge.as_str(), ntv.as_str()] {
-            contracts_backend.cast(&[
-                "send", &zk_token, "approve(address,uint256)", spender, zk_mint,
-                "--private-key", DEFAULT_ANVIL_PRIVATE_KEY,
-                "--rpc-url", &l1_rpc_url,
-            ]).context("approve base token")?;
+            contracts_backend
+                .cast(&[
+                    "send",
+                    &zk_token,
+                    "approve(address,uint256)",
+                    spender,
+                    zk_mint,
+                    "--private-key",
+                    DEFAULT_ANVIL_PRIVATE_KEY,
+                    "--rpc-url",
+                    &l1_rpc_url,
+                ])
+                .context("approve base token")?;
         }
     }
 

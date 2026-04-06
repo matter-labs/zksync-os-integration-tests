@@ -86,11 +86,7 @@ impl EraContractsBackend {
         let relative = work_dir
             .strip_prefix(fs::canonicalize(&logs_root)?)
             .context("work_dir must be under test-run-logs")?;
-        let container_work = format!(
-            "{}/{}",
-            CONTAINER_LOGS_MOUNT,
-            relative.display()
-        );
+        let container_work = format!("{}/{}", CONTAINER_LOGS_MOUNT, relative.display());
         let session = ContractsContainerSession::start(
             image,
             &work_dir,
@@ -148,12 +144,12 @@ impl EraContractsBackend {
         match self {
             EraContractsBackend::Local { work_dir, .. } => {
                 let path = work_dir.join(relative);
-                fs::read_to_string(&path)
-                    .with_context(|| format!("read {}", path.display()))
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
             }
             EraContractsBackend::Docker { session, .. } => {
                 let path = format!("{}/{}", session.container_work_dir(), relative);
-                session.exec(&["cat", &path], &[], None)
+                session
+                    .exec(&["cat", &path], &[], None)
                     .with_context(|| format!("read {}", relative))
             }
         }
@@ -167,12 +163,12 @@ impl EraContractsBackend {
         match self {
             EraContractsBackend::Local { era_path, .. } => {
                 let path = era_path.join(relative);
-                fs::read_to_string(&path)
-                    .with_context(|| format!("read {}", path.display()))
+                fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))
             }
             EraContractsBackend::Docker { session, .. } => {
                 let path = format!("/contracts/{}", relative);
-                session.exec(&["cat", &path], &[], None)
+                session
+                    .exec(&["cat", &path], &[], None)
                     .with_context(|| format!("read {}", relative))
             }
         }
@@ -268,7 +264,8 @@ impl EraContractsBackend {
                 let mut command: Vec<String> = vec!["forge".into()];
                 command.extend(args.iter().map(|a| a.to_string()));
                 let cmd_refs: Vec<&str> = command.iter().map(|s| s.as_str()).collect();
-                session.exec(&cmd_refs, &[], Some("/contracts/l1-contracts"))
+                session
+                    .exec(&cmd_refs, &[], Some("/contracts/l1-contracts"))
                     .map(|s| s.trim().to_string())
             }
         }
