@@ -30,10 +30,7 @@ use clap::Parser;
 
 use integration_tests::anvil_utils::fund_account;
 use integration_tests::docker::docker_pull_image;
-use integration_tests::keys_from_seed::{
-    chain_owner_private_key, deployer_private_key, ecosystem_owner_private_key,
-    operator_commit_private_key, operator_execute_private_key, operator_prove_private_key,
-};
+use integration_tests::l1_state::{ChainWallets, WalletsFile};
 use integration_tests::presets::RepoRef;
 use integration_tests::server_utils::{
     address_from_private_key, fund_l2_via_l1_deposit_ex, wait_for_executed_batches_with_traffic,
@@ -63,7 +60,7 @@ const L1_SETTLING_CHAIN_IDS: &[u64] = &[6565];
 
 use integration_tests::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
 
-/// Deployer + ecosystem owner keys, derived from deterministic seeds.
+/// Deployer + ecosystem owner keys, loaded from wallets.yaml.
 struct KeySet {
     deployer_pk: String,
     deployer_addr: String,
@@ -72,16 +69,17 @@ struct KeySet {
 }
 
 impl KeySet {
-    fn new() -> Result<Self> {
-        let deployer_pk = deployer_private_key();
-        let deployer_addr = address_from_private_key(&deployer_pk)?;
-        let ecosystem_owner_pk = ecosystem_owner_private_key();
-        let ecosystem_owner_addr = address_from_private_key(&ecosystem_owner_pk)?;
+    fn from_wallets(wallets: &WalletsFile) -> Result<Self> {
+        let owner = wallets
+            .ecosystem
+            .owner
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing ecosystem.owner"))?;
         Ok(Self {
-            deployer_pk,
-            deployer_addr,
-            ecosystem_owner_pk,
-            ecosystem_owner_addr,
+            deployer_pk: wallets.ecosystem.deployer.private_key.clone(),
+            deployer_addr: wallets.ecosystem.deployer.address.clone(),
+            ecosystem_owner_pk: owner.private_key.clone(),
+            ecosystem_owner_addr: owner.address.clone(),
         })
     }
 }
@@ -251,26 +249,22 @@ struct ChainOperators {
 }
 
 impl ChainOperators {
-    fn new(chain_id: u64, seed_name: &str, dir_name: &str) -> Result<Self> {
-        let owner_pk = chain_owner_private_key(dir_name);
-        let owner_addr = address_from_private_key(&owner_pk)?;
-        let commit_pk = operator_commit_private_key(seed_name);
-        let prove_pk = operator_prove_private_key(seed_name);
-        let execute_pk = operator_execute_private_key(seed_name);
-        let commit_addr = address_from_private_key(&commit_pk)?;
-        let prove_addr = address_from_private_key(&prove_pk)?;
-        let execute_addr = address_from_private_key(&execute_pk)?;
+    fn from_wallets(chain_id: u64, dir_name: &str, w: &ChainWallets) -> Result<Self> {
+        let owner = w
+            .owner
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing {dir_name}.owner"))?;
         Ok(Self {
             chain_id,
             dir_name: dir_name.to_string(),
-            owner_pk,
-            owner_addr,
-            commit_pk,
-            prove_pk,
-            execute_pk,
-            commit_addr,
-            prove_addr,
-            execute_addr,
+            owner_pk: owner.private_key.clone(),
+            owner_addr: owner.address.clone(),
+            commit_pk: w.commit_operator.private_key.clone(),
+            prove_pk: w.prove_operator.private_key.clone(),
+            execute_pk: w.execute_operator.private_key.clone(),
+            commit_addr: w.commit_operator.address.clone(),
+            prove_addr: w.prove_operator.address.clone(),
+            execute_addr: w.execute_operator.address.clone(),
         })
     }
 
@@ -638,53 +632,6 @@ fn run_wallets_gen(contracts_backend: &EraContractsBackend, chains_arg: &str) ->
         .context("wallets-gen")?;
 
     Ok(contracts_backend.work_dir().join(filename))
-}
-
-// ---------------------------------------------------------------------------
-// Wallets merge
-// ---------------------------------------------------------------------------
-
-/// Merge `owner` entries into wallets.yaml produced by wallets-gen.
-fn merge_owner_wallets(
-    wallets_path: &Path,
-    keys: &KeySet,
-    gw_ops: &ChainOperators,
-    gw_settling_ops: &[ChainOperators],
-    l1_settling_ops: &[ChainOperators],
-) -> Result<()> {
-    let content = fs::read_to_string(wallets_path)?;
-    let mut doc: serde_yaml::Value = serde_yaml::from_str(&content)?;
-
-    let wallet_yaml = |addr: &str, pk: &str| -> serde_yaml::Value {
-        let mut m = serde_yaml::Mapping::new();
-        m.insert("address".into(), addr.into());
-        m.insert("private_key".into(), pk.into());
-        serde_yaml::Value::Mapping(m)
-    };
-
-    // ecosystem.owner
-    if let Some(eco) = doc.get_mut("ecosystem").and_then(|v| v.as_mapping_mut()) {
-        eco.insert(
-            "owner".into(),
-            wallet_yaml(&keys.ecosystem_owner_addr, &keys.ecosystem_owner_pk),
-        );
-    }
-
-    // per-chain owner
-    for ops in std::iter::once(gw_ops)
-        .chain(gw_settling_ops.iter())
-        .chain(l1_settling_ops.iter())
-    {
-        if let Some(chain) = doc.get_mut(&ops.dir_name).and_then(|v| v.as_mapping_mut()) {
-            chain.insert(
-                "owner".into(),
-                wallet_yaml(&ops.owner_addr, &ops.owner_pk),
-            );
-        }
-    }
-
-    fs::write(wallets_path, serde_yaml::to_string(&doc)?)?;
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1136,19 +1083,12 @@ fn run_generation_flow(
     }
 
     // ----------------------------------------------------------------
-    // Step 8c: Generate wallets.yaml
+    // Step 8c: Copy wallets.yaml (already generated before the flow)
     // ----------------------------------------------------------------
-    println!("\n=== Generating wallets.yaml ===");
-    let all_chain_names: Vec<&str> = std::iter::once(gw_ops.dir_name.as_str())
-        .chain(gw_settling_ops.iter().map(|o| o.dir_name.as_str()))
-        .chain(l1_settling_ops.iter().map(|o| o.dir_name.as_str()))
-        .collect();
-    let chains_arg = all_chain_names.join(",");
-    let work_wallets = run_wallets_gen(contracts_backend, &chains_arg)?;
     let wallets_path = output_dir.join("wallets.yaml");
+    let work_wallets = contracts_backend.work_dir().join("wallets.yaml");
     fs::copy(&work_wallets, &wallets_path)
         .with_context(|| format!("copy wallets to {}", wallets_path.display()))?;
-    merge_owner_wallets(&wallets_path, keys, gw_ops, gw_settling_ops, l1_settling_ops)?;
     println!("  wallets.yaml -> {}", wallets_path.display());
 
     // ----------------------------------------------------------------
@@ -1740,20 +1680,49 @@ fn main() -> Result<()> {
         );
     }
 
-    // Chain operator contexts
-    let gw_ops = ChainOperators::new(GATEWAY_CHAIN_ID, "gateway chain", "gateway")?;
+    // Generate wallets.yaml early — we need the keys before ecosystem init.
     let gw_settling_dir_names = ["gateway_settling_a", "gateway_settling_b"];
+    let all_chain_names: Vec<&str> = std::iter::once("gateway")
+        .chain(gw_settling_dir_names.iter().copied())
+        .chain(std::iter::once("l1_settling"))
+        .collect();
+    let chains_arg = all_chain_names.join(",");
+    println!("\n=== Generating wallets.yaml ===");
+    let work_wallets = run_wallets_gen(&contracts_backend, &chains_arg)?;
+    let wallets: WalletsFile = serde_yaml::from_str(
+        &fs::read_to_string(&work_wallets)
+            .with_context(|| format!("read {}", work_wallets.display()))?,
+    )
+    .context("parse wallets.yaml")?;
+
+    let keys = KeySet::from_wallets(&wallets)?;
+    println!(
+        "  deployer = {}, ecosystem_owner = {}",
+        keys.deployer_addr, keys.ecosystem_owner_addr
+    );
+
+    // Chain operator contexts (from wallets.yaml)
+    let gw_wallets = wallets.chains.get("gateway")
+        .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain 'gateway'"))?;
+    let gw_ops = ChainOperators::from_wallets(GATEWAY_CHAIN_ID, "gateway", gw_wallets)?;
     let gw_settling_ops: Vec<ChainOperators> = GATEWAY_SETTLING_CHAIN_IDS
         .iter()
         .enumerate()
         .map(|(i, &id)| {
-            ChainOperators::new(id, &format!("chain {}", i + 1), gw_settling_dir_names[i])
+            let name = gw_settling_dir_names[i];
+            let w = wallets.chains.get(name)
+                .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain '{name}'"))?;
+            ChainOperators::from_wallets(id, name, w)
         })
         .collect::<Result<_>>()?;
     let l1_settling_ops: Vec<ChainOperators> = L1_SETTLING_CHAIN_IDS
         .iter()
         .enumerate()
-        .map(|(i, &id)| ChainOperators::new(id, &format!("l1 chain {}", i + 1), "l1_settling"))
+        .map(|(i, &_id)| {
+            let w = wallets.chains.get("l1_settling")
+                .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain 'l1_settling'"))?;
+            ChainOperators::from_wallets(L1_SETTLING_CHAIN_IDS[i], "l1_settling", w)
+        })
         .collect::<Result<_>>()?;
 
     // ----------------------------------------------------------------
@@ -1785,12 +1754,6 @@ fn main() -> Result<()> {
     let anvil = DumpStateAnvil::spawn(anvil_port, &output_path)?;
     let l1_rpc_url = anvil.rpc_url().to_string();
     println!("  Anvil ready at {}", l1_rpc_url);
-
-    let keys = KeySet::new()?;
-    println!(
-        "  deployer = {}, ecosystem_owner = {}",
-        keys.deployer_addr, keys.ecosystem_owner_addr
-    );
 
     // Run Steps 3–15; terminate Anvil even on error.
     let result = run_generation_flow(
