@@ -1,0 +1,88 @@
+name: Daily Integration Tests
+
+on:
+  schedule:
+    # 12:00 UTC Monday–Friday
+    - cron: "0 12 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: daily-integration-tests
+  cancel-in-progress: true
+
+jobs:
+  daily-integration-tests:
+    name: Run integration tests (all presets)
+    runs-on: matterlabs-ci-runner-high-performance
+    timeout-minutes: 120
+    env:
+      DEBIAN_FRONTEND: noninteractive
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            libclang-dev \
+            libssl-dev \
+            pkg-config \
+            jq \
+            wget \
+            curl
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly-2026-02-20
+
+      - name: Install Foundry
+        run: |
+          mkdir -p foundry
+          curl -LO https://github.com/foundry-rs/foundry/releases/download/v1.5.1/foundry_v1.5.1_linux_amd64.tar.gz
+          tar zxf foundry_v1.5.1_linux_amd64.tar.gz -C ./foundry
+          chmod +x ./foundry/*
+          echo "${PWD}/foundry" >> "${GITHUB_PATH}"
+
+      - name: Build all crates
+        run: cargo build --release --workspace
+
+      - name: Run integration tests
+        run: ./run-tests.sh
+
+      - name: Upload logs
+        uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: daily-integration-test-logs
+          path: |
+            test-run-logs/
+            l1-state-cache/
+          retention-days: 30
+
+  notify-on-failure:
+    name: Notify Slack on failure
+    needs: daily-integration-tests
+    if: ${{ failure() && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send Slack Notification
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            blocks:
+              - type: section
+                text:
+                  type: mrkdwn
+                  text: "❌ Daily *integration tests* just failed <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|Failed run link>"

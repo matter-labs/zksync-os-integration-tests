@@ -17,3 +17,6 @@ l1-state-cache/
 
 # Protocol ops workdir for gateway setup script
 protocol-ops-workdir/
+
+# Local preset overrides
+local_presets.yaml

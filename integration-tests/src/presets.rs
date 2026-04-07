@@ -27,8 +27,8 @@ pub struct RawPreset {
     pub tests: Vec<String>,
 
     /// Arbitrary extra key-value pairs that tests can read for custom parameters.
-    #[serde(flatten)]
-    pub extra: HashMap<String, serde_yaml::Value>,
+    #[serde(default)]
+    pub extra_keys: HashMap<String, serde_yaml::Value>,
 }
 
 #[derive(Debug, Clone)]
@@ -38,13 +38,13 @@ pub struct Preset {
     pub zksync_os_server: RepoRef,
     pub tests: Vec<String>,
     /// Arbitrary extra key-value pairs from the preset YAML.
-    pub extra: HashMap<String, serde_yaml::Value>,
+    pub extra_keys: HashMap<String, serde_yaml::Value>,
 }
 
 impl Preset {
     /// Get an extra key as a string, or `None` if missing or not a string.
     pub fn extra_str(&self, key: &str) -> Option<&str> {
-        self.extra.get(key).and_then(|v| v.as_str())
+        self.extra_keys.get(key).and_then(|v| v.as_str())
     }
 }
 
@@ -202,7 +202,7 @@ fn resolve_presets(project_root: &Path, raw: RawPresets) -> anyhow::Result<Prese
                 era_contracts,
                 zksync_os_server,
                 tests: r.tests,
-                extra: r.extra,
+                extra_keys: r.extra_keys,
             },
         );
     }
