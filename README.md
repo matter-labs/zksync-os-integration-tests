@@ -132,7 +132,7 @@ The result is cached in `l1-state-cache/` keyed by the resolved Docker image SHA
 ```
 L1 (Anvil)
  |
- +-- Gateway (chain 506)
+ +-- Gateway (chain 506, base token: ZK)
  |     |
  |     +-- gateway_settling_a (chain 6566)   -- settles via gateway
  |     +-- gateway_settling_b (chain 6567)   -- settles via gateway
@@ -149,7 +149,7 @@ Tests are Rust integration tests in `integration-tests/tests/`:
 | `l1_settling_test` | L1-settling chain: boots server, seals batches, verifies L1 settlement via blobs |
 | `gateway_settling_test` | Gateway-settling chains: boots servers, seals batches, verifies settlement through gateway |
 | `interop_test` | Cross-chain interoperability and L2 messaging between chains |
-| `upgrade_v30_to_v31` | Protocol upgrade from v30 to v31 |
+| `upgrade_v30_to_v31` | Protocol upgrade from v30 to v31 (uses pre-built state from `local-chains/`) |
 
 Each test receives the preset name via `PRESET_NAME` env var, loads the matching cached L1 state, and orchestrates its own servers via Docker.
 
@@ -258,6 +258,6 @@ The `run-tests.sh` orchestrator cleans stale logs between presets (except `contr
 │   └── tests/                    # Integration test files
 ├── tools/generate-l1-state/      # Ecosystem generation binary
 ├── l1-state-cache/               # Generated L1 state (gitignored)
-├── local-chains/                 # Pre-built chain configurations
+├── local-chains/                 # Pre-built v30 chain configs for upgrade tests (static, committed)
 └── test-run-logs/                # Server logs from test runs
 ```
