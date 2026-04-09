@@ -1,5 +1,7 @@
 use anyhow::Context;
-use std::process::Command;
+use flate2::read::GzDecoder;
+use std::fs::File;
+use std::io::{self, BufReader};
 use std::time::Duration;
 
 use crate::find_ports::LockedPort;
@@ -20,28 +22,13 @@ fn decompress_l1_state_gz(
     state_gz: &std::path::Path,
     state_json: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let output = Command::new("gzip")
-        .arg("-dfk")
-        .arg(state_gz)
-        .output()
-        .with_context(|| format!("Failed to execute gzip for {}", state_gz.display()))?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "Failed to decompress {}:\nSTDOUT:\n{}\nSTDERR:\n{}",
-            state_gz.display(),
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    if !state_json.exists() {
-        anyhow::bail!(
-            "gzip completed but decompressed file not found: {}",
-            state_json.display()
-        );
-    }
-
+    let gz_file = File::open(state_gz)
+        .with_context(|| format!("Failed to open {}", state_gz.display()))?;
+    let decoder = GzDecoder::new(BufReader::new(gz_file));
+    let mut out_file = File::create(state_json)
+        .with_context(|| format!("Failed to create {}", state_json.display()))?;
+    io::copy(&mut { decoder }, &mut out_file)
+        .with_context(|| format!("Failed to decompress {}", state_gz.display()))?;
     Ok(())
 }
 

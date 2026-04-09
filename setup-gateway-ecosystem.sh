@@ -200,19 +200,11 @@ pcli chain init \
 # ─── [6] Convert first chain (271) to be a gateway ───────────────────────────
 
 # Deploy the transaction filterer on the gateway chain (required before whitelist grant)
-pcli chain deploy-gateway-transaction-filterer \
+pcli chain gateway convert deploy-filterer \
     --bridgehub-proxy-address=$BRIDGEHUB \
-    --chain-id=$GATEWAY_CHAIN_ID \
+    --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --private-key=$ECOSYSTEM_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
-
-# Dump force_deployments_data for the gateway chain's CTM
-pcli chain dump-gateway-force-deployments \
-    --ctm-proxy=$CTM_PROXY \
-    --dump-toml-rel=/script-out/force-dep-dump.toml \
-    --l1-rpc-url=$L1_RPC_URL
-
-export FORCE_DEPLOYMENTS_DATA=$(grep 'force_deployments_data' $WORK_DIR/script-out/force-dep-dump.toml | sed 's/force_deployments_data = //; s/^"//; s/"$//')
 
 # Vote preparation output lives in script-out (mounted into the container)
 VOTE_OUTPUT_PATH="/script-out/gateway_vote_prep_out.toml"
@@ -221,8 +213,7 @@ VOTE_OUTPUT_PATH="/script-out/gateway_vote_prep_out.toml"
 export STM_TRACKER=$(jq -r '.output.deployed_addresses.bridgehub.ctm_deployment_tracker_proxy_addr' $WORK_DIR/hub.init.json)
 
 # Step 6a: Grant whitelist to deployer, governance, and STM tracker
-pcli chain convert-to-gateway \
-    --stage=grant-whitelist \
+pcli chain gateway convert grant-whitelist \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --whitelist-grantees=$GOVERNANCE \
@@ -232,32 +223,30 @@ pcli chain convert-to-gateway \
     --l1-rpc-url=$L1_RPC_URL
 
 # Step 6b: Deploy gateway CTM contracts and prepare governance calls
-pcli chain convert-to-gateway \
-    --stage=vote-prepare \
+# (force deployments data is auto-derived from --ctm-proxy)
+pcli chain gateway convert vote-prepare \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --ctm-representative-chain-id=$GATEWAY_CHAIN_ID \
-    --force-deployments-data=$FORCE_DEPLOYMENTS_DATA \
+    --ctm-proxy=$CTM_PROXY \
     --refund-recipient=$DEPLOYER \
-    --testnet-verifier=true \
-    --is-zk-sync-os=true \
-    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
+    --testnet-verifier \
+    --zksync-os \
+    --vote-preparation-toml=$VOTE_OUTPUT_PATH \
     --private-key=$DEPLOYER_PK \
     --l1-rpc-url=$L1_RPC_URL
 
 # Step 6c: Execute governance calls
-pcli chain convert-to-gateway \
-    --stage=governance-execute \
+pcli chain gateway convert governance-execute \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --governance-address=$GOVERNANCE \
-    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
+    --vote-preparation-toml=$VOTE_OUTPUT_PATH \
     --private-key=$ECOSYSTEM_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
 
 # Step 6d: Revoke deployer whitelist
-pcli chain convert-to-gateway \
-    --stage=revoke-whitelist \
+pcli chain gateway convert revoke-whitelist \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --revoke-address=$DEPLOYER \
@@ -283,20 +272,18 @@ dcast send $ZK_TOKEN_ADDRESS "mint(address,uint256)" $CHAIN2_ADMIN 1000000000000
 # Step 7a: Skip pause-deposits (already paused via --pause-deposits in chain init)
 
 # Step 7b: Submit migration transaction (L1 → gateway L2)
-pcli chain migrate-to-gateway \
-    --stage=migrate \
+pcli chain gateway migrate submit \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --chain-id=$CHAIN1_CHAIN_ID \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --l1-gas-price=1000000000 \
-    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
+    --vote-preparation-toml=$VOTE_OUTPUT_PATH \
     --refund-recipient=$DEPLOYER \
     --private-key=$CHAIN1_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
 
 # Step 7c: Notify server about migration
-pcli chain migrate-to-gateway \
-    --stage=notify-server \
+pcli chain gateway migrate notify-server \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --chain-id=$CHAIN1_CHAIN_ID \
     --private-key=$CHAIN1_OWNER_PK \
@@ -307,20 +294,18 @@ pcli chain migrate-to-gateway \
 # Step 8a: Skip pause-deposits (already paused via --pause-deposits in chain init)
 
 # Step 8b: Submit migration transaction (L1 → gateway L2)
-pcli chain migrate-to-gateway \
-    --stage=migrate \
+pcli chain gateway migrate submit \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --chain-id=$CHAIN2_CHAIN_ID \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --l1-gas-price=1000000000 \
-    --vote-preparation-output-path=$VOTE_OUTPUT_PATH \
+    --vote-preparation-toml=$VOTE_OUTPUT_PATH \
     --refund-recipient=$DEPLOYER \
     --private-key=$CHAIN2_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
 
 # Step 8c: Notify server about migration
-pcli chain migrate-to-gateway \
-    --stage=notify-server \
+pcli chain gateway migrate notify-server \
     --bridgehub-proxy-address=$BRIDGEHUB \
     --chain-id=$CHAIN2_CHAIN_ID \
     --private-key=$CHAIN2_OWNER_PK \

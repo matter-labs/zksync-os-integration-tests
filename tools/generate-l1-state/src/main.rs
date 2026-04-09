@@ -150,8 +150,6 @@ impl DumpStateAnvil {
 
         let rpc_url = format!("http://localhost:{}", port);
 
-        // Wait for Anvil to be ready
-        std::thread::sleep(Duration::from_secs(2));
         integration_tests::server_utils::wait_for_chain_to_be_ready(
             &rpc_url,
             "Anvil",
@@ -277,62 +275,36 @@ impl ChainOperators {
 // Forge helpers
 // ---------------------------------------------------------------------------
 
-fn run_forge_deploy_and_set_gateway_transaction_filterer(
+fn run_deploy_gateway_transaction_filterer(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
     bridgehub: &str,
     chain_id: u64,
     chain_owner_pk: &str,
 ) -> Result<()> {
-    println!("  Forge: DeployAndSetGatewayTransactionFilterer for chain {chain_id}");
-    contracts_backend.forge_script(
-        &[
-            "deploy-scripts/dev/DeployAndSetGatewayTransactionFilterer.s.sol:DeployAndSetGatewayTransactionFilterer",
-            "--sig", "run(address,uint256)",
+    println!("  gateway convert deploy-filterer for chain {chain_id}");
+    contracts_backend
+        .protocol_ops(&[
+            "chain",
+            "gateway",
+            "convert",
+            "deploy-filterer",
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--private-key",
+            chain_owner_pk,
+            "--bridgehub-proxy-address",
             bridgehub,
+            "--gateway-chain-id",
             &chain_id.to_string(),
-            "--rpc-url", l1_rpc_url,
-            "--broadcast", "--ffi",
-            "--private-key", chain_owner_pk,
-        ],
-        &[],
-    ).with_context(|| format!("DeployAndSetGatewayTransactionFilterer for chain {chain_id}"))?;
+        ])
+        .with_context(|| format!("gateway convert deploy-filterer for chain {chain_id}"))?;
     Ok(())
-}
-
-#[derive(serde::Deserialize)]
-struct ForceDeploymentsDumpToml {
-    force_deployments_data: String,
 }
 
 #[derive(serde::Deserialize)]
 struct VotePrepOutput {
     relayed_sl_da_validator: String,
-}
-
-/// Dump force deployments data.
-/// Output lands in `l1-contracts/script-out/` (symlinked to work_dir in Docker).
-fn run_forge_dump_force_deployments(
-    contracts_backend: &EraContractsBackend,
-    l1_rpc_url: &str,
-    ctm_proxy: &str,
-) -> Result<String> {
-    println!("  Forge: DumpForceDeploymentsForGateway");
-    let dump_filename = "force_deployments_dump.toml";
-    let dump_rel = format!("/script-out/{}", dump_filename);
-    contracts_backend.forge_script(
-        &[
-            "deploy-scripts/dev/DumpForceDeploymentsForGateway.s.sol:DumpForceDeploymentsForGateway",
-            "--sig", "run(address)",
-            ctm_proxy,
-            "--rpc-url", l1_rpc_url,
-        ],
-        &[("FORCE_DEPLOYMENTS_DUMP_TOML_REL_PATH", &dump_rel)],
-    )?;
-    let raw =
-        contracts_backend.read_repo_file(&format!("l1-contracts/script-out/{}", dump_filename))?;
-    let parsed: ForceDeploymentsDumpToml = toml::from_str(&raw)?;
-    Ok(parsed.force_deployments_data)
 }
 
 // ---------------------------------------------------------------------------
@@ -349,17 +321,17 @@ fn run_convert_to_gateway(
     gateway_chain_id: u64,
     governance_addr: &str,
     stm_tracker: &str,
-    force_deployments_data: &str,
+    ctm_proxy: &str,
     vote_output_path: &str,
 ) -> Result<()> {
     let gw_str = gateway_chain_id.to_string();
 
-    println!("  convert-to-gateway: grant-whitelist");
+    println!("  gateway convert: grant-whitelist");
     contracts_backend
         .protocol_ops(&[
             "chain",
-            "convert-to-gateway",
-            "--stage",
+            "gateway",
+            "convert",
             "grant-whitelist",
             "--l1-rpc-url",
             l1_rpc_url,
@@ -376,14 +348,14 @@ fn run_convert_to_gateway(
             "--whitelist-grantees",
             stm_tracker,
         ])
-        .context("convert-to-gateway grant-whitelist")?;
+        .context("gateway convert grant-whitelist")?;
 
-    println!("  convert-to-gateway: vote-prepare");
+    println!("  gateway convert: vote-prepare");
     contracts_backend
         .protocol_ops(&[
             "chain",
-            "convert-to-gateway",
-            "--stage",
+            "gateway",
+            "convert",
             "vote-prepare",
             "--l1-rpc-url",
             l1_rpc_url,
@@ -395,25 +367,23 @@ fn run_convert_to_gateway(
             &gw_str,
             "--ctm-representative-chain-id",
             &gw_str,
-            "--force-deployments-data",
-            force_deployments_data,
+            "--ctm-proxy",
+            ctm_proxy,
             "--refund-recipient",
             &keys.deployer_addr,
             "--testnet-verifier",
-            "true",
-            "--is-zk-sync-os",
-            "true",
-            "--vote-preparation-output-path",
+            "--zksync-os",
+            "--vote-preparation-toml",
             vote_output_path,
         ])
-        .context("convert-to-gateway vote-prepare")?;
+        .context("gateway convert vote-prepare")?;
 
-    println!("  convert-to-gateway: governance-execute");
+    println!("  gateway convert: governance-execute");
     contracts_backend
         .protocol_ops(&[
             "chain",
-            "convert-to-gateway",
-            "--stage",
+            "gateway",
+            "convert",
             "governance-execute",
             "--l1-rpc-url",
             l1_rpc_url,
@@ -425,17 +395,17 @@ fn run_convert_to_gateway(
             &gw_str,
             "--governance-address",
             governance_addr,
-            "--vote-preparation-output-path",
+            "--vote-preparation-toml",
             vote_output_path,
         ])
-        .context("convert-to-gateway governance-execute")?;
+        .context("gateway convert governance-execute")?;
 
-    println!("  convert-to-gateway: revoke-whitelist");
+    println!("  gateway convert: revoke-whitelist");
     contracts_backend
         .protocol_ops(&[
             "chain",
-            "convert-to-gateway",
-            "--stage",
+            "gateway",
+            "convert",
             "revoke-whitelist",
             "--l1-rpc-url",
             l1_rpc_url,
@@ -448,7 +418,7 @@ fn run_convert_to_gateway(
             "--revoke-address",
             &keys.deployer_addr,
         ])
-        .context("convert-to-gateway revoke-whitelist")?;
+        .context("gateway convert revoke-whitelist")?;
 
     Ok(())
 }
@@ -470,12 +440,12 @@ fn run_migrate_to_gateway(
     let gas_str = MIGRATE_L1_GAS_PRICE_WEI.to_string();
 
     if !deposits_already_paused {
-        println!("  migrate-to-gateway chain {chain_id}: pause-deposits");
+        println!("  gateway migrate chain {chain_id}: pause-deposits");
         contracts_backend
             .protocol_ops(&[
                 "chain",
-                "migrate-to-gateway",
-                "--stage",
+                "gateway",
+                "migrate",
                 "pause-deposits",
                 "--l1-rpc-url",
                 l1_rpc_url,
@@ -486,16 +456,16 @@ fn run_migrate_to_gateway(
                 "--chain-id",
                 &chain_str,
             ])
-            .context("migrate-to-gateway pause-deposits")?;
+            .context("gateway migrate pause-deposits")?;
     }
 
-    println!("  migrate-to-gateway chain {chain_id}: migrate");
+    println!("  gateway migrate chain {chain_id}: submit");
     contracts_backend
         .protocol_ops(&[
             "chain",
-            "migrate-to-gateway",
-            "--stage",
+            "gateway",
             "migrate",
+            "submit",
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
@@ -508,19 +478,19 @@ fn run_migrate_to_gateway(
             &gw_str,
             "--l1-gas-price",
             &gas_str,
-            "--vote-preparation-output-path",
+            "--vote-preparation-toml",
             vote_output_rel,
             "--refund-recipient",
             refund_recipient,
         ])
-        .context("migrate-to-gateway migrate")?;
+        .context("gateway migrate submit")?;
 
-    println!("  migrate-to-gateway chain {chain_id}: notify-server");
+    println!("  gateway migrate chain {chain_id}: notify-server");
     contracts_backend
         .protocol_ops(&[
             "chain",
-            "migrate-to-gateway",
-            "--stage",
+            "gateway",
+            "migrate",
             "notify-server",
             "--l1-rpc-url",
             l1_rpc_url,
@@ -531,7 +501,7 @@ fn run_migrate_to_gateway(
             "--chain-id",
             &chain_str,
         ])
-        .context("migrate-to-gateway notify-server")?;
+        .context("gateway migrate notify-server")?;
 
     Ok(())
 }
@@ -569,15 +539,11 @@ fn build_contracts_tool(
     if let Some(toolchain) = integration_tests::server::read_toolchain_from_dir(&tool_dir) {
         build_cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
     }
-    let output = build_cmd
-        .output()
+    let status = build_cmd
+        .status()
         .with_context(|| format!("cargo build {}", tool_subdir))?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cargo build {} failed:\n{}",
-            tool_subdir,
-            String::from_utf8_lossy(&output.stderr)
-        );
+    if !status.success() {
+        anyhow::bail!("cargo build {} failed with status: {}", tool_subdir, status);
     }
     let bin_name = tool_dir.file_name().unwrap().to_string_lossy().to_string();
     let binary = tool_dir
@@ -1288,12 +1254,11 @@ fn run_generation_flow(
     // ----------------------------------------------------------------
     println!("\n=== Converting chain {} to gateway ===", GATEWAY_CHAIN_ID);
 
-    let force_hex = run_forge_dump_force_deployments(contracts_backend, l1_rpc_url, &ctm_proxy)?;
     // Must be /script-out/... — protocol_ops strips the leading "/" and passes
     // the remainder to forge which checks it against fs_permissions (only
     // "script-out" relative to the project root is whitelisted).
     let vote_output_path_rel = "/script-out/gateway_vote_prep_out.toml".to_string();
-    run_forge_deploy_and_set_gateway_transaction_filterer(
+    run_deploy_gateway_transaction_filterer(
         contracts_backend,
         l1_rpc_url,
         &bridgehub,
@@ -1309,7 +1274,7 @@ fn run_generation_flow(
         GATEWAY_CHAIN_ID,
         &governance_addr,
         &stm_tracker,
-        &force_hex,
+        &ctm_proxy,
         &vote_output_path_rel,
     )?;
 
@@ -1321,13 +1286,6 @@ fn run_generation_flow(
     for ops in gw_settling_ops {
         let chain_id = ops.chain_id;
         println!("\n=== Migrating chain {} to gateway ===", chain_id);
-        run_forge_deploy_and_set_gateway_transaction_filterer(
-            contracts_backend,
-            l1_rpc_url,
-            &bridgehub,
-            chain_id,
-            &ops.owner_pk,
-        )?;
         run_migrate_to_gateway(
             contracts_backend,
             l1_rpc_url,
@@ -1344,7 +1302,9 @@ fn run_generation_flow(
         contracts_backend
             .protocol_ops(&[
                 "chain",
-                "finalize-migration-to-gateway",
+                "gateway",
+                "migrate",
+                "finalize",
                 "--bridgehub-proxy-address",
                 &bridgehub,
                 "--chain-id",
@@ -1359,7 +1319,7 @@ fn run_generation_flow(
                 l1_rpc_url,
                 "--private-key",
                 &ops.owner_pk,
-                "--vote-preparation-output-path",
+                "--vote-preparation-toml",
                 &vote_output_path_rel,
                 // No --commit/prove/execute-operator: skip validator enablement for now
                 "--commit-operator",

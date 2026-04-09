@@ -1,5 +1,5 @@
 v31_draft_with_main_server:
-  era_contracts: gateway-commands-in-protocol-ops
+  era_contracts: ../era-contracts
   zksync_os_server: main
   tests:
     - l1_settling_test
