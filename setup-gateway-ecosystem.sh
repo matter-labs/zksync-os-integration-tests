@@ -201,7 +201,7 @@ pcli chain init \
 
 # Deploy the transaction filterer on the gateway chain (required before whitelist grant)
 pcli chain gateway convert deploy-filterer \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --private-key=$ECOSYSTEM_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
@@ -214,7 +214,7 @@ export STM_TRACKER=$(jq -r '.output.deployed_addresses.bridgehub.ctm_deployment_
 
 # Step 6a: Grant whitelist to deployer, governance, and STM tracker
 pcli chain gateway convert grant-whitelist \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --whitelist-grantees=$GOVERNANCE \
     --whitelist-grantees=$DEPLOYER \
@@ -225,7 +225,7 @@ pcli chain gateway convert grant-whitelist \
 # Step 6b: Deploy gateway CTM contracts and prepare governance calls
 # (force deployments data is auto-derived from --ctm-proxy)
 pcli chain gateway convert vote-prepare \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --ctm-representative-chain-id=$GATEWAY_CHAIN_ID \
     --ctm-proxy=$CTM_PROXY \
@@ -238,7 +238,7 @@ pcli chain gateway convert vote-prepare \
 
 # Step 6c: Execute governance calls
 pcli chain gateway convert governance-execute \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --governance-address=$GOVERNANCE \
     --vote-preparation-toml=$VOTE_OUTPUT_PATH \
@@ -247,7 +247,7 @@ pcli chain gateway convert governance-execute \
 
 # Step 6d: Revoke deployer whitelist
 pcli chain gateway convert revoke-whitelist \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --revoke-address=$DEPLOYER \
     --private-key=$ECOSYSTEM_OWNER_PK \
@@ -273,7 +273,7 @@ dcast send $ZK_TOKEN_ADDRESS "mint(address,uint256)" $CHAIN2_ADMIN 1000000000000
 
 # Step 7b: Submit migration transaction (L1 → gateway L2)
 pcli chain gateway migrate submit \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --chain-id=$CHAIN1_CHAIN_ID \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --l1-gas-price=1000000000 \
@@ -284,7 +284,7 @@ pcli chain gateway migrate submit \
 
 # Step 7c: Notify server about migration
 pcli chain gateway migrate notify-server \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --chain-id=$CHAIN1_CHAIN_ID \
     --private-key=$CHAIN1_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL
@@ -295,7 +295,7 @@ pcli chain gateway migrate notify-server \
 
 # Step 8b: Submit migration transaction (L1 → gateway L2)
 pcli chain gateway migrate submit \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --chain-id=$CHAIN2_CHAIN_ID \
     --gateway-chain-id=$GATEWAY_CHAIN_ID \
     --l1-gas-price=1000000000 \
@@ -306,7 +306,7 @@ pcli chain gateway migrate submit \
 
 # Step 8c: Notify server about migration
 pcli chain gateway migrate notify-server \
-    --bridgehub-proxy-address=$BRIDGEHUB \
+    --bridgehub=$BRIDGEHUB \
     --chain-id=$CHAIN2_CHAIN_ID \
     --private-key=$CHAIN2_OWNER_PK \
     --l1-rpc-url=$L1_RPC_URL

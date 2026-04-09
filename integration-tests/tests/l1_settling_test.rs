@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
 use integration_tests::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
-use integration_tests::anvil_utils::fund_account;
 use integration_tests::l1_state::{
     chain_config_path, load_ecosystem, load_wallets, resolve_l1_state,
 };
@@ -26,11 +25,7 @@ async fn run_l1_settling_test() -> Result<()> {
         chain.chain_id, chain.diamond_proxy
     );
 
-    let wallets = load_wallets(&preset)?;
-    let chain_wallets = wallets
-        .chains
-        .get(&chain.name)
-        .ok_or_else(|| anyhow::anyhow!("No wallets for chain '{}'", chain.name))?;
+    let _wallets = load_wallets(&preset)?;
 
     println!("\n=== Loading l1-state.json into Anvil ===");
     let state_path = resolve_l1_state(&preset, &eco)?;
@@ -44,24 +39,6 @@ async fn run_l1_settling_test() -> Result<()> {
         "Chain config not found: {}",
         config_path.display()
     );
-
-    println!("\n=== Funding L1 operators ===");
-    for pk in [
-        &chain_wallets.commit_operator.private_key,
-        &chain_wallets.prove_operator.private_key,
-        &chain_wallets.execute_operator.private_key,
-    ] {
-        let addr = address_from_private_key(pk)?;
-        fund_account(&addr, "100ether", &l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)
-            .with_context(|| format!("fund operator {addr}"))?;
-    }
-    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-    fund_account(
-        &test_address,
-        "10ether",
-        &l1_rpc_url,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-    )?;
 
     println!(
         "\n=== Starting server for L1-settling chain {} ===",
@@ -77,6 +54,7 @@ async fn run_l1_settling_test() -> Result<()> {
     let server_logs = server.logs_path();
     println!("Server ready at {l2_rpc_url}");
 
+    // Submit a deposit and verify the server processes it end-to-end.
     println!("\n=== Funding L2 via deposit ===");
     let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
     fund_l2_via_l1_deposit(

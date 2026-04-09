@@ -5,12 +5,10 @@ use alloy::signers::local::LocalSigner;
 use alloy::sol;
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::anvil_utils::fund_account;
 use integration_tests::l1_state::{
-    chain_config_path, load_ecosystem, load_wallets, resolve_l1_state,
+    chain_config_path, load_ecosystem, resolve_l1_state,
 };
 use integration_tests::presets::load_current_preset;
-use integration_tests::server_utils::address_from_private_key;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -243,31 +241,6 @@ async fn run_interop_message_test() -> Result<()> {
     let l1_rpc_url = anvil.rpc_url().to_string();
     println!("Anvil ready at {l1_rpc_url}");
 
-    // Fund all operators on L1
-    println!("\n=== Funding L1 operators ===");
-    let wallets = load_wallets(&preset)?;
-    for chain_name in [&gw.name, &chain_a.name, &chain_b.name] {
-        let w = wallets
-            .chains
-            .get(chain_name)
-            .ok_or_else(|| anyhow::anyhow!("No wallets for chain '{chain_name}'"))?;
-        for pk in [
-            &w.commit_operator.private_key,
-            &w.prove_operator.private_key,
-            &w.execute_operator.private_key,
-        ] {
-            let addr = address_from_private_key(pk)?;
-            fund_account(&addr, "100ether", &l1_rpc_url, DEFAULT_ANVIL_PRIVATE_KEY)?;
-        }
-    }
-    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-    fund_account(
-        &test_address,
-        "10ether",
-        &l1_rpc_url,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-    )?;
-
     // ---- Start gateway ----
     println!("\n=== Starting gateway server (chain {}) ===", gw.chain_id);
     let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), "interop")
@@ -301,25 +274,9 @@ async fn run_interop_message_test() -> Result<()> {
     let chain_b_l2_rpc = chain_b_server.rpc_url();
     println!("Chain B ready at {chain_b_l2_rpc}");
 
-    // Fund test wallet on chain A via L1 deposit through the Bridgehub.
-    // Even though deposits are paused on the L1 Mailbox, the Bridgehub routes
-    // through the gateway settlement layer (L1→gateway→chain), bypassing the L1 Mailbox.
-    println!("\n=== Funding test wallet on chain A ===");
+    // ---- Send L2→L1 message on chain A ----
     let test_address =
         integration_tests::server_utils::address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-    integration_tests::server_utils::fund_l2_via_l1_deposit(
-        &l1_rpc_url,
-        &chain_a_l2_rpc,
-        &eco.bridgehub,
-        chain_a.chain_id,
-        &test_address,
-        10.0,
-        Duration::from_secs(120),
-        Some(chain_a_server.logs_path().as_path()),
-    )
-    .context("fund chain A test wallet via L1 deposit")?;
-
-    // ---- Send L2→L1 message on chain A ----
     println!("\n=== Sending L2→L1 message on chain A ===");
     let wallet = EthereumWallet::new(
         LocalSigner::from_str(DEFAULT_ANVIL_PRIVATE_KEY).context("parse test private key")?,
@@ -419,20 +376,6 @@ async fn run_interop_message_test() -> Result<()> {
 
     anyhow::ensure!(included, "Message was NOT included in the interop proof");
     println!("\n=== Message verified on chain B ===");
-
-    // Fund test wallet on chain B so traffic txs can pay for gas.
-    println!("\n=== Funding test wallet on chain B ===");
-    integration_tests::server_utils::fund_l2_via_l1_deposit(
-        &l1_rpc_url,
-        &chain_b_l2_rpc,
-        &eco.bridgehub,
-        chain_b.chain_id,
-        &test_address,
-        10.0,
-        Duration::from_secs(120),
-        Some(chain_b_server.logs_path().as_path()),
-    )
-    .context("fund chain B test wallet via L1 deposit")?;
 
     // ---- Verify chain B produces executed batches ----
     println!("\n=== Waiting for chain B progress ===");

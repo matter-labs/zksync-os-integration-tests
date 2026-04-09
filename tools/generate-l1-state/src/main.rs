@@ -293,7 +293,7 @@ fn run_deploy_gateway_transaction_filterer(
             l1_rpc_url,
             "--private-key",
             chain_owner_pk,
-            "--bridgehub-proxy-address",
+            "--bridgehub",
             bridgehub,
             "--gateway-chain-id",
             &chain_id.to_string(),
@@ -337,7 +337,7 @@ fn run_convert_to_gateway(
             l1_rpc_url,
             "--private-key",
             gw_owner_pk,
-            "--bridgehub-proxy-address",
+            "--bridgehub",
             bridgehub,
             "--gateway-chain-id",
             &gw_str,
@@ -361,7 +361,7 @@ fn run_convert_to_gateway(
             l1_rpc_url,
             "--private-key",
             &keys.deployer_pk,
-            "--bridgehub-proxy-address",
+            "--bridgehub",
             bridgehub,
             "--gateway-chain-id",
             &gw_str,
@@ -389,7 +389,7 @@ fn run_convert_to_gateway(
             l1_rpc_url,
             "--private-key",
             &keys.ecosystem_owner_pk,
-            "--bridgehub-proxy-address",
+            "--bridgehub",
             bridgehub,
             "--gateway-chain-id",
             &gw_str,
@@ -411,7 +411,7 @@ fn run_convert_to_gateway(
             l1_rpc_url,
             "--private-key",
             gw_owner_pk,
-            "--bridgehub-proxy-address",
+            "--bridgehub",
             bridgehub,
             "--gateway-chain-id",
             &gw_str,
@@ -451,7 +451,7 @@ fn run_migrate_to_gateway(
                 l1_rpc_url,
                 "--private-key",
                 chain_owner_pk,
-                "--bridgehub-proxy-address",
+                "--bridgehub",
                 bridgehub,
                 "--chain-id",
                 &chain_str,
@@ -470,7 +470,7 @@ fn run_migrate_to_gateway(
             l1_rpc_url,
             "--private-key",
             chain_owner_pk,
-            "--bridgehub-proxy-address",
+            "--bridgehub",
             bridgehub,
             "--chain-id",
             &chain_str,
@@ -496,7 +496,7 @@ fn run_migrate_to_gateway(
             l1_rpc_url,
             "--private-key",
             chain_owner_pk,
-            "--bridgehub-proxy-address",
+            "--bridgehub",
             bridgehub,
             "--chain-id",
             &chain_str,
@@ -1305,7 +1305,7 @@ fn run_generation_flow(
                 "gateway",
                 "migrate",
                 "finalize",
-                "--bridgehub-proxy-address",
+                "--bridgehub",
                 &bridgehub,
                 "--chain-id",
                 &chain_id.to_string(),
@@ -1551,12 +1551,30 @@ fn run_generation_flow(
     }
 
     // ----------------------------------------------------------------
-    // Step 14: L1-settling chains — submit L1 deposit (no server needed)
-    //
-    // Unlike gateway-settling chains, L1-settling chains do not require
-    // a running server during state generation. We only submit an L1->L2
-    // deposit so the priority queue has a transaction ready for the
-    // server when the test starts it later.
+    // Step 14a: Fund test account on gateway-settling chains via L1 deposit.
+    // The gateway is running, so L1→gateway→chain deposits are processed.
+    // ----------------------------------------------------------------
+    {
+        let test_addr = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
+        for ops in gw_settling_ops {
+            let chain_id = ops.chain_id;
+            println!("\n=== Funding test account on gateway-settling chain {chain_id} ===");
+            integration_tests::l1_l2_deposit::submit_l1_to_l2_deposit_to(
+                l1_rpc_url,
+                &bridgehub,
+                chain_id,
+                DEFAULT_ANVIL_PRIVATE_KEY,
+                10.0,
+                Some(&test_addr),
+            )
+            .with_context(|| format!("L1 deposit for gateway-settling chain {chain_id}"))?;
+        }
+    }
+
+    // ----------------------------------------------------------------
+    // Step 14b: L1-settling chains — submit L1 deposit (no server needed).
+    // The server isn't running so the deposit sits in the priority queue
+    // until the test starts the server.
     // ----------------------------------------------------------------
     for ops in l1_settling_ops {
         let chain_id = ops.chain_id;

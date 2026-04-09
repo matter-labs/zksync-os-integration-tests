@@ -538,7 +538,7 @@ fn run_ecosystem_upgrades(
         l1_rpc_url,
         "--private-key",
         deployer_key,
-        "--bridgehub-proxy-address",
+        "--bridgehub",
         bridgehub_proxy_address,
         "--ctm-proxy-address",
         ctm_proxy_address,
