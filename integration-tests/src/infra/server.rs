@@ -4,8 +4,10 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::thread::sleep;
+use std::time::{Duration, Instant};
 
+use anyhow::Context;
 use uuid::Uuid;
 
 use crate::anvil::Anvil;
@@ -13,8 +15,32 @@ use crate::docker::{docker_available, DockerContainer, DockerError};
 use crate::find_ports::pick_unused_port_sync;
 use crate::preset_paths::server_paths_for_preset;
 use crate::presets::{Preset, RepoRef};
-use crate::server_utils::{strip_ansi_escape_codes_in_file, wait_for_chain_to_be_ready};
+use crate::server_utils::{
+    fund_l2_via_l1_deposit_ex, get_total_batches_executed, send_traffic_tx,
+    strip_ansi_escape_codes_in_file, wait_for_chain_to_be_ready,
+};
 use crate::utils::find_project_root;
+
+/// Number of *new* executed batches beyond the current count that
+/// [`Server::wait_for_executed_batches_with_traffic`] waits for.
+const DEFAULT_EXTRA_BATCHES: u64 = 3;
+
+/// Default timeout used by [`Server::wait_for_executed_batches_with_traffic`].
+const DEFAULT_BATCH_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Default L2 balance-poll timeout used by
+/// [`Server::fund_account_via_l1_deposit`].
+const DEFAULT_DEPOSIT_POLL_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Chain base-token mode for [`Server::fund_account_via_l1_deposit`].
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum L1DepositBaseToken {
+    /// Chain's base token is ETH. The deposit is paid via `msg.value`.
+    Eth,
+    /// Chain's base token is a custom ERC-20 that the caller has already
+    /// approved to the bridgehub on L1.
+    PreApprovedCustom,
+}
 
 static TEST_RUN_ID: OnceLock<String> = OnceLock::new();
 const SERVER_READY_MAX_ATTEMPTS: usize = 30;
@@ -58,6 +84,30 @@ pub fn read_toolchain_from_dir(dir: &Path) -> Option<String> {
         let content = fs::read_to_string(&legacy_path).ok()?;
         return content.trim().to_string().into();
     }
+    None
+}
+
+/// On Linux, return the host `uid:gid` so the server container can write to
+/// bind mounts as the host user (otherwise container-root writes leave
+/// root-owned files on the host that the non-root test user cannot clean up).
+///
+/// On macOS, Docker Desktop's file-sharing layer translates container uid to
+/// the host user transparently, so we leave `--user` unset and let the image
+/// default (`app`) apply.
+#[cfg(target_os = "linux")]
+fn host_user_arg() -> Option<String> {
+    let uid = Command::new("id").arg("-u").output().ok()?;
+    let gid = Command::new("id").arg("-g").output().ok()?;
+    let uid = String::from_utf8_lossy(&uid.stdout).trim().to_string();
+    let gid = String::from_utf8_lossy(&gid.stdout).trim().to_string();
+    if uid.is_empty() || gid.is_empty() {
+        return None;
+    }
+    Some(format!("{}:{}", uid, gid))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn host_user_arg() -> Option<String> {
     None
 }
 
@@ -115,6 +165,15 @@ pub struct ServerBuilder {
     chain_name: Option<String>,
     /// Override gateway RPC URL (set via env var at runtime, overrides config YAML value)
     gateway_rpc_url: Option<String>,
+    /// Diamond-proxy address on the settlement layer for this chain. Required by
+    /// [`Server::wait_for_executed_batches_with_traffic`].
+    diamond_proxy_addr: Option<String>,
+    /// Bridgehub proxy address on L1. Required by
+    /// [`Server::fund_account_via_l1_deposit`].
+    bridgehub_addr: Option<String>,
+    /// Chain ID of the chain this server runs. Required by
+    /// [`Server::fund_account_via_l1_deposit`].
+    chain_id: Option<u64>,
     /// When true, do NOT set general_rocks_db_path / sequencer_rocks_db_path env vars.
     /// Required for ephemeral mode configs where the server manages its own tempdir.
     ephemeral: bool,
@@ -135,6 +194,9 @@ impl ServerBuilder {
             logs_dir_override: None,
             chain_name: None,
             gateway_rpc_url: None,
+            diamond_proxy_addr: None,
+            bridgehub_addr: None,
+            chain_id: None,
             ephemeral: false,
         }
     }
@@ -186,6 +248,27 @@ impl ServerBuilder {
         self
     }
 
+    /// Diamond-proxy address on the settlement layer for this chain. Required by
+    /// [`Server::wait_for_executed_batches_with_traffic`].
+    pub fn diamond_proxy_addr(mut self, addr: impl Into<String>) -> Self {
+        self.diamond_proxy_addr = Some(addr.into());
+        self
+    }
+
+    /// Bridgehub proxy address on L1. Required by
+    /// [`Server::fund_account_via_l1_deposit`].
+    pub fn bridgehub_addr(mut self, addr: impl Into<String>) -> Self {
+        self.bridgehub_addr = Some(addr.into());
+        self
+    }
+
+    /// Chain ID of the chain this server runs. Required by
+    /// [`Server::fund_account_via_l1_deposit`].
+    pub fn chain_id(mut self, chain_id: u64) -> Self {
+        self.chain_id = Some(chain_id);
+        self
+    }
+
     /// Spawn the server with the given Anvil L1.
     ///
     /// A config path must be set via `.config_path()` before calling this method.
@@ -202,6 +285,10 @@ impl ServerBuilder {
                 )
             })?;
         let l1_rpc_url = anvil.rpc_url_for(&self.preset.zksync_os_server);
+        // Host-side L1 URL for use from the test harness (cast calls, etc.),
+        // as opposed to `l1_rpc_url` which may be rewritten to
+        // `host.docker.internal` for the server container.
+        let host_l1_rpc_url = anvil.rpc_url().to_string();
         let (server_root, use_local, image) = match &self.preset.zksync_os_server {
             RepoRef::Path(_) => {
                 let paths = server_paths_for_preset(&self.preset).map_err(|e| {
@@ -223,6 +310,7 @@ impl ServerBuilder {
             run_name: self.run_name,
             host_port: self.host_port,
             l1_rpc_url,
+            host_l1_rpc_url,
             local_chains_path,
             config_path,
             image,
@@ -231,6 +319,9 @@ impl ServerBuilder {
             logs_dir: self.logs_dir_override,
             chain_name: self.chain_name,
             gateway_rpc_url: self.gateway_rpc_url,
+            diamond_proxy_addr: self.diamond_proxy_addr,
+            bridgehub_addr: self.bridgehub_addr,
+            chain_id: self.chain_id,
             ephemeral: self.ephemeral,
         };
         Server::spawn_inner(builder, server_root)
@@ -241,7 +332,10 @@ impl ServerBuilder {
 struct InnerServerBuilder {
     run_name: String,
     host_port: Option<u16>,
+    /// L1 URL passed to the server process (may be `host.docker.internal:...` for docker mode).
     l1_rpc_url: String,
+    /// L1 URL usable from the test harness itself (always localhost-side).
+    host_l1_rpc_url: String,
     local_chains_path: PathBuf,
     config_path: String,
     image: String,
@@ -250,6 +344,9 @@ struct InnerServerBuilder {
     logs_dir: Option<PathBuf>,
     chain_name: Option<String>,
     gateway_rpc_url: Option<String>,
+    diamond_proxy_addr: Option<String>,
+    bridgehub_addr: Option<String>,
+    chain_id: Option<u64>,
     ephemeral: bool,
 }
 
@@ -264,6 +361,16 @@ pub struct Server {
     host_port: u16,
     logs_dir: PathBuf,
     run_index: std::cell::Cell<u32>,
+    /// L1 URL as seen from the test harness (localhost-side, not docker-rewritten).
+    host_l1_rpc_url: String,
+    /// Gateway RPC URL if this server was configured to settle via a gateway.
+    gateway_rpc_url: Option<String>,
+    /// Diamond-proxy address on the settlement layer.
+    diamond_proxy_addr: Option<String>,
+    /// Bridgehub proxy address on L1.
+    bridgehub_addr: Option<String>,
+    /// Chain ID of the chain this server runs.
+    chain_id: Option<u64>,
 }
 
 #[derive(Debug)]
@@ -397,9 +504,8 @@ impl Server {
                 cmd.arg("-e")
                     .arg(format!("general_gateway_rpc_url={}", docker_gw_url));
             }
-            // Resolve genesis.json the same way as local mode
-            let genesis_path = config_dir.join("genesis.json");
-            if genesis_path.exists() {
+            // genesis.json must sit next to config.yaml in the same directory.
+            if config_dir.join("genesis.json").exists() {
                 cmd.arg("-e").arg(format!(
                     "genesis_genesis_input_path={}/genesis.json",
                     container_config_dir
@@ -420,7 +526,10 @@ impl Server {
                     e
                 ))
             })?;
-            let container_rocks_path = "/app/rocksdb";
+            // Mount under the image's declared VOLUME /db (owned by app:app),
+            // not /app/rocksdb (under root-owned /app). This lets the container
+            // run as its default non-root `app` user.
+            let container_rocks_path = "/db/rocksdb";
             if builder.ephemeral {
                 // Remap ephemeral_state path: the archive lives in the config
                 // dir on the host, which is mounted at container_config_dir.
@@ -466,11 +575,16 @@ impl Server {
                 .arg(format!("{}:{}", config_dir.display(), container_config_dir))
                 .arg("-v")
                 .arg(format!("{}:{}", rocks_path.display(), container_rocks_path))
+                // Workdir `/` (not `/app`) so the server's relative config
+                // paths (`./db/fri_proofs/`, `./db/block_dumps/`) resolve to
+                // `/db/...` — the image's writable volume — rather than
+                // `/app/db/...` which `app` cannot create under root-owned /app.
                 .arg("--workdir")
-                .arg("/app")
-                .arg("--user")
-                .arg("root")
-                .arg(&builder.image)
+                .arg("/");
+            if let Some(user) = host_user_arg() {
+                cmd.arg("--user").arg(user);
+            }
+            cmd.arg(&builder.image)
                 .arg("--config")
                 .arg(&container_config_path);
 
@@ -526,6 +640,11 @@ impl Server {
             host_port,
             logs_dir,
             run_index: std::cell::Cell::new(1),
+            host_l1_rpc_url: builder.host_l1_rpc_url,
+            gateway_rpc_url: builder.gateway_rpc_url,
+            diamond_proxy_addr: builder.diamond_proxy_addr,
+            bridgehub_addr: builder.bridgehub_addr,
+            chain_id: builder.chain_id,
         })
     }
 
@@ -542,6 +661,138 @@ impl Server {
     /// Get the L2 RPC URL
     pub fn rpc_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.host_port)
+    }
+
+    /// Settlement-layer RPC URL: the gateway's L2 RPC when this server was
+    /// configured to settle through a gateway, otherwise the L1 (Anvil) URL.
+    pub fn settlement_rpc_url(&self) -> &str {
+        self.gateway_rpc_url
+            .as_deref()
+            .unwrap_or(self.host_l1_rpc_url.as_str())
+    }
+
+    /// Send a tiny self-driven L2 transaction (1 wei to `0x...01`) to nudge
+    /// the server's batch builder. Signed by Anvil's default pre-funded
+    /// account.
+    pub fn send_traffic_tx(&self) -> anyhow::Result<()> {
+        send_traffic_tx(&self.rpc_url(), crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY)
+    }
+
+    /// Fund `recipient` on this server's L2 via a Bridgehub L1→L2 deposit of
+    /// `amount` units of the chain's base token, then poll L2 until the
+    /// recipient's balance strictly increases.
+    ///
+    /// Uses Anvil's default pre-funded account as the L1 signer and
+    /// [`DEFAULT_DEPOSIT_POLL_TIMEOUT`] for the balance-poll. When
+    /// `base_token == L1DepositBaseToken::PreApprovedCustom`, the caller must
+    /// have already approved the base token to the bridgehub.
+    ///
+    /// Requires [`ServerBuilder::bridgehub_addr`] and
+    /// [`ServerBuilder::chain_id`] to have been set at build time.
+    pub async fn fund_account_via_l1_deposit(
+        &self,
+        recipient: &str,
+        amount: f64,
+        base_token: L1DepositBaseToken,
+    ) -> anyhow::Result<u128> {
+        let bridgehub_addr = self.bridgehub_addr.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Server::fund_account_via_l1_deposit requires \
+                 ServerBuilder::bridgehub_addr to be set"
+            )
+        })?;
+        let chain_id = self.chain_id.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Server::fund_account_via_l1_deposit requires \
+                 ServerBuilder::chain_id to be set"
+            )
+        })?;
+        let logs_path = self.logs_path();
+        // Flush docker logs to host before the deposit so the diagnostic
+        // reader can find the file if the server crashes mid-operation.
+        let _ = self.save_logs();
+        fund_l2_via_l1_deposit_ex(
+            &self.host_l1_rpc_url,
+            &self.rpc_url(),
+            bridgehub_addr,
+            chain_id,
+            recipient,
+            amount,
+            DEFAULT_DEPOSIT_POLL_TIMEOUT,
+            Some(logs_path.as_path()),
+            matches!(base_token, L1DepositBaseToken::Eth),
+        )
+        .await
+    }
+
+    /// Drive L2 traffic on this server until [`DEFAULT_EXTRA_BATCHES`] more
+    /// batches have been executed on the settlement-layer diamond proxy.
+    ///
+    /// The traffic is intentional, not a workaround for idle batch sealing:
+    /// closing batches that actually contain transactions doubles as an
+    /// end-to-end sanity check that the commit → prove → execute pipeline
+    /// still works. Empty-batch behavior isn't what these tests want to
+    /// exercise.
+    ///
+    /// Uses [`DEFAULT_BATCH_WAIT_TIMEOUT`] and Anvil's default pre-funded
+    /// account as the traffic signer. Requires
+    /// [`ServerBuilder::diamond_proxy_addr`] to have been set at build time.
+    pub fn wait_for_executed_batches_with_traffic(&self) -> anyhow::Result<u64> {
+        let diamond_proxy_addr = self.diamond_proxy_addr.as_deref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "Server::wait_for_executed_batches_with_traffic requires \
+                 ServerBuilder::diamond_proxy_addr to be set"
+            )
+        })?;
+        let settlement_rpc_url = self.settlement_rpc_url();
+
+        let start_executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)
+            .context("Failed to read initial getTotalBatchesExecuted")?;
+        let target = start_executed + DEFAULT_EXTRA_BATCHES;
+        println!(
+            "Waiting for {} more executed batches (current={}, target={})",
+            DEFAULT_EXTRA_BATCHES, start_executed, target
+        );
+
+        let start = Instant::now();
+        let mut tx_count = 0u64;
+        let mut next_progress_at = start + Duration::from_secs(5);
+
+        loop {
+            let executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)
+                .context("Failed to read getTotalBatchesExecuted")?;
+
+            let now = Instant::now();
+            if now >= next_progress_at {
+                println!(
+                    "Progress: executed_batches={}, sent_txs={}",
+                    executed, tx_count
+                );
+                next_progress_at = now + Duration::from_secs(5);
+            }
+
+            if executed >= target {
+                println!(
+                    "Reached executed batches target: {} (sent {} txs)",
+                    executed, tx_count
+                );
+                return Ok(executed);
+            }
+
+            if start.elapsed() >= DEFAULT_BATCH_WAIT_TIMEOUT {
+                anyhow::bail!(
+                    "Timed out waiting for executed batches. target={}, current={}, sent_txs={}",
+                    target,
+                    executed,
+                    tx_count
+                );
+            }
+
+            self.send_traffic_tx()
+                .with_context(|| format!("Failed to send traffic tx #{}", tx_count + 1))?;
+            tx_count += 1;
+            sleep(Duration::from_secs(3));
+        }
     }
 
     /// Check if the server is running
@@ -722,20 +973,15 @@ impl LocalServerRuntime {
         })?;
 
         let mut cmd = Command::new(&self.binary_path);
-        // Resolve genesis.json path relative to the config file:
-        //   - local-chains/<ver>/default/config.yaml  →  parent/parent/genesis.json
-        //   - <state_dir>/chain_<id>.yaml             →  parent/genesis.json
+        // genesis.json must sit next to the config file.
         let config_as_path = std::path::Path::new(&self.config_path);
         let genesis_path = config_as_path.parent().and_then(|dir| {
-            // Try sibling genesis.json first (flat layout: chain_*.yaml + genesis.json)
             let sibling = dir.join("genesis.json");
             if sibling.exists() {
-                return Some(sibling);
+                Some(sibling)
+            } else {
+                None
             }
-            // Try grandparent (nested layout: default/config.yaml → ../../genesis.json)
-            dir.parent()
-                .map(|gp| gp.join("genesis.json"))
-                .filter(|p| p.exists())
         });
 
         cmd.arg("--config")

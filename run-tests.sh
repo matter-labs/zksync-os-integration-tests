@@ -93,6 +93,27 @@ if [[ -n "$FILTER_PRESET" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Clean up stragglers from any previous run before we start.
+#
+# If a previous invocation crashed (test panic, CI SIGKILL, ctrl-C between
+# presets), child zksync-os-server / anvil processes and their Docker
+# containers can survive. They don't clash on ports (we pick random unused
+# ports) but they:
+#   - hold open file descriptors on RocksDB LOCK files, so the next
+#     `rm -rf test-run-logs/.../db_*` below "succeeds" but the directory
+#     stays on disk via the leaked fd, and the next server spawns against
+#     a phantom-empty DB that the old process is still writing into
+#     (corrupt state, server-unable-to-connect symptoms on the next run).
+#   - accumulate and eat memory/CPU on CI boxes.
+# ---------------------------------------------------------------------------
+pkill -f 'target/(release|debug)/zksync-os-server' 2>/dev/null || true
+pkill -f 'anvil.*--(load|dump)-state'             2>/dev/null || true
+if command -v docker >/dev/null 2>&1; then
+  docker ps -aq --filter "name=integration-tests-zksync-os-server-" \
+    | xargs -r docker rm -f >/dev/null 2>&1 || true
+fi
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 total_pass=0

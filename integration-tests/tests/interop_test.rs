@@ -269,6 +269,7 @@ async fn run_interop_message_test() -> Result<()> {
         .chain_name(&chain_b.name)
         .config_path(&chain_b_config)
         .gateway_rpc_url(&gw_l2_rpc)
+        .diamond_proxy_addr(&chain_b.diamond_proxy)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start chain B server: {:?}", e))?;
     let chain_b_l2_rpc = chain_b_server.rpc_url();
@@ -379,15 +380,9 @@ async fn run_interop_message_test() -> Result<()> {
 
     // ---- Verify chain B produces executed batches ----
     println!("\n=== Waiting for chain B progress ===");
-    integration_tests::server_utils::wait_for_executed_batches_with_traffic(
-        &chain_b_l2_rpc,
-        &gw_l2_rpc,
-        &chain_b.diamond_proxy,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-        3,
-        Duration::from_secs(180),
-    )
-    .context("chain B progress")?;
+    chain_b_server
+        .wait_for_executed_batches_with_traffic()
+        .context("chain B progress")?;
 
     // ---- Cleanup ----
     let _ = chain_b_server.kill();

@@ -1,15 +1,10 @@
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
 use integration_tests::l1_state::{
     chain_config_path, load_ecosystem, load_wallets, resolve_l1_state,
 };
 use integration_tests::presets::load_current_preset;
 use integration_tests::server::ServerBuilder;
-use integration_tests::server_utils::{
-    address_from_private_key, fund_l2_via_l1_deposit, wait_for_executed_batches_with_traffic,
-};
-use std::time::Duration;
 
 async fn run_l1_settling_test() -> Result<()> {
     let preset = load_current_preset()?;
@@ -44,41 +39,23 @@ async fn run_l1_settling_test() -> Result<()> {
         "\n=== Starting server for L1-settling chain {} ===",
         chain.chain_id
     );
+    // `generate-l1-state` pre-queued an L1→L2 deposit for
+    // DEFAULT_ANVIL_PRIVATE_KEY; the server processes it as it spins up,
+    // so we do not need a test-side `fund_account_via_l1_deposit` here.
     let server = ServerBuilder::new(preset, "l1_settling")
         .chain_name(&chain.name)
         .config_path(&config_path)
+        .diamond_proxy_addr(&chain.diamond_proxy)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server: {:?}", e))?;
 
     let l2_rpc_url = server.rpc_url();
-    let server_logs = server.logs_path();
     println!("Server ready at {l2_rpc_url}");
 
-    // Submit a deposit and verify the server processes it end-to-end.
-    println!("\n=== Funding L2 via deposit ===");
-    let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-    fund_l2_via_l1_deposit(
-        &l1_rpc_url,
-        &l2_rpc_url,
-        &eco.bridgehub,
-        chain.chain_id,
-        &test_address,
-        0.1,
-        Duration::from_secs(120),
-        Some(server_logs.as_path()),
-    )
-    .context("fund L2 via deposit")?;
-
     println!("\n=== Waiting for executed batches ===");
-    let executed = wait_for_executed_batches_with_traffic(
-        &l2_rpc_url,
-        &l1_rpc_url,
-        &chain.diamond_proxy,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-        3,
-        Duration::from_secs(180),
-    )
-    .context("wait for executed batches")?;
+    let executed = server
+        .wait_for_executed_batches_with_traffic()
+        .context("wait for executed batches")?;
 
     println!(
         "\n=== L1-settling chain {} reached {} executed batches ===",

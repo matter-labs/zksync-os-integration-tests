@@ -242,13 +242,54 @@ test-run-logs/
 
 The `run-tests.sh` orchestrator cleans stale logs between presets (except `contracts_artifacts/` which is preserved due to a macOS Docker/VirtioFS bind-mount limitation).
 
+## Troubleshooting
+
+### "Server unable to connect" on a second run (but the first passed)
+
+Symptom: first `./run-tests.sh` passes cleanly; the next one fails with the server failing to reach L1 or timing out. Almost always one of:
+
+- **Leftover processes from the previous run** holding RocksDB `LOCK` fds. `rm -rf test-run-logs/` deletes the directory entry but a dead `zksync-os-server` still writing through the inode corrupts the next run's state. Fix: `./run-tests.sh` now runs a `pkill` + `docker rm -f` preamble; if you still see it, check `ps -ef | grep -E 'zksync-os-server|anvil'` and `docker ps -a --filter name=integration-tests-zksync-os-server-`.
+- **`localhost` resolving to IPv6 (`::1`) on Linux** while anvil listens on IPv4 (`0.0.0.0`). All internal URLs now use `127.0.0.1` explicitly; if you see this after pulling, check for a stray `localhost` in your preset or test code.
+
+### "No image found for SHA …" or preset resolution walks back many commits
+
+Preset resolution falls back up to 10 ancestor commits if the tip of the branch has no published Docker image. When this happens you'll see a warning in the run output (`⚠ era_contracts: tip of 'main' is <sha> but no image was published; using ancestor <sha> instead`). The exact SHAs actually used land in `test-run-logs/resolved-refs.json`:
+
+```bash
+cat test-run-logs/resolved-refs.json
+```
+
+If a CI run disagrees with your local run, compare these two files — the most common cause of "works for me" is that the branch tip advanced between the two runs.
+
+### Docker backend quirks
+
+- **Docker Desktop (macOS/Windows)** is the developed-against backend. Generation and tests should work out of the box.
+- **Native Linux Docker** ≥ 20.10 is required for `--add-host host.docker.internal:host-gateway`. If containers can't reach host anvil, probe with:
+  ```bash
+  docker run --rm --add-host host.docker.internal:host-gateway alpine getent hosts host.docker.internal
+  ```
+  Empty output means your Docker is too old.
+- **`contracts_artifacts/` is intentionally preserved** across preset cleanups (there's a macOS Docker/VirtioFS bind-mount bug where the host can't see sub-directories created inside the container). Do not add `contracts_artifacts` to cleanup scripts.
+
+### Full reset
+
+If state is ambiguous and you just want a clean slate:
+
+```bash
+pkill -f 'target/(release|debug)/zksync-os-server' 2>/dev/null || true
+pkill -f 'anvil.*--(load|dump)-state'             2>/dev/null || true
+docker ps -aq --filter "name=integration-tests-zksync-os-server-" | xargs -r docker rm -f
+rm -rf test-run-logs l1-state-cache
+./run-tests.sh --rebuild-cache
+```
+
 ## Project structure
 
 ```
 .
 ├── presets.yaml                  # Preset definitions
 ├── run-tests.sh                  # Main test orchestrator
-├── protocol-ops.sh               # Docker wrapper for protocol-ops CLI
+├── protocol-ops.sh               # Local-debugging wrapper: `docker run protocol-ops …`
 ├── integration-tests/            # Rust crate: test infra + test files
 │   ├── src/
 │   │   ├── presets.rs            # Preset loading and resolution

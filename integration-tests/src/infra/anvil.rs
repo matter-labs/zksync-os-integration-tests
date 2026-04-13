@@ -79,7 +79,7 @@ impl Anvil {
             _provider: Box::new(()),
             _locked_port: None,
             port,
-            rpc_url: format!("http://localhost:{}", port),
+            rpc_url: format!("http://127.0.0.1:{}", port),
         }
     }
 
@@ -97,7 +97,7 @@ impl Anvil {
             .await
             .context("Failed to acquire unused port for anvil")?;
         let port = locked_port.port;
-        let rpc_url = format!("http://localhost:{}", port);
+        let rpc_url = format!("http://127.0.0.1:{}", port);
 
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
             anvil
@@ -108,6 +108,12 @@ impl Anvil {
                 .arg("--load-state")
                 .arg(&state_str)
                 .arg("--disable-block-gas-limit")
+                // Mine a block every second even when idle. Anvil's default
+                // is tx-triggered mining only, which starves the server's
+                // L1 watcher (`confirmations: 2` by default) of the
+                // `tip - 2` block range it scans — single L1→L2 deposits
+                // sit invisible to the watcher for the entire test window.
+                .block_time(1)
         });
 
         let provider: Box<dyn std::any::Any + Send + Sync> = Box::new(provider);
@@ -136,7 +142,7 @@ impl Anvil {
             state_path.display()
         );
         let state_str = state_path.to_string_lossy().to_string();
-        let rpc_url = format!("http://localhost:{}", port);
+        let rpc_url = format!("http://127.0.0.1:{}", port);
 
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
             anvil
@@ -146,6 +152,7 @@ impl Anvil {
                 .arg("0.0.0.0")
                 .arg("--load-state")
                 .arg(&state_str)
+                .block_time(1)
         });
 
         let provider: Box<dyn std::any::Any + Send + Sync> = Box::new(provider);
@@ -166,7 +173,7 @@ impl Anvil {
             .context("Failed to acquire unused port for anvil")?;
         let port = locked_port.port;
 
-        let rpc_url = format!("http://localhost:{}", port);
+        let rpc_url = format!("http://127.0.0.1:{}", port);
 
         let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
             anvil
@@ -174,6 +181,7 @@ impl Anvil {
                 .chain_id(L1_CHAIN_ID)
                 .arg("--host")
                 .arg("0.0.0.0")
+                .block_time(1)
         });
 
         let provider: Box<dyn std::any::Any + Send + Sync> = Box::new(provider);

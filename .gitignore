@@ -12,11 +12,12 @@ test-run-logs
 local-chains/*/l1-state.json
 local-chains/*/l1-state.json.sha256
 
+# Server config.yaml generated at runtime by the upgrade test via
+# ServerConfigBuilder (same builder generate-l1-state uses for fresh chains)
+local-chains/*/*/config.yaml
+
 # Generated l1-state cache
 l1-state-cache/
-
-# Protocol ops workdir for gateway setup script
-protocol-ops-workdir/
 
 # Local preset overrides
 local_presets.yaml

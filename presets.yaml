@@ -5,3 +5,9 @@ v31_draft_with_main_server:
     - l1_settling_test
     - gateway_settling_test
     - interop_test
+
+v30_to_v31_upgrade:
+  era_contracts: gateway-commands-in-protocol-ops
+  zksync_os_server: main
+  tests:
+    - upgrade_v30_to_v31

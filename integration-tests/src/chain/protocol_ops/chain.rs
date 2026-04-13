@@ -41,6 +41,25 @@ impl<'a> ChainSetUpgradeTimestamp<'a> {
         self
     }
 
+    /// Required by current `protocol_ops chain set-upgrade-timestamp`. For
+    /// chains that don't have one (e.g. the v30.2 fixture), pass the zero
+    /// address — the `access_control_restriction_addr` field in
+    /// `contracts.yaml` already reflects that.
+    pub fn access_control_restriction(mut self, v: impl AsRef<str>) -> Self {
+        self.argv.push("--access-control-restriction".to_string());
+        self.argv.push(v.as_ref().to_string());
+        self
+    }
+
+    /// Required by current `protocol_ops chain set-upgrade-timestamp` even
+    /// in `--simulate` mode. Typically the chain admin's owner (governor)
+    /// private key — the same one that later signs the execute step.
+    pub fn private_key(mut self, v: impl AsRef<str>) -> Self {
+        self.argv.push("--private-key".to_string());
+        self.argv.push(v.as_ref().to_string());
+        self
+    }
+
     pub fn build(self) -> anyhow::Result<ProtocolOpsTransactions<'a>> {
         let out_arg = self
             .ops

@@ -78,7 +78,7 @@ alloy::sol! {
 ///
 /// Uses the given `private_key` as the L1 signer. If `l2_recipient` is `None`,
 /// the deposit goes to the L1 signer's own address.
-pub fn submit_l1_to_l2_deposit_to(
+pub async fn submit_l1_to_l2_deposit_to(
     l1_rpc_url: &str,
     bridgehub_addr: &str,
     chain_id: u64,
@@ -95,48 +95,7 @@ pub fn submit_l1_to_l2_deposit_to(
         l2_recipient,
         true,
     )
-}
-
-/// Like [`submit_l1_to_l2_deposit_to`] but allows specifying whether the
-/// chain's base token is ETH.  When `base_token_is_eth` is `false` the
-/// caller must have already approved the base token to the bridgehub for at
-/// least `amount + l2TransactionBaseCost`.  The transaction will be sent
-/// with `msg.value = 0`.
-pub fn submit_l1_to_l2_deposit_ex(
-    l1_rpc_url: &str,
-    bridgehub_addr: &str,
-    chain_id: u64,
-    private_key: &str,
-    amount_ether: f64,
-    l2_recipient: Option<&str>,
-    base_token_is_eth: bool,
-) -> Result<()> {
-    let l1_rpc_url = l1_rpc_url.to_string();
-    let bridgehub_addr = bridgehub_addr.to_string();
-    let private_key = private_key.to_string();
-    let l2_recipient = l2_recipient.map(|s| s.to_string());
-    match std::thread::Builder::new()
-        .name("l1-l2-deposit".into())
-        .spawn(move || {
-            tokio::runtime::Runtime::new()
-                .context("tokio::runtime::Runtime::new")?
-                .block_on(submit_l1_to_l2_deposit_via_bridgehub_inner(
-                    l1_rpc_url.as_str(),
-                    bridgehub_addr.as_str(),
-                    chain_id,
-                    private_key.as_str(),
-                    amount_ether,
-                    l2_recipient.as_deref(),
-                    base_token_is_eth,
-                ))
-        })
-        .map_err(|e| anyhow::anyhow!("spawn l1-l2-deposit thread: {e}"))?
-        .join()
-    {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(e)) => Err(e),
-        Err(_) => anyhow::bail!("l1-l2-deposit thread panicked"),
-    }
+    .await
 }
 
 fn deposit_eip1559_estimator(base_fee_per_gas: u128, _rewards: &[Vec<u128>]) -> Eip1559Estimation {
@@ -146,7 +105,12 @@ fn deposit_eip1559_estimator(base_fee_per_gas: u128, _rewards: &[Vec<u128>]) -> 
     }
 }
 
-async fn submit_l1_to_l2_deposit_via_bridgehub_inner(
+/// Like [`submit_l1_to_l2_deposit_to`] but allows specifying whether the
+/// chain's base token is ETH.  When `base_token_is_eth` is `false` the
+/// caller must have already approved the base token to the bridgehub for at
+/// least `amount + l2TransactionBaseCost`.  The transaction will be sent
+/// with `msg.value = 0`.
+pub async fn submit_l1_to_l2_deposit_ex(
     l1_rpc_url: &str,
     bridgehub_addr: &str,
     chain_id: u64,
@@ -215,15 +179,20 @@ async fn submit_l1_to_l2_deposit_via_bridgehub_inner(
     } else {
         U256::ZERO
     };
-    let l1_deposit_request = bridgehub
+    // Use the contract call builder's `.send()` directly (not
+    // `.into_transaction_request()` + `provider.send_transaction`): the
+    // latter path drops the configured wallet's `from` address, and alloy
+    // falls back to `eth_accounts[0]` on the node. On some anvil states
+    // (e.g. the committed v30.2 dump under `local-chains/`) that is a
+    // different account than our wallet, so the L1 tx succeeds under the
+    // wrong sender and the L2 priority tx is credited to the wrong account.
+    let l1_deposit_receipt = bridgehub
         .requestL2TransactionDirect(request)
         .value(msg_value)
         .max_fee_per_gas(max_fee_per_gas)
         .max_priority_fee_per_gas(max_priority_fee_per_gas)
-        .into_transaction_request();
-
-    let l1_deposit_receipt = l1_provider
-        .send_transaction(l1_deposit_request)
+        .from(sender)
+        .send()
         .await
         .map_err(|e| anyhow::anyhow!("send L1 Bridgehub deposit tx: {e}"))?
         .get_receipt()

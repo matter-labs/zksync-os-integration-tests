@@ -1,13 +1,10 @@
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
 use integration_tests::l1_state::{
     chain_config_path, load_ecosystem, load_wallets, resolve_l1_state,
 };
 use integration_tests::presets::load_current_preset;
 use integration_tests::server::ServerBuilder;
-use integration_tests::server_utils::wait_for_executed_batches_with_traffic;
-use std::time::Duration;
 
 async fn run_gateway_settling_test() -> Result<()> {
     let preset = load_current_preset()?;
@@ -71,6 +68,7 @@ async fn run_gateway_settling_test() -> Result<()> {
         .chain_name(&chain.name)
         .config_path(&chain_config)
         .gateway_rpc_url(&gw_l2_rpc)
+        .diamond_proxy_addr(&chain.diamond_proxy)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start chain server: {:?}", e))?;
     let chain_l2_rpc = chain_server.rpc_url();
@@ -78,15 +76,9 @@ async fn run_gateway_settling_test() -> Result<()> {
 
     // Verify the chain produces and settles batches end-to-end.
     println!("\n=== Waiting for executed batches on gateway-settling chain ===");
-    wait_for_executed_batches_with_traffic(
-        &chain_l2_rpc,
-        &gw_l2_rpc,
-        &chain.diamond_proxy,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-        3,
-        Duration::from_secs(180),
-    )
-    .context("gateway-settling chain batches")?;
+    chain_server
+        .wait_for_executed_batches_with_traffic()
+        .context("gateway-settling chain batches")?;
 
     chain_server
         .kill()

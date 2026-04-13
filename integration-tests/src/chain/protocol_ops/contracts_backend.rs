@@ -174,6 +174,55 @@ impl EraContractsBackend {
         }
     }
 
+    /// Write a file relative to the era-contracts repo root. Parent
+    /// directories are created if missing.
+    ///
+    /// - Local: `fs::write({era_path}/{relative}, contents)`
+    /// - Docker: writes through the mounted work_dir, then `mv` inside the
+    ///   container into `/contracts/{relative}` (avoids `docker cp` stdin
+    ///   plumbing and host-side temp file handling).
+    pub fn write_repo_file(&self, relative: &str, contents: &str) -> Result<()> {
+        match self {
+            EraContractsBackend::Local { era_path, .. } => {
+                let path = era_path.join(relative);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent)
+                        .with_context(|| format!("create {}", parent.display()))?;
+                }
+                fs::write(&path, contents).with_context(|| format!("write {}", path.display()))
+            }
+            EraContractsBackend::Docker { session, work_dir } => {
+                let tempfile_name =
+                    format!(".write_repo_{}.tmp", uuid::Uuid::new_v4().simple());
+                let host_tempfile = work_dir.join(&tempfile_name);
+                fs::write(&host_tempfile, contents)
+                    .with_context(|| format!("write temp {}", host_tempfile.display()))?;
+
+                let container_target = format!("/contracts/{}", relative);
+                let container_tempfile =
+                    format!("{}/{}", session.container_work_dir(), tempfile_name);
+
+                let result: Result<()> = (|| {
+                    if let Some(parent) = Path::new(&container_target).parent() {
+                        let parent_str = parent.to_string_lossy().to_string();
+                        session
+                            .exec(&["mkdir", "-p", &parent_str], &[], None)
+                            .with_context(|| format!("mkdir -p {parent_str} in container"))?;
+                    }
+                    session
+                        .exec(&["mv", &container_tempfile, &container_target], &[], None)
+                        .with_context(|| {
+                            format!("mv {container_tempfile} -> {container_target}")
+                        })?;
+                    Ok(())
+                })();
+
+                let _ = fs::remove_file(&host_tempfile);
+                result
+            }
+        }
+    }
+
     /// Return the local era-contracts path, if this is a local backend.
     pub fn era_path(&self) -> Option<&Path> {
         match self {
@@ -321,7 +370,8 @@ impl EraContractsBackend {
     }
 
     /// Execute transactions from a protocol-ops `--out` file by calling
-    /// `protocol_ops chain execute-simulated-transactions`.
+    /// `protocol_ops dev execute-transactions`. Renamed from
+    /// `chain execute-simulated-transactions` upstream.
     ///
     /// `out_relative` is a filename or relative path within the work directory
     /// (e.g. `"no_governance_prepare_out.json"`).
@@ -333,8 +383,8 @@ impl EraContractsBackend {
     ) -> Result<()> {
         let out_arg = self.work_path(out_relative);
         self.protocol_ops(&[
-            "chain",
-            "execute-simulated-transactions",
+            "dev",
+            "execute-transactions",
             "--out",
             &out_arg,
             "--l1-rpc-url",

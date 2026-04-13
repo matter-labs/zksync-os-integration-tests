@@ -208,58 +208,10 @@ pub fn strip_ansi_escape_sequences(input: &str) -> String {
     out
 }
 
-/// Send L2 transactions every 3 seconds and poll L1 until at least `min_batches`
-/// are executed on the chain contract.
-pub fn wait_for_executed_batches_with_traffic(
-    l2_rpc_url: &str,
-    settlement_rpc_url: &str,
-    diamond_proxy_addr: &str,
-    sender_private_key: &str,
-    min_batches: u64,
-    timeout: Duration,
-) -> Result<u64> {
-    let start = Instant::now();
-    let mut tx_count = 0u64;
-    let mut next_progress_at = start + Duration::from_secs(5);
-
-    loop {
-        let executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)
-            .context("Failed to read getTotalBatchesExecuted")?;
-
-        let now = Instant::now();
-        if now >= next_progress_at {
-            println!(
-                "Progress: executed_batches={}, sent_txs={}",
-                executed, tx_count
-            );
-            next_progress_at = now + Duration::from_secs(5);
-        }
-
-        if executed >= min_batches {
-            println!(
-                "Reached executed batches target: {} (sent {} txs)",
-                executed, tx_count
-            );
-            return Ok(executed);
-        }
-
-        if start.elapsed() >= timeout {
-            anyhow::bail!(
-                "Timed out waiting for executed batches. target={}, current={}, sent_txs={}",
-                min_batches,
-                executed,
-                tx_count
-            );
-        }
-
-        send_traffic_tx(l2_rpc_url, sender_private_key)
-            .with_context(|| format!("Failed to send traffic tx #{}", tx_count + 1))?;
-        tx_count += 1;
-        sleep(Duration::from_secs(3));
-    }
-}
-
-fn send_traffic_tx(l2_rpc_url: &str, sender_private_key: &str) -> Result<()> {
+/// Send a tiny self-driven L2 transaction (1 wei to `0x...01`) to nudge the
+/// server's batch builder. Internal implementation for
+/// [`crate::server::Server::send_traffic_tx`].
+pub(crate) fn send_traffic_tx(l2_rpc_url: &str, sender_private_key: &str) -> Result<()> {
     let output = Command::new("cast")
         .args([
             "send",
@@ -340,7 +292,10 @@ fn find_latest_server_log_path() -> Result<Option<std::path::PathBuf>> {
     Ok(best.map(|(_, path)| path))
 }
 
-fn get_total_batches_executed(l1_rpc_url: &str, diamond_proxy_addr: &str) -> Result<u64> {
+pub(crate) fn get_total_batches_executed(
+    l1_rpc_url: &str,
+    diamond_proxy_addr: &str,
+) -> Result<u64> {
     let output = Command::new("cast")
         .args([
             "call",
@@ -365,56 +320,6 @@ fn get_total_batches_executed(l1_rpc_url: &str, diamond_proxy_addr: &str) -> Res
         .with_context(|| format!("Unable to parse getTotalBatchesExecuted output: '{}'", raw))
 }
 
-fn get_total_batches_committed(l1_rpc_url: &str, diamond_proxy_addr: &str) -> Result<u64> {
-    let output = Command::new("cast")
-        .args([
-            "call",
-            diamond_proxy_addr,
-            "getTotalBatchesCommitted()(uint256)",
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .output()
-        .context("Failed to execute cast call for getTotalBatchesCommitted")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "cast call failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    parse_u64_value(&raw)
-        .with_context(|| format!("Unable to parse getTotalBatchesCommitted output: '{}'", raw))
-}
-
-/// Wait until L1 shows no in-flight batches (`getTotalBatchesCommitted == getTotalBatchesExecuted`).
-pub fn wait_for_l1_committed_equals_executed(
-    l1_rpc_url: &str,
-    diamond_proxy_addr: &str,
-    timeout: Duration,
-) -> Result<()> {
-    let start = Instant::now();
-    loop {
-        let committed = get_total_batches_committed(l1_rpc_url, diamond_proxy_addr)
-            .context("getTotalBatchesCommitted")?;
-        let executed = get_total_batches_executed(l1_rpc_url, diamond_proxy_addr)
-            .context("getTotalBatchesExecuted")?;
-        if committed == executed {
-            println!("L1 batch counters idle: committed={committed} executed={executed}");
-            return Ok(());
-        }
-        if start.elapsed() >= timeout {
-            anyhow::bail!(
-                "Timeout waiting for committed==executed (committed={committed} executed={executed})"
-            );
-        }
-        sleep(Duration::from_millis(400));
-    }
-}
-
 fn parse_u64_value(raw: &str) -> Result<u64> {
     if let Some(hex) = raw.strip_prefix("0x") {
         return u64::from_str_radix(hex, 16).context("Invalid hex value");
@@ -428,25 +333,6 @@ pub fn address_from_private_key(private_key: &str) -> Result<String> {
     let key = private_key.strip_prefix("0x").unwrap_or(private_key);
     let signer: PrivateKeySigner = key.parse().context("Invalid private key")?;
     Ok(format!("{:?}", signer.address()))
-}
-
-/// Return L2 native balance in wei via `cast balance` (fails on RPC errors; no retries).
-pub fn get_l2_balance(address: &str, l2_rpc_url: &str) -> Result<u128> {
-    let output = Command::new("cast")
-        .args(["balance", address, "--rpc-url", l2_rpc_url])
-        .output()
-        .context("Failed to run cast balance")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "cast balance failed:\nSTDERR:\n{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if let Some(hex) = raw.strip_prefix("0x") {
-        return u128::from_str_radix(hex, 16).context("Invalid hex balance");
-    }
-    raw.parse::<u128>().context("Invalid decimal balance")
 }
 
 fn cast_balance_transient(stderr: &str) -> bool {
@@ -479,44 +365,18 @@ fn poll_l2_balance_once(address: &str, l2_rpc_url: &str) -> Result<Option<u128>>
     Ok(Some(balance))
 }
 
-/// Submit a Bridgehub L1→L2 deposit (in-process; does not use zksync-os-server tooling),
-/// then poll L2 until `test_address` has balance > 0. Caller must fund the deposit signer on L1 first.
+/// Submit a Bridgehub L1→L2 deposit and poll L2 until `l2_recipient`'s
+/// balance strictly increases. Internal implementation for
+/// [`crate::server::Server::fund_account_via_l1_deposit`].
 ///
-/// When `server_logs_path` is set (or discoverable under `test-run-logs/`), RPC failures and
-/// balance poll timeouts print a server log excerpt so crashes match `upgrade-tests` / traffic diagnostics.
-/// Fund an L2 address via L1→L2 deposit through the Bridgehub.
+/// When `base_token_is_eth = false`, the caller must have pre-approved the
+/// base token to the bridgehub.
 ///
-/// Uses Anvil's default pre-funded account as the L1 signer to avoid nonce
-/// conflicts with operator keys that the server may be using concurrently.
+/// When `server_logs_path` is set (or discoverable under `test-run-logs/`),
+/// RPC failures and balance poll timeouts print a server log excerpt so
+/// crashes match `upgrade-tests` / traffic diagnostics.
 #[allow(clippy::too_many_arguments)]
-pub fn fund_l2_via_l1_deposit(
-    l1_rpc_url: &str,
-    l2_rpc_url: &str,
-    bridgehub_addr: &str,
-    chain_id: u64,
-    l2_recipient: &str,
-    amount_ether: f64,
-    balance_poll_timeout: Duration,
-    server_logs_path: Option<&Path>,
-) -> Result<u128> {
-    fund_l2_via_l1_deposit_ex(
-        l1_rpc_url,
-        l2_rpc_url,
-        bridgehub_addr,
-        chain_id,
-        l2_recipient,
-        amount_ether,
-        balance_poll_timeout,
-        server_logs_path,
-        true,
-    )
-}
-
-/// Like [`fund_l2_via_l1_deposit`] but with explicit `base_token_is_eth`.
-/// When `false`, the caller must have pre-approved the base token to the
-/// bridgehub.
-#[allow(clippy::too_many_arguments)]
-pub fn fund_l2_via_l1_deposit_ex(
+pub(crate) async fn fund_l2_via_l1_deposit_ex(
     l1_rpc_url: &str,
     l2_rpc_url: &str,
     bridgehub_addr: &str,
@@ -527,6 +387,15 @@ pub fn fund_l2_via_l1_deposit_ex(
     server_logs_path: Option<&Path>,
     base_token_is_eth: bool,
 ) -> Result<u128> {
+    // Snapshot the balance before submitting the deposit so we can detect
+    // the credit even if the recipient was already funded. A transient RPC
+    // failure is treated as "zero" — the strict-increase check below still
+    // gives us a meaningful signal in that case.
+    let balance_before = poll_l2_balance_once(l2_recipient, l2_rpc_url)
+        .ok()
+        .flatten()
+        .unwrap_or(0);
+
     if let Err(err) = crate::l1_l2_deposit::submit_l1_to_l2_deposit_ex(
         l1_rpc_url,
         bridgehub_addr,
@@ -535,14 +404,16 @@ pub fn fund_l2_via_l1_deposit_ex(
         amount_ether,
         Some(l2_recipient),
         base_token_is_eth,
-    ) {
+    )
+    .await
+    {
         print_deposit_failure_server_logs(server_logs_path);
         return Err(err).context("Bridgehub L1→L2 deposit");
     }
     let deadline = Instant::now() + balance_poll_timeout;
     while Instant::now() < deadline {
         match poll_l2_balance_once(l2_recipient, l2_rpc_url) {
-            Ok(Some(balance)) if balance > 0 => return Ok(balance),
+            Ok(Some(balance)) if balance > balance_before => return Ok(balance),
             Ok(_) => sleep(Duration::from_secs(2)),
             Err(err) => {
                 let msg = format!("{err:#}");
@@ -558,8 +429,9 @@ pub fn fund_l2_via_l1_deposit_ex(
         .map(|p| format!(" Server logs: {}", p.display()))
         .unwrap_or_default();
     anyhow::bail!(
-        "L2 balance for {} did not become > 0 within {:?}.{}",
+        "L2 balance for {} did not grow above pre-deposit {} within {:?}.{}",
         l2_recipient,
+        balance_before,
         balance_poll_timeout,
         logs_hint
     )

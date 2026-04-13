@@ -32,9 +32,8 @@ use integration_tests::anvil_utils::fund_account;
 use integration_tests::docker::docker_pull_image;
 use integration_tests::l1_state::{ChainWallets, WalletsFile};
 use integration_tests::presets::RepoRef;
-use integration_tests::server_utils::{
-    address_from_private_key, fund_l2_via_l1_deposit_ex, wait_for_executed_batches_with_traffic,
-};
+use integration_tests::server::L1DepositBaseToken;
+use integration_tests::server_utils::address_from_private_key;
 
 // ---------------------------------------------------------------------------
 // CLI
@@ -50,9 +49,65 @@ struct Args {
     preset: String,
 }
 
-const GATEWAY_CHAIN_ID: u64 = 506;
-const GATEWAY_SETTLING_CHAIN_IDS: &[u64] = &[6566, 6567];
-const L1_SETTLING_CHAIN_IDS: &[u64] = &[6565];
+/// Settlement layer a chain commits batches to.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SettlesOn {
+    L1,
+    Gateway,
+}
+
+/// Static description of one chain in the ecosystem: chain id, directory /
+/// wallets.yaml key, and which layer it settles on. Adding a new chain =
+/// adding one row to [`ECOSYSTEM_CHAINS`] (plus matching entries in
+/// `wallets.yaml`).
+#[derive(Clone, Copy, Debug)]
+struct ChainSpec {
+    id: u64,
+    /// Directory name under the state output and wallets.yaml key.
+    name: &'static str,
+    settles_on: SettlesOn,
+}
+
+/// The gateway chain itself. Broken out of [`ECOSYSTEM_CHAINS`] because it
+/// has a distinct role in the generation flow (it runs as a standalone
+/// zksync-os-server during generation, every other chain settles either on
+/// it or on L1).
+const GATEWAY: ChainSpec = ChainSpec {
+    id: 506,
+    name: "gateway",
+    settles_on: SettlesOn::L1,
+};
+
+/// Every non-gateway chain produced by this tool.
+const ECOSYSTEM_CHAINS: &[ChainSpec] = &[
+    ChainSpec {
+        id: 6565,
+        name: "l1_settling",
+        settles_on: SettlesOn::L1,
+    },
+    ChainSpec {
+        id: 6566,
+        name: "gateway_settling_a",
+        settles_on: SettlesOn::Gateway,
+    },
+    ChainSpec {
+        id: 6567,
+        name: "gateway_settling_b",
+        settles_on: SettlesOn::Gateway,
+    },
+];
+
+fn gateway_settling_chains() -> impl Iterator<Item = &'static ChainSpec> {
+    ECOSYSTEM_CHAINS
+        .iter()
+        .filter(|c| c.settles_on == SettlesOn::Gateway)
+}
+
+fn l1_settling_chains() -> impl Iterator<Item = &'static ChainSpec> {
+    ECOSYSTEM_CHAINS
+        .iter()
+        .filter(|c| c.settles_on == SettlesOn::L1)
+}
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -70,16 +125,11 @@ struct KeySet {
 
 impl KeySet {
     fn from_wallets(wallets: &WalletsFile) -> Result<Self> {
-        let owner = wallets
-            .ecosystem
-            .owner
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing ecosystem.owner"))?;
         Ok(Self {
             deployer_pk: wallets.ecosystem.deployer.private_key.clone(),
             deployer_addr: wallets.ecosystem.deployer.address.clone(),
-            ecosystem_owner_pk: owner.private_key.clone(),
-            ecosystem_owner_addr: owner.address.clone(),
+            ecosystem_owner_pk: wallets.ecosystem.owner.private_key.clone(),
+            ecosystem_owner_addr: wallets.ecosystem.owner.address.clone(),
         })
     }
 }
@@ -91,6 +141,27 @@ const CREATE2_DEPLOYER: &str = "0x4e59b44847b379578588920ca78fbf26c0b4956c";
 
 /// Anvil-typical L1 gas price (wei) for migration calldata.
 const MIGRATE_L1_GAS_PRICE_WEI: u64 = 1_000_000_000;
+
+/// Longer timeout used while the gateway is draining its post-migration
+/// priority queue; the queue can take noticeably longer to empty than a
+/// normal batch wait.
+const PRIORITY_QUEUE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// Mirrors `L2DACommitmentScheme` on the chain contracts. Only the variants
+/// actively used in this tool are listed; add more as validium / custom-DA
+/// chains start being generated.
+#[derive(Copy, Clone)]
+enum L2DaCommitmentScheme {
+    BlobsAndPubdataKeccak256 = 3,
+}
+
+impl L2DaCommitmentScheme {
+    fn as_u8_str(self) -> &'static str {
+        match self {
+            Self::BlobsAndPubdataKeccak256 => "3",
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Era-contracts execution backend (local binary or Docker session)
@@ -248,15 +319,11 @@ struct ChainOperators {
 
 impl ChainOperators {
     fn from_wallets(chain_id: u64, dir_name: &str, w: &ChainWallets) -> Result<Self> {
-        let owner = w
-            .owner
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing {dir_name}.owner"))?;
         Ok(Self {
             chain_id,
             dir_name: dir_name.to_string(),
-            owner_pk: owner.private_key.clone(),
-            owner_addr: owner.address.clone(),
+            owner_pk: w.owner.private_key.clone(),
+            owner_addr: w.owner.address.clone(),
             commit_pk: w.commit_operator.private_key.clone(),
             prove_pk: w.prove_operator.private_key.clone(),
             execute_pk: w.execute_operator.private_key.clone(),
@@ -266,8 +333,16 @@ impl ChainOperators {
         })
     }
 
-    fn all_addresses(&self) -> [&str; 3] {
-        [&self.commit_addr, &self.prove_addr, &self.execute_addr]
+    /// All L1 accounts belonging to this chain that need an ETH top-up on L1:
+    /// the chain owner (gas for governance/admin txs) plus the three
+    /// validator operators (gas for commit/prove/execute txs).
+    fn l1_funded_addresses(&self) -> [&str; 4] {
+        [
+            &self.owner_addr,
+            &self.commit_addr,
+            &self.prove_addr,
+            &self.execute_addr,
+        ]
     }
 }
 
@@ -459,6 +534,28 @@ fn run_migrate_to_gateway(
             .context("gateway migrate pause-deposits")?;
     }
 
+    // Production order: notify the server before submitting the migration
+    // so listeners see the event pre-migration. This is inert here (no L2
+    // server is listening during state generation) but keeps the sequence
+    // faithful to the real flow.
+    println!("  gateway migrate chain {chain_id}: notify-server");
+    contracts_backend
+        .protocol_ops(&[
+            "chain",
+            "gateway",
+            "migrate",
+            "notify-server",
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--private-key",
+            chain_owner_pk,
+            "--bridgehub",
+            bridgehub,
+            "--chain-id",
+            &chain_str,
+        ])
+        .context("gateway migrate notify-server")?;
+
     println!("  gateway migrate chain {chain_id}: submit");
     contracts_backend
         .protocol_ops(&[
@@ -484,24 +581,6 @@ fn run_migrate_to_gateway(
             refund_recipient,
         ])
         .context("gateway migrate submit")?;
-
-    println!("  gateway migrate chain {chain_id}: notify-server");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "migrate",
-            "notify-server",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            chain_owner_pk,
-            "--bridgehub",
-            bridgehub,
-            "--chain-id",
-            &chain_str,
-        ])
-        .context("gateway migrate notify-server")?;
 
     Ok(())
 }
@@ -688,6 +767,84 @@ fn deploy_zk_token(
 }
 
 // ---------------------------------------------------------------------------
+// Chain init variants
+// ---------------------------------------------------------------------------
+
+enum ChainInitKind<'a> {
+    /// Gateway chain: ZK-based base token, no deposit pause.
+    Gateway { base_token_addr: &'a str },
+    /// Chain that will later migrate to settle on the gateway.
+    /// `--pause-deposits + --skip-priority-txs` keep the priority queue empty
+    /// so migrate-to-gateway doesn't fail with PriorityQueueNotFullyProcessed,
+    /// avoiding the need for a pre-migration server to drain the queue.
+    GatewaySettling,
+    /// Plain chain that settles on L1. ETH base token, deposits stay live.
+    L1Settling,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_chain_init(
+    contracts_backend: &EraContractsBackend,
+    l1_rpc_url: &str,
+    keys: &KeySet,
+    ops: &ChainOperators,
+    ctm_proxy: &str,
+    l1_da_validator: &str,
+    create2_factory: &str,
+    kind: ChainInitKind<'_>,
+    out_filename: &str,
+) -> Result<()> {
+    let chain_id = ops.chain_id.to_string();
+    let out_arg = contracts_backend.work_path(out_filename);
+
+    let mut args: Vec<&str> = vec![
+        "chain",
+        "init",
+        "--ctm-proxy",
+        ctm_proxy,
+        "--l1-da-validator",
+        l1_da_validator,
+        "--owner",
+        &ops.owner_addr,
+        "--commit-operator",
+        &ops.commit_addr,
+        "--prove-operator",
+        &ops.prove_addr,
+        "--execute-operator",
+        &ops.execute_addr,
+        "--chain-id",
+        &chain_id,
+        "--vm-type",
+        "zksyncos",
+        "--l1-rpc-url",
+        l1_rpc_url,
+        "--private-key",
+        &keys.deployer_pk,
+        "--owner-pk",
+        &ops.owner_pk,
+        "--bridgehub-admin-pk",
+        &keys.ecosystem_owner_pk,
+        "--create2-factory-addr",
+        create2_factory,
+    ];
+
+    match &kind {
+        ChainInitKind::Gateway { base_token_addr } => {
+            args.extend_from_slice(&["--base-token-addr", base_token_addr]);
+        }
+        ChainInitKind::GatewaySettling => {
+            args.extend_from_slice(&["--pause-deposits", "--skip-priority-txs"]);
+        }
+        ChainInitKind::L1Settling => {}
+    }
+
+    args.extend_from_slice(&["--out", &out_arg]);
+
+    contracts_backend.protocol_ops(&args)?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Generation flow (Steps 3–15)
 // ---------------------------------------------------------------------------
 
@@ -701,7 +858,7 @@ struct FlowResult {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_generation_flow(
+async fn run_generation_flow(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
     keys: &KeySet,
@@ -714,7 +871,12 @@ fn run_generation_flow(
     anvil_port: u16,
 ) -> Result<FlowResult> {
     // ----------------------------------------------------------------
-    // Step 3a: Fund deployer and ecosystem owner from Anvil default account
+    // Step 3a: Fund all L1 accounts used by the flow
+    //   - Deployer / ecosystem owner (4000 ETH each, from Anvil default)
+    //   - Per-chain owners + validator operators (100 ETH each, from deployer)
+    // Validators don't spend L1 gas until after chain init, but we fund
+    // them here so there is a single funding pass rather than one for
+    // owners at the start and another for validators later.
     // ----------------------------------------------------------------
     println!("\n=== Funding deployer and ecosystem owner ===");
     fund_account(
@@ -731,14 +893,15 @@ fn run_generation_flow(
         DEFAULT_ANVIL_PRIVATE_KEY,
     )
     .context("fund ecosystem owner")?;
-    // Fund per-chain owners from the deployer (smaller amounts — they only
-    // need gas for governance txs, not deployments).
+    println!("\n=== Funding L1 owner + operator accounts ===");
     for ops in std::iter::once(gw_ops)
         .chain(gw_settling_ops.iter())
         .chain(l1_settling_ops.iter())
     {
-        fund_account(&ops.owner_addr, "100ether", l1_rpc_url, &keys.deployer_pk)
-            .with_context(|| format!("fund chain owner for {}", ops.dir_name))?;
+        for addr in ops.l1_funded_addresses() {
+            fund_account(addr, "100ether", l1_rpc_url, &keys.deployer_pk)
+                .with_context(|| format!("fund L1 account {addr} for chain {}", ops.chain_id))?;
+        }
     }
 
     // ----------------------------------------------------------------
@@ -844,58 +1007,41 @@ fn run_generation_flow(
         .context("register ZK token on NTV")?;
 
     // ----------------------------------------------------------------
-    // Step 4: Chain init — gateway chain (ZK base token)
+    // Steps 4-6: Chain init
+    //
+    // The three variants differ only by a handful of flags:
+    //   - gateway chain: --base-token-addr (ZK), no pause
+    //   - gateway-settling: ETH base token, --pause-deposits + --skip-priority-txs
+    //   - L1-settling: ETH base token, no pause
+    // Everything else (CTM, DA validator, operators, keys, VM type, factory)
+    // is identical, so we drive all three variants through one helper.
     // ----------------------------------------------------------------
+    let gw_chain_out_name = "chain_init_gateway.json";
     println!(
         "\n=== protocol_ops chain init: gateway chain {} ===",
-        GATEWAY_CHAIN_ID
+        GATEWAY.id
     );
-    let gw_chain_out_arg = contracts_backend.work_path("chain_init_gateway.json");
-    contracts_backend.protocol_ops(&[
-        "chain",
-        "init",
-        "--ctm-proxy",
-        &ctm_proxy,
-        "--l1-da-validator",
-        &l1_da_validator,
-        "--owner",
-        &gw_ops.owner_addr,
-        "--commit-operator",
-        &gw_ops.commit_addr,
-        "--prove-operator",
-        &gw_ops.prove_addr,
-        "--execute-operator",
-        &gw_ops.execute_addr,
-        "--chain-id",
-        &GATEWAY_CHAIN_ID.to_string(),
-        "--base-token-addr",
-        &zk_token_address,
-        "--vm-type",
-        "zksyncos",
-        "--l1-rpc-url",
+    run_chain_init(
+        contracts_backend,
         l1_rpc_url,
-        "--private-key",
-        &keys.deployer_pk,
-        "--owner-pk",
-        &gw_ops.owner_pk,
-        "--bridgehub-admin-pk",
-        &keys.ecosystem_owner_pk,
-        "--create2-factory-addr",
+        keys,
+        gw_ops,
+        &ctm_proxy,
+        &l1_da_validator,
         &create2_factory,
-        "--out",
-        &gw_chain_out_arg,
-    ])?;
+        ChainInitKind::Gateway {
+            base_token_addr: &zk_token_address,
+        },
+        gw_chain_out_name,
+    )?;
     let gw_chain_json: serde_json::Value = serde_json::from_str(
-        &contracts_backend.read_protocol_ops_output("chain_init_gateway.json")?,
+        &contracts_backend.read_protocol_ops_output(gw_chain_out_name)?,
     )?;
     let gw_chain_output = gw_chain_json
         .get("output")
         .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
     let gw_diamond_proxy = extract_json_value(gw_chain_output, "diamond_proxy_addr")?;
 
-    // ----------------------------------------------------------------
-    // Step 5: Chain init — gateway-settling chains
-    // ----------------------------------------------------------------
     let mut gw_settling_diamond_proxies = Vec::new();
     for ops in gw_settling_ops {
         println!(
@@ -903,44 +1049,17 @@ fn run_generation_flow(
             ops.chain_id
         );
         let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
-        let chain_out_arg = contracts_backend.work_path(&chain_out_name);
-        // --pause-deposits + --skip-priority-txs: keep the priority queue empty
-        // so migrate-to-gateway doesn't fail with PriorityQueueNotFullyProcessed.
-        // This avoids needing a pre-migration server to drain the queue.
-        contracts_backend.protocol_ops(&[
-            "chain",
-            "init",
-            "--ctm-proxy",
-            &ctm_proxy,
-            "--l1-da-validator",
-            &l1_da_validator,
-            "--owner",
-            &ops.owner_addr,
-            "--commit-operator",
-            &ops.commit_addr,
-            "--prove-operator",
-            &ops.prove_addr,
-            "--execute-operator",
-            &ops.execute_addr,
-            "--chain-id",
-            &ops.chain_id.to_string(),
-            "--vm-type",
-            "zksyncos",
-            "--l1-rpc-url",
+        run_chain_init(
+            contracts_backend,
             l1_rpc_url,
-            "--private-key",
-            &keys.deployer_pk,
-            "--owner-pk",
-            &ops.owner_pk,
-            "--bridgehub-admin-pk",
-            &keys.ecosystem_owner_pk,
-            "--create2-factory-addr",
+            keys,
+            ops,
+            &ctm_proxy,
+            &l1_da_validator,
             &create2_factory,
-            "--pause-deposits",
-            "--skip-priority-txs",
-            "--out",
-            &chain_out_arg,
-        ])?;
+            ChainInitKind::GatewaySettling,
+            &chain_out_name,
+        )?;
         let chain_json: serde_json::Value =
             serde_json::from_str(&contracts_backend.read_protocol_ops_output(&chain_out_name)?)?;
         let chain_output = chain_json
@@ -949,9 +1068,6 @@ fn run_generation_flow(
         gw_settling_diamond_proxies.push(extract_json_value(chain_output, "diamond_proxy_addr")?);
     }
 
-    // ----------------------------------------------------------------
-    // Step 6: Chain init — L1-settling chains
-    // ----------------------------------------------------------------
     let mut l1_settling_diamond_proxies = Vec::new();
     for ops in l1_settling_ops {
         println!(
@@ -959,39 +1075,17 @@ fn run_generation_flow(
             ops.chain_id
         );
         let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
-        let chain_out_arg = contracts_backend.work_path(&chain_out_name);
-        contracts_backend.protocol_ops(&[
-            "chain",
-            "init",
-            "--ctm-proxy",
-            &ctm_proxy,
-            "--l1-da-validator",
-            &l1_da_validator,
-            "--owner",
-            &ops.owner_addr,
-            "--commit-operator",
-            &ops.commit_addr,
-            "--prove-operator",
-            &ops.prove_addr,
-            "--execute-operator",
-            &ops.execute_addr,
-            "--chain-id",
-            &ops.chain_id.to_string(),
-            "--vm-type",
-            "zksyncos",
-            "--l1-rpc-url",
+        run_chain_init(
+            contracts_backend,
             l1_rpc_url,
-            "--private-key",
-            &keys.deployer_pk,
-            "--owner-pk",
-            &ops.owner_pk,
-            "--bridgehub-admin-pk",
-            &keys.ecosystem_owner_pk,
-            "--create2-factory-addr",
+            keys,
+            ops,
+            &ctm_proxy,
+            &l1_da_validator,
             &create2_factory,
-            "--out",
-            &chain_out_arg,
-        ])?;
+            ChainInitKind::L1Settling,
+            &chain_out_name,
+        )?;
         let chain_json: serde_json::Value =
             serde_json::from_str(&contracts_backend.read_protocol_ops_output(&chain_out_name)?)?;
         let chain_output = chain_json
@@ -1001,21 +1095,9 @@ fn run_generation_flow(
     }
 
     // ----------------------------------------------------------------
-    // Step 7: Fund all operator accounts on L1
+    // Step 7: Fund chain admins with ZK tokens for migration L1→L2 priority tx gas.
+    // (Operator/owner L1 ETH funding already happened in Step 3a.)
     // ----------------------------------------------------------------
-    println!("\n=== Funding L1 operator accounts ===");
-    let all_ops: Vec<&ChainOperators> = std::iter::once(gw_ops)
-        .chain(gw_settling_ops.iter())
-        .chain(l1_settling_ops.iter())
-        .collect();
-    for ops in &all_ops {
-        for addr in ops.all_addresses() {
-            fund_account(addr, "100ether", l1_rpc_url, &keys.deployer_pk)
-                .with_context(|| format!("fund operator {} for chain {}", addr, ops.chain_id))?;
-        }
-    }
-
-    // Fund chain admins with ZK tokens for migration L1→L2 priority tx gas.
     println!("\n=== Funding chain admins with ZK tokens ===");
     let zk_mint_amount = "1000000000000000000000000";
     for proxies in [&gw_settling_diamond_proxies, &l1_settling_diamond_proxies] {
@@ -1060,59 +1142,42 @@ fn run_generation_flow(
     //   gateway.yaml, gateway_settling_a.yaml, gateway_settling_b.yaml, l1_settling.yaml
     // ----------------------------------------------------------------
     println!("\n=== Writing chain configs ===");
-    // Gateway config
-    fs::write(
-        output_dir.join(format!("{}.yaml", gw_ops.dir_name)),
-        integration_tests::server_config::ServerConfigBuilder::new(
+    // All three chain variants share the same base ServerConfigBuilder args;
+    // they only differ in whether `gateway()` / `forced_price()` apply.
+    //   - gateway           : forced ZK price, no gateway route
+    //   - gateway-settling  : forced ZK price + gateway route (RPC at runtime)
+    //   - L1-settling       : neither
+    let write_chain_config = |ops: &ChainOperators, settles_on_gateway: bool, label: &str| {
+        use integration_tests::server_config::ServerConfigBuilder;
+        let mut builder = ServerConfigBuilder::new(
             &bridgehub,
             &bytecodes_supplier,
             &genesis_path,
-            GATEWAY_CHAIN_ID,
-            &gw_ops.commit_pk,
-            &gw_ops.prove_pk,
-            &gw_ops.execute_pk,
-        )
-        .forced_price(&zk_token_address, 3000)
-        .build(),
-    )?;
-    println!("  {}.yaml (gateway)", gw_ops.dir_name);
+            ops.chain_id,
+            &ops.commit_pk,
+            &ops.prove_pk,
+            &ops.execute_pk,
+        );
+        if ops.chain_id == GATEWAY.id || settles_on_gateway {
+            builder = builder.forced_price(&zk_token_address, 3000);
+        }
+        if settles_on_gateway {
+            builder = builder.gateway("RUNTIME", GATEWAY.id);
+        }
+        fs::write(
+            output_dir.join(format!("{}.yaml", ops.dir_name)),
+            builder.build(),
+        )?;
+        println!("  {}.yaml ({label})", ops.dir_name);
+        Ok::<_, anyhow::Error>(())
+    };
 
-    // Gateway-settling chain configs (gateway_rpc_url set at runtime via env var)
+    write_chain_config(gw_ops, false, "gateway")?;
     for ops in gw_settling_ops {
-        fs::write(
-            output_dir.join(format!("{}.yaml", ops.dir_name)),
-            integration_tests::server_config::ServerConfigBuilder::new(
-                &bridgehub,
-                &bytecodes_supplier,
-                &genesis_path,
-                ops.chain_id,
-                &ops.commit_pk,
-                &ops.prove_pk,
-                &ops.execute_pk,
-            )
-            .gateway("RUNTIME", GATEWAY_CHAIN_ID)
-            .forced_price(&zk_token_address, 3000)
-            .build(),
-        )?;
-        println!("  {}.yaml (gateway-settling)", ops.dir_name);
+        write_chain_config(ops, true, "gateway-settling")?;
     }
-
-    // L1-settling chain configs
     for ops in l1_settling_ops {
-        fs::write(
-            output_dir.join(format!("{}.yaml", ops.dir_name)),
-            integration_tests::server_config::ServerConfigBuilder::new(
-                &bridgehub,
-                &bytecodes_supplier,
-                &genesis_path,
-                ops.chain_id,
-                &ops.commit_pk,
-                &ops.prove_pk,
-                &ops.execute_pk,
-            )
-            .build(),
-        )?;
-        println!("  {}.yaml (L1-settling)", ops.dir_name);
+        write_chain_config(ops, false, "L1-settling")?;
     }
 
     // ----------------------------------------------------------------
@@ -1129,7 +1194,7 @@ fn run_generation_flow(
     // ----------------------------------------------------------------
     println!(
         "\n=== Starting gateway server (chain {}) ===",
-        GATEWAY_CHAIN_ID
+        GATEWAY.id
     );
     let gw_config_path = output_dir.join(format!("{}.yaml", gw_ops.dir_name));
 
@@ -1144,10 +1209,13 @@ fn run_generation_flow(
     fs::create_dir_all(&logs_dir).context("create logs dir for state generation")?;
     let gw_server =
         integration_tests::server::ServerBuilder::new(preset.clone(), "generate_l1_state")
-            .chain_name("gateway")
+            .chain_name(GATEWAY.name)
             .config_path(&gw_config_path)
             .rocks_db_path(&gw_rocks_db)
             .logs_dir(&logs_dir)
+            .diamond_proxy_addr(&gw_diamond_proxy)
+            .bridgehub_addr(&bridgehub)
+            .chain_id(GATEWAY.id)
             .spawn(&anvil_handle)
             .context("Failed to start gateway server")?;
     let gw_l2_rpc = gw_server.rpc_url();
@@ -1175,43 +1243,28 @@ fn run_generation_flow(
             l1_rpc_url,
         ])
         .context("mint ZK to test account")?;
-    // The deposit path is: Bridgehub → SharedBridge → NativeTokenVault.
-    // Approve all three so whichever contract calls transferFrom succeeds.
-    for (label, spender) in [
-        ("bridgehub", bridgehub.as_str()),
-        ("shared_bridge", shared_bridge.as_str()),
-        ("ntv", ntv.as_str()),
-    ] {
-        contracts_backend
-            .cast(&[
-                "send",
-                &zk_token_address,
-                "approve(address,uint256)",
-                spender,
-                zk_mint,
-                "--private-key",
-                DEFAULT_ANVIL_PRIVATE_KEY,
-                "--rpc-url",
-                l1_rpc_url,
-            ])
-            .with_context(|| format!("approve {label} for ZK tokens"))?;
-    }
+    // Only approve the NativeTokenVault — it is the contract that ultimately
+    // pulls the base token via transferFrom. Approving the bridgehub or
+    // shared bridge as well would hide any unintended deposit-path change
+    // (e.g. a regression where one of them starts transferring directly).
+    contracts_backend
+        .cast(&[
+            "send",
+            &zk_token_address,
+            "approve(address,uint256)",
+            ntv.as_str(),
+            zk_mint,
+            "--private-key",
+            DEFAULT_ANVIL_PRIVATE_KEY,
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("approve NTV for ZK tokens")?;
 
-    // Flush docker logs to host before deposit calls so the diagnostic
-    // reader can find the file if the server crashes mid-operation.
-    let _ = gw_server.save_logs();
-    fund_l2_via_l1_deposit_ex(
-        l1_rpc_url,
-        &gw_l2_rpc,
-        &bridgehub,
-        GATEWAY_CHAIN_ID,
-        &test_address,
-        0.1,
-        Duration::from_secs(120),
-        Some(gw_server.logs_path().as_path()),
-        false,
-    )
-    .context("fund gateway L2 test account")?;
+    gw_server
+        .fund_account_via_l1_deposit(&test_address, 0.1, L1DepositBaseToken::PreApprovedCustom)
+        .await
+        .context("fund gateway L2 test account")?;
 
     for addr_name in ["commit", "prove", "execute"] {
         let addr = match addr_name {
@@ -1220,39 +1273,24 @@ fn run_generation_flow(
             "execute" => &gw_ops.execute_addr,
             _ => unreachable!(),
         };
-        let _ = gw_server.save_logs();
-        fund_l2_via_l1_deposit_ex(
-            l1_rpc_url,
-            &gw_l2_rpc,
-            &bridgehub,
-            GATEWAY_CHAIN_ID,
-            addr,
-            5.0,
-            Duration::from_secs(120),
-            Some(gw_server.logs_path().as_path()),
-            false,
-        )
-        .with_context(|| format!("fund gateway L2 for operator {addr_name}"))?;
+        gw_server
+            .fund_account_via_l1_deposit(addr, 5.0, L1DepositBaseToken::PreApprovedCustom)
+            .await
+            .with_context(|| format!("fund gateway L2 for operator {addr_name}"))?;
     }
 
     // ----------------------------------------------------------------
     // Step 11: Wait for gateway batches
     // ----------------------------------------------------------------
     println!("\n=== Waiting for gateway batches ===");
-    wait_for_executed_batches_with_traffic(
-        &gw_l2_rpc,
-        l1_rpc_url,
-        &gw_diamond_proxy,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-        3,
-        Duration::from_secs(120),
-    )
-    .context("gateway executed batches")?;
+    gw_server
+        .wait_for_executed_batches_with_traffic()
+        .context("gateway executed batches")?;
 
     // ----------------------------------------------------------------
     // Step 12: Convert gateway chain
     // ----------------------------------------------------------------
-    println!("\n=== Converting chain {} to gateway ===", GATEWAY_CHAIN_ID);
+    println!("\n=== Converting chain {} to gateway ===", GATEWAY.id);
 
     // Must be /script-out/... — protocol_ops strips the leading "/" and passes
     // the remainder to forge which checks it against fs_permissions (only
@@ -1262,7 +1300,7 @@ fn run_generation_flow(
         contracts_backend,
         l1_rpc_url,
         &bridgehub,
-        GATEWAY_CHAIN_ID,
+        GATEWAY.id,
         &gw_ops.owner_pk,
     )?;
     run_convert_to_gateway(
@@ -1271,7 +1309,7 @@ fn run_generation_flow(
         keys,
         &gw_ops.owner_pk,
         &bridgehub,
-        GATEWAY_CHAIN_ID,
+        GATEWAY.id,
         &governance_addr,
         &stm_tracker,
         &ctm_proxy,
@@ -1292,12 +1330,16 @@ fn run_generation_flow(
             &ops.owner_pk,
             &bridgehub,
             chain_id,
-            GATEWAY_CHAIN_ID,
+            GATEWAY.id,
             &vote_output_path_rel,
             &deployer_addr,
             true,
         )?;
-        // Confirm transfer on L1 (finishMigrateChainToGateway only, no validators yet)
+        // Confirm transfer on L1 (finishMigrateChainToGateway only, no validators yet).
+        // This proves inclusion of the migration priority tx and does not require
+        // any owner authority, so we pay with the deployer key rather than the
+        // chain owner — using owner_pk here would be misleading about the
+        // command's actual authorization.
         println!("  Confirming transfer for chain {chain_id}");
         contracts_backend
             .protocol_ops(&[
@@ -1310,7 +1352,7 @@ fn run_generation_flow(
                 "--chain-id",
                 &chain_id.to_string(),
                 "--gateway-chain-id",
-                &GATEWAY_CHAIN_ID.to_string(),
+                &GATEWAY.id.to_string(),
                 "--gateway-rpc-url",
                 &gw_l2_rpc,
                 "--gateway-diamond-proxy",
@@ -1318,7 +1360,7 @@ fn run_generation_flow(
                 "--l1-rpc-url",
                 l1_rpc_url,
                 "--private-key",
-                &ops.owner_pk,
+                &keys.deployer_pk,
                 "--vote-preparation-toml",
                 &vote_output_path_rel,
                 // No --commit/prove/execute-operator: skip validator enablement for now
@@ -1336,27 +1378,17 @@ fn run_generation_flow(
 
     // 13b: Wait for gateway to process all migration L1->L2 priority txs
     println!("\n=== Waiting for gateway to process chain migrations ===");
-    {
-        let cast_out = contracts_backend.cast(&[
-            "call",
-            &gw_diamond_proxy,
-            "getTotalBatchesExecuted()(uint256)",
-            "--rpc-url",
-            l1_rpc_url,
-        ])?;
-        let current = cast_out.trim().parse::<u64>().unwrap_or(0);
-        wait_for_executed_batches_with_traffic(
-            &gw_l2_rpc,
-            l1_rpc_url,
-            &gw_diamond_proxy,
-            DEFAULT_ANVIL_PRIVATE_KEY,
-            current + 3,
-            Duration::from_secs(120),
-        )
+    gw_server
+        .wait_for_executed_batches_with_traffic()
         .context("gateway batches after migration")?;
-    }
 
     // 13c: Resolve gateway ValidatorTimelock (now chains are registered on gateway)
+    //
+    // Note on `validatorTimelockPostV29`: protocol v29 introduced a new
+    // ValidatorTimelock contract alongside the legacy one; CTM exposes both
+    // via `validatorTimelock()` (pre-v29) and `validatorTimelockPostV29()`
+    // (v29+). Gateway-settling chains run v29+, so we read the post-v29
+    // address here.
     let gw_validator_timelock = {
         let first_chain_id = gw_settling_ops[0].chain_id;
         let ctm = contracts_backend
@@ -1414,7 +1446,7 @@ fn run_generation_flow(
             }
             println!("  Enabling {name} operator {addr}");
             let chain_id_str = chain_id.to_string();
-            let gw_chain_id_str = GATEWAY_CHAIN_ID.to_string();
+            let gw_chain_id_str = GATEWAY.id.to_string();
             contracts_backend.forge_script(&[
                 "deploy-scripts/AdminFunctions.s.sol",
                 "--sig", "enableValidatorViaGateway(address,uint256,uint256,uint256,address,address,address,bool)",
@@ -1455,9 +1487,11 @@ fn run_generation_flow(
             chain_id, chain_diamond_on_gw
         );
         gw_settling_diamond_proxies[i] = chain_diamond_on_gw.clone();
-        // L2DACommitmentScheme: 3 = BLOBS_AND_PUBDATA_KECCAK256
         let chain_id_str = chain_id.to_string();
-        let gw_chain_id_str = GATEWAY_CHAIN_ID.to_string();
+        let gw_chain_id_str = GATEWAY.id.to_string();
+        // All currently-generated chains are rollups; switch to a validium
+        // variant here when adding validium-on-gateway coverage.
+        let da_scheme = L2DaCommitmentScheme::BlobsAndPubdataKeccak256;
         contracts_backend.forge_script(&[
             "deploy-scripts/AdminFunctions.s.sol",
             "--sig", "setDAValidatorPairWithGateway(address,uint256,uint256,uint256,address,uint8,address,address,bool)",
@@ -1466,7 +1500,7 @@ fn run_generation_flow(
             &chain_id_str,
             &gw_chain_id_str,
             &relayed_sl_da_validator,
-            "3",
+            da_scheme.as_u8_str(),
             &chain_diamond_on_gw,
             &deployer_addr,
             "true",
@@ -1478,26 +1512,17 @@ fn run_generation_flow(
 
         println!("  Funding gateway L2 for chain {} operators", chain_id);
         for addr in [&ops.commit_addr, &ops.prove_addr, &ops.execute_addr] {
-            let _ = gw_server.save_logs();
-            fund_l2_via_l1_deposit_ex(
-                l1_rpc_url,
-                &gw_l2_rpc,
-                &bridgehub,
-                GATEWAY_CHAIN_ID,
-                addr,
-                5.0,
-                Duration::from_secs(120),
-                Some(gw_server.logs_path().as_path()),
-                false,
-            )
-            .context("fund gateway L2 for migrated-chain operator")?;
+            gw_server
+                .fund_account_via_l1_deposit(addr, 5.0, L1DepositBaseToken::PreApprovedCustom)
+                .await
+                .context("fund gateway L2 for migrated-chain operator")?;
         }
     }
 
     // 13e: Wait for gateway to drain its priority queue (validator + DA validator txs)
     println!("\n=== Waiting for gateway to drain priority queue ===");
     {
-        let deadline = std::time::Instant::now() + Duration::from_secs(180);
+        let deadline = std::time::Instant::now() + PRIORITY_QUEUE_DRAIN_TIMEOUT;
         loop {
             let raw = contracts_backend.cast(&[
                 "call",
@@ -1518,36 +1543,13 @@ fn run_generation_flow(
                 );
             }
             println!("  Gateway priority queue size: {queue_size}, sending traffic...");
-            let _ = contracts_backend.cast(&[
-                "send",
-                "0x0000000000000000000000000000000000000001",
-                "--value",
-                "1",
-                "--private-key",
-                DEFAULT_ANVIL_PRIVATE_KEY,
-                "--rpc-url",
-                &gw_l2_rpc,
-            ]);
+            let _ = gw_server.send_traffic_tx();
             std::thread::sleep(Duration::from_secs(3));
         }
         // Now wait for enough batches to be executed on L1 so the state is visible
-        let cast_out = contracts_backend.cast(&[
-            "call",
-            &gw_diamond_proxy,
-            "getTotalBatchesExecuted()(uint256)",
-            "--rpc-url",
-            l1_rpc_url,
-        ])?;
-        let current = cast_out.trim().parse::<u64>().unwrap_or(0);
-        wait_for_executed_batches_with_traffic(
-            &gw_l2_rpc,
-            l1_rpc_url,
-            &gw_diamond_proxy,
-            DEFAULT_ANVIL_PRIVATE_KEY,
-            current + 3,
-            Duration::from_secs(120),
-        )
-        .context("gateway batches after priority queue drain")?;
+        gw_server
+            .wait_for_executed_batches_with_traffic()
+            .context("gateway batches after priority queue drain")?;
     }
 
     // ----------------------------------------------------------------
@@ -1567,28 +1569,35 @@ fn run_generation_flow(
                 10.0,
                 Some(&test_addr),
             )
+            .await
             .with_context(|| format!("L1 deposit for gateway-settling chain {chain_id}"))?;
         }
     }
 
     // ----------------------------------------------------------------
-    // Step 14b: L1-settling chains — submit L1 deposit (no server needed).
-    // The server isn't running so the deposit sits in the priority queue
-    // until the test starts the server.
+    // Step 14b: Fund test account on L1-settling chains via L1 deposit.
+    // The deposit sits in the L1 priority queue until a test spawns the
+    // server for that chain and it processes the queued tx in its first
+    // batch. This mirrors the gateway-settling pre-funding above so that
+    // tests can rely on pre-generated state instead of duplicating
+    // setup.
     // ----------------------------------------------------------------
-    for ops in l1_settling_ops {
-        let chain_id = ops.chain_id;
-        println!("\n=== L1-settling chain {chain_id}: submitting L1 deposit ===");
+    {
         let test_addr = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-        integration_tests::l1_l2_deposit::submit_l1_to_l2_deposit_to(
-            l1_rpc_url,
-            &bridgehub,
-            chain_id,
-            DEFAULT_ANVIL_PRIVATE_KEY,
-            0.1,
-            Some(&test_addr),
-        )
-        .with_context(|| format!("L1 deposit for L1-settling chain {chain_id}"))?;
+        for ops in l1_settling_ops {
+            let chain_id = ops.chain_id;
+            println!("\n=== Funding test account on L1-settling chain {chain_id} ===");
+            integration_tests::l1_l2_deposit::submit_l1_to_l2_deposit_to(
+                l1_rpc_url,
+                &bridgehub,
+                chain_id,
+                DEFAULT_ANVIL_PRIVATE_KEY,
+                10.0,
+                Some(&test_addr),
+            )
+            .await
+            .with_context(|| format!("L1 deposit for L1-settling chain {chain_id}"))?;
+        }
     }
 
     // ----------------------------------------------------------------
@@ -1624,7 +1633,7 @@ fn run_generation_flow(
             &bridgehub,
             &bytecodes_supplier,
             &genesis_path,
-            GATEWAY_CHAIN_ID,
+            GATEWAY.id,
             &gw_ops.commit_pk,
             &gw_ops.prove_pk,
             &gw_ops.execute_pk,
@@ -1649,7 +1658,8 @@ fn run_generation_flow(
 // Main
 // ---------------------------------------------------------------------------
 
-fn main() -> Result<()> {
+#[tokio::main]
+async fn main() -> Result<()> {
     let args = Args::parse();
 
     let preset = load_preset(&args)?;
@@ -1740,10 +1750,8 @@ fn main() -> Result<()> {
     }
 
     // Generate wallets.yaml early — we need the keys before ecosystem init.
-    let gw_settling_dir_names = ["gateway_settling_a", "gateway_settling_b"];
-    let all_chain_names: Vec<&str> = std::iter::once("gateway")
-        .chain(gw_settling_dir_names.iter().copied())
-        .chain(std::iter::once("l1_settling"))
+    let all_chain_names: Vec<&str> = std::iter::once(GATEWAY.name)
+        .chain(ECOSYSTEM_CHAINS.iter().map(|c| c.name))
         .collect();
     let chains_arg = all_chain_names.join(",");
     println!("\n=== Generating wallets.yaml ===");
@@ -1761,33 +1769,18 @@ fn main() -> Result<()> {
     );
 
     // Chain operator contexts (from wallets.yaml)
-    let gw_wallets = wallets
-        .chains
-        .get("gateway")
-        .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain 'gateway'"))?;
-    let gw_ops = ChainOperators::from_wallets(GATEWAY_CHAIN_ID, "gateway", gw_wallets)?;
-    let gw_settling_ops: Vec<ChainOperators> = GATEWAY_SETTLING_CHAIN_IDS
-        .iter()
-        .enumerate()
-        .map(|(i, &id)| {
-            let name = gw_settling_dir_names[i];
-            let w = wallets
-                .chains
-                .get(name)
-                .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain '{name}'"))?;
-            ChainOperators::from_wallets(id, name, w)
-        })
+    let ops_for = |spec: &ChainSpec| -> Result<ChainOperators> {
+        let w = wallets.chains.get(spec.name).ok_or_else(|| {
+            anyhow::anyhow!("wallets.yaml missing chain '{}'", spec.name)
+        })?;
+        ChainOperators::from_wallets(spec.id, spec.name, w)
+    };
+    let gw_ops = ops_for(&GATEWAY)?;
+    let gw_settling_ops: Vec<ChainOperators> = gateway_settling_chains()
+        .map(ops_for)
         .collect::<Result<_>>()?;
-    let l1_settling_ops: Vec<ChainOperators> = L1_SETTLING_CHAIN_IDS
-        .iter()
-        .enumerate()
-        .map(|(i, &_id)| {
-            let w = wallets
-                .chains
-                .get("l1_settling")
-                .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain 'l1_settling'"))?;
-            ChainOperators::from_wallets(L1_SETTLING_CHAIN_IDS[i], "l1_settling", w)
-        })
+    let l1_settling_ops: Vec<ChainOperators> = l1_settling_chains()
+        .map(ops_for)
         .collect::<Result<_>>()?;
 
     // ----------------------------------------------------------------
@@ -1832,7 +1825,8 @@ fn main() -> Result<()> {
         &output_path,
         &preset,
         anvil_port,
-    );
+    )
+    .await;
 
     // ----------------------------------------------------------------
     // Step 16: Stop Anvil (triggers state dump)
@@ -1864,29 +1858,27 @@ fn main() -> Result<()> {
         bridgehub: flow.bridgehub,
         bytecodes_supplier: flow.bytecodes_supplier,
         gateway: integration_tests::l1_state::GatewayMeta {
-            chain_id: GATEWAY_CHAIN_ID,
+            chain_id: GATEWAY.id,
             diamond_proxy: flow.gw_diamond_proxy,
             ephemeral_state: flow.gateway_ephemeral_state.to_string_lossy().to_string(),
-            name: "gateway".to_string(),
+            name: GATEWAY.name.to_string(),
         },
-        gateway_settling_chains: GATEWAY_SETTLING_CHAIN_IDS
-            .iter()
+        gateway_settling_chains: gateway_settling_chains()
             .enumerate()
-            .map(|(i, &id)| integration_tests::l1_state::ChainMeta {
-                chain_id: id,
+            .map(|(i, spec)| integration_tests::l1_state::ChainMeta {
+                chain_id: spec.id,
                 diamond_proxy: flow.gw_settling_diamond_proxies[i].clone(),
                 ephemeral_state: None,
-                name: gw_settling_dir_names[i].to_string(),
+                name: spec.name.to_string(),
             })
             .collect(),
-        l1_settling_chains: L1_SETTLING_CHAIN_IDS
-            .iter()
+        l1_settling_chains: l1_settling_chains()
             .enumerate()
-            .map(|(i, &id)| integration_tests::l1_state::ChainMeta {
-                chain_id: id,
+            .map(|(i, spec)| integration_tests::l1_state::ChainMeta {
+                chain_id: spec.id,
                 diamond_proxy: flow.l1_settling_diamond_proxies[i].clone(),
                 ephemeral_state: None,
-                name: "l1_settling".to_string(),
+                name: spec.name.to_string(),
             })
             .collect(),
     };

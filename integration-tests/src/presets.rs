@@ -118,6 +118,18 @@ pub fn load_current_preset() -> anyhow::Result<Preset> {
         "  zksync_os_server: {}",
         format_repo_ref(&preset.zksync_os_server)
     );
+    for warning in fallback_warnings(&preset) {
+        eprintln!("  ⚠  {warning}");
+    }
+
+    // Drop a machine-readable record so a future contributor (or CI artifact
+    // consumer) can replay the exact images this run used. This is the
+    // answer to "CI failed, what exactly was running?".
+    if let Err(e) = write_resolved_refs_file(&preset) {
+        eprintln!(
+            "  (failed to write test-run-logs/resolved-refs.json: {e:#})"
+        );
+    }
 
     Ok(preset)
 }
@@ -129,16 +141,74 @@ fn format_repo_ref(r: &RepoRef) -> String {
             tag,
             original_ref: Some(orig),
             ..
-        } => {
-            format!("docker {}  (ref: {})", &tag[..tag.len().min(12)], orig)
-        }
+        } => format!("docker {tag}  (ref: {orig})"),
         RepoRef::DockerTag {
             tag,
             original_ref: None,
             ..
-        } => {
-            format!("docker {}", tag)
+        } => format!("docker {tag}"),
+    }
+}
+
+/// Human-readable warnings about the preset resolution — e.g. whether the
+/// tip of a branch had no published image and we fell back to an older
+/// commit. Helps contributors debug "it works for me" reports.
+fn fallback_warnings(preset: &Preset) -> Vec<String> {
+    let mut out = Vec::new();
+    for (label, r) in [
+        ("era_contracts", &preset.era_contracts),
+        ("zksync_os_server", &preset.zksync_os_server),
+    ] {
+        if let RepoRef::DockerTag {
+            tag,
+            tip_sha: Some(tip),
+            original_ref: Some(orig),
+        } = r
+        {
+            if tip != tag {
+                out.push(format!(
+                    "{label}: tip of '{orig}' is {tip} but no image was published; using ancestor {tag} instead"
+                ));
+            }
         }
+    }
+    out
+}
+
+fn write_resolved_refs_file(preset: &Preset) -> anyhow::Result<()> {
+    let root = find_project_root()?;
+    let logs_dir = root.join("test-run-logs");
+    std::fs::create_dir_all(&logs_dir)
+        .with_context(|| format!("create {}", logs_dir.display()))?;
+    let path = logs_dir.join("resolved-refs.json");
+    let body = serde_json::json!({
+        "preset": preset.name,
+        "resolved_at": chrono::Utc::now().to_rfc3339(),
+        "era_contracts": repo_ref_json(&preset.era_contracts),
+        "zksync_os_server": repo_ref_json(&preset.zksync_os_server),
+    });
+    std::fs::write(&path, serde_json::to_string_pretty(&body)?)
+        .with_context(|| format!("write {}", path.display()))?;
+    Ok(())
+}
+
+fn repo_ref_json(r: &RepoRef) -> serde_json::Value {
+    match r {
+        RepoRef::Path(p) => serde_json::json!({
+            "kind": "path",
+            "path": p.display().to_string(),
+        }),
+        RepoRef::DockerTag {
+            tag,
+            original_ref,
+            tip_sha,
+        } => serde_json::json!({
+            "kind": "docker",
+            "tag": tag,
+            "original_ref": original_ref,
+            "tip_sha": tip_sha,
+            "used_fallback": tip_sha.as_ref().is_some_and(|t| t != tag),
+        }),
     }
 }
 

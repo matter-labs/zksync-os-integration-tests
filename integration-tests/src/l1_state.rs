@@ -61,9 +61,8 @@ pub struct EcosystemWallets {
     pub deployer: WalletEntry,
     pub governor: WalletEntry,
     pub token_multiplier_setter: WalletEntry,
-    /// Ecosystem owner (bridgehub admin, governance). Optional for backward compat.
-    #[serde(default)]
-    pub owner: Option<WalletEntry>,
+    /// Ecosystem owner (bridgehub admin, governance).
+    pub owner: WalletEntry,
 }
 
 /// Per-chain wallets.
@@ -75,9 +74,8 @@ pub struct ChainWallets {
     pub prove_operator: WalletEntry,
     pub execute_operator: WalletEntry,
     pub fee_account: WalletEntry,
-    /// Chain owner (controls ChainAdmin). Optional for backward compat.
-    #[serde(default)]
-    pub owner: Option<WalletEntry>,
+    /// Chain owner (controls ChainAdmin).
+    pub owner: WalletEntry,
 }
 
 /// Full wallets.yaml — ecosystem keys + per-chain keys keyed by chain name.
@@ -230,12 +228,3 @@ pub fn load_wallets(preset: &Preset) -> Result<WalletsFile> {
     serde_yaml::from_str(&content).context("parse wallets.yaml")
 }
 
-/// Get the local era-contracts path from the preset.
-pub fn get_era_contracts_path(preset: &Preset) -> Result<PathBuf> {
-    match &preset.era_contracts {
-        RepoRef::Path(p) => Ok(p.clone()),
-        RepoRef::DockerTag { tag: t, .. } => {
-            anyhow::bail!("need local era-contracts, got docker tag {t}")
-        }
-    }
-}
