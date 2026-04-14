@@ -31,21 +31,20 @@ const CONTAINER_LOGS_MOUNT: &str = "/contracts/test-run-logs";
 impl EraContractsBackend {
     /// Create an `EraContractsBackend` from a preset configuration.
     ///
-    /// `run_name` identifies the test run (e.g. `"gateway_settling"`). In Docker
-    /// mode, artifacts land under `test-run-logs/{run_name}/contracts_artifacts/`.
+    /// `work_name` labels the work directory (e.g. `"gateway_settling"`).
     ///
     /// `extra_mounts` are additional `(host_path, container_path)` volume mounts
     /// for Docker mode. They are ignored in local mode.
     pub fn from_preset(
         preset: &Preset,
-        run_name: &str,
+        work_name: &str,
         extra_mounts: &[(&Path, &str)],
     ) -> Result<Self> {
         match &preset.era_contracts {
-            RepoRef::Path(p) => Self::local(p, run_name),
+            RepoRef::Path(p) => Self::local(p, work_name),
             RepoRef::DockerTag { tag, .. } => {
                 let image = format!("{}:{}", ERA_CONTRACTS_PROTOCOL_IMAGE_REPO, tag);
-                Self::docker(&image, run_name, extra_mounts)
+                Self::docker(&image, extra_mounts)
             }
         }
     }
@@ -73,7 +72,7 @@ impl EraContractsBackend {
     /// sub-directories are created inside the container after startup, working
     /// around a macOS Docker/VirtioFS bug where newly-created host directories
     /// are invisible to the VM.
-    pub fn docker(image: &str, _run_name: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
+    pub fn docker(image: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
         let project_root =
             crate::infra::utils::find_project_root().map_err(|e| anyhow::anyhow!("{e}"))?;
         let run_id = crate::infra::server::get_run_id().ok_or_else(|| {

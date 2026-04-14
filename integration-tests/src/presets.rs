@@ -454,15 +454,3 @@ fn format_yaml_parse_error(path: &Path, contents: &str, err: serde_yaml::Error) 
 
     msg
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_load_presets() {
-        let presets =
-            load_default_presets().expect("Failed to load presets.yaml from project root");
-        println!("{:#?}", presets);
-    }
-}

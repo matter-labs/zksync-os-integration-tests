@@ -147,21 +147,14 @@ const MIGRATE_L1_GAS_PRICE_WEI: u64 = 1_000_000_000;
 /// normal batch wait.
 const PRIORITY_QUEUE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
 
-/// Mirrors `L2DACommitmentScheme` on the chain contracts. Only the variants
-/// actively used in this tool are listed; add more as validium / custom-DA
-/// chains start being generated.
-#[derive(Copy, Clone)]
-enum L2DaCommitmentScheme {
-    BlobsAndPubdataKeccak256 = 3,
-}
+/// Large mint for ecosystem-wide ZK token balances (10^39 wei).
+const ZK_MINT_AMOUNT_LARGE: &str = "1000000000000000000000000000000000000000";
 
-impl L2DaCommitmentScheme {
-    fn as_u8_str(self) -> &'static str {
-        match self {
-            Self::BlobsAndPubdataKeccak256 => "3",
-        }
-    }
-}
+/// Smaller mint for per-chain admin ZK token balances (10^24 wei, ~1M ZK).
+const ZK_MINT_AMOUNT_ADMIN: &str = "1000000000000000000000000";
+
+/// Forced ZK token price in USD for local dev/test configs.
+const ZK_FORCED_PRICE_USD: u64 = 3000;
 
 // ---------------------------------------------------------------------------
 // Era-contracts execution backend (local binary or Docker session)
@@ -378,8 +371,14 @@ fn run_deploy_gateway_transaction_filterer(
 }
 
 #[derive(serde::Deserialize)]
+struct GatewayStateTransition {
+    validator_timelock_addr: String,
+}
+
+#[derive(serde::Deserialize)]
 struct VotePrepOutput {
     relayed_sl_da_validator: String,
+    gateway_state_transition: GatewayStateTransition,
 }
 
 // ---------------------------------------------------------------------------
@@ -742,7 +741,6 @@ fn deploy_zk_token(
     let zk_token_address = zk_token_address.trim().to_string();
     println!("  ZK token: {zk_token_address}");
 
-    let mint_amount = "1000000000000000000000000000000000000000";
     for (name, addr) in [
         ("ecosystem_owner", keys.ecosystem_owner_addr.as_str()),
         ("deployer", keys.deployer_addr.as_str()),
@@ -754,7 +752,7 @@ fn deploy_zk_token(
                 &zk_token_address,
                 "mint(address,uint256)",
                 addr,
-                mint_amount,
+                ZK_MINT_AMOUNT_LARGE,
                 "--private-key",
                 &keys.deployer_pk,
                 "--rpc-url",
@@ -1098,7 +1096,6 @@ async fn run_generation_flow(
     // (Operator/owner L1 ETH funding already happened in Step 3a.)
     // ----------------------------------------------------------------
     println!("\n=== Funding chain admins with ZK tokens ===");
-    let zk_mint_amount = "1000000000000000000000000";
     for proxies in [&gw_settling_diamond_proxies, &l1_settling_diamond_proxies] {
         for diamond_proxy in proxies {
             let admin = contracts_backend
@@ -1117,7 +1114,7 @@ async fn run_generation_flow(
                     &zk_token_address,
                     "mint(address,uint256)",
                     &admin,
-                    zk_mint_amount,
+                    ZK_MINT_AMOUNT_ADMIN,
                     "--private-key",
                     &keys.deployer_pk,
                     "--rpc-url",
@@ -1158,7 +1155,7 @@ async fn run_generation_flow(
             &ops.execute_pk,
         );
         if ops.chain_id == GATEWAY.id || settles_on_gateway {
-            builder = builder.forced_price(&zk_token_address, 3000);
+            builder = builder.forced_price(&zk_token_address, ZK_FORCED_PRICE_USD);
         }
         if settles_on_gateway {
             builder = builder.gateway("RUNTIME", GATEWAY.id);
@@ -1220,14 +1217,13 @@ async fn run_generation_flow(
     // The gateway uses ZK base token. Mint ZK tokens to the test account
     // and approve the bridgehub so L1→L2 deposits can pay in ZK.
     let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
-    let zk_mint = "1000000000000000000000000000000000000000";
     contracts_backend
         .cast(&[
             "send",
             &zk_token_address,
             "mint(address,uint256)",
             &test_address,
-            zk_mint,
+            ZK_MINT_AMOUNT_LARGE,
             "--private-key",
             &keys.deployer_pk,
             "--rpc-url",
@@ -1244,7 +1240,7 @@ async fn run_generation_flow(
             &zk_token_address,
             "approve(address,uint256)",
             ntv.as_str(),
-            zk_mint,
+            ZK_MINT_AMOUNT_LARGE,
             "--private-key",
             DEFAULT_ANVIL_PRIVATE_KEY,
             "--rpc-url",
@@ -1311,6 +1307,19 @@ async fn run_generation_flow(
     // Step 13: Gateway-settling chains — migrate, finalize, enable validators
     // ----------------------------------------------------------------
 
+    // Read pre-computed gateway addresses from the vote preparation output
+    // (written by GatewayVotePreparation.s.sol during convert-to-gateway).
+    // This avoids post-migration RPC queries — all data is available before
+    // any chain is migrated, per reviewer comment #20.
+    let gw_vote_toml =
+        contracts_backend.read_repo_file("l1-contracts/script-out/gateway_vote_prep_out.toml")?;
+    let vote_prep: VotePrepOutput =
+        toml::from_str(&gw_vote_toml).context("parse vote preparation output TOML")?;
+    let gw_validator_timelock = vote_prep.gateway_state_transition.validator_timelock_addr;
+    let relayed_sl_da_validator = vote_prep.relayed_sl_da_validator;
+    println!("  Gateway L2 ValidatorTimelock (from vote-prep): {gw_validator_timelock}");
+    println!("  Gateway relayed SL DA validator: {relayed_sl_da_validator}");
+
     // 13a: Migrate + confirm transfer for all chains
     for ops in gw_settling_ops {
         let chain_id = ops.chain_id;
@@ -1326,11 +1335,9 @@ async fn run_generation_flow(
             &deployer_addr,
             true,
         )?;
-        // Confirm transfer on L1 (finishMigrateChainToGateway only, no validators yet).
-        // This proves inclusion of the migration priority tx and does not require
-        // any owner authority, so we pay with the deployer key rather than the
-        // chain owner — using owner_pk here would be misleading about the
-        // command's actual authorization.
+        // Confirm transfer only (deployer_pk). This proves inclusion of the
+        // migration priority tx — no owner authority needed.
+        // Validator enablement is a separate step below (13d).
         println!("  Confirming transfer for chain {chain_id}");
         contracts_backend
             .protocol_ops(&[
@@ -1354,15 +1361,6 @@ async fn run_generation_flow(
                 &keys.deployer_pk,
                 "--vote-preparation-toml",
                 &vote_output_path_rel,
-                // No --commit/prove/execute-operator: skip validator enablement for now
-                "--commit-operator",
-                "0x0000000000000000000000000000000000000000",
-                "--prove-operator",
-                "0x0000000000000000000000000000000000000000",
-                "--execute-operator",
-                "0x0000000000000000000000000000000000000000",
-                "--gateway-validator-timelock",
-                "0x0000000000000000000000000000000000000000",
             ])
             .with_context(|| format!("finalize migration (confirm) for chain {chain_id}"))?;
     }
@@ -1373,133 +1371,73 @@ async fn run_generation_flow(
         .wait_for_executed_batches_with_traffic()
         .context("gateway batches after migration")?;
 
-    // 13c: Resolve gateway ValidatorTimelock (now chains are registered on gateway)
-    //
-    // Note on `validatorTimelockPostV29`: protocol v29 introduced a new
-    // ValidatorTimelock contract alongside the legacy one; CTM exposes both
-    // via `validatorTimelock()` (pre-v29) and `validatorTimelockPostV29()`
-    // (v29+). Gateway-settling chains run v29+, so we read the post-v29
-    // address here.
-    let gw_validator_timelock = {
-        let first_chain_id = gw_settling_ops[0].chain_id;
-        let ctm = contracts_backend
-            .cast(&[
-                "call",
-                "0x0000000000000000000000000000000000010002",
-                "chainTypeManager(uint256)(address)",
-                &first_chain_id.to_string(),
-                "--rpc-url",
-                &gw_l2_rpc,
-            ])
-            .context("query gateway L2 chainTypeManager")?;
-        let ctm = ctm.trim().to_string();
-        anyhow::ensure!(
-            !ctm.is_empty() && ctm != "0x0000000000000000000000000000000000000000",
-            "chain {} not registered on gateway yet",
-            first_chain_id
-        );
-        let vtl = contracts_backend
-            .cast(&[
-                "call",
-                &ctm,
-                "validatorTimelockPostV29()(address)",
-                "--rpc-url",
-                &gw_l2_rpc,
-            ])
-            .context("query validatorTimelockPostV29")?;
-        vtl.trim().to_string()
-    };
-    println!("  Gateway L2 ValidatorTimelock: {gw_validator_timelock}");
-
-    // Read gateway's relayed SL DA validator from vote preparation output.
-    // protocol_ops writes to l1-contracts/script-out/ (symlinked to work_dir
-    // in Docker).
-    let gw_vote_toml =
-        contracts_backend.read_repo_file("l1-contracts/script-out/gateway_vote_prep_out.toml")?;
-    let vote_prep: VotePrepOutput =
-        toml::from_str(&gw_vote_toml).context("parse vote preparation output TOML")?;
-    let relayed_sl_da_validator = vote_prep.relayed_sl_da_validator;
-    println!("  Gateway relayed SL DA validator: {relayed_sl_da_validator}");
-
-    // 13d: Enable validators + fund operators for each chain
-    // Call AdminFunctions.enableValidatorViaGateway directly via forge
-    for (i, ops) in gw_settling_ops.iter().enumerate() {
+    // 13d: Enable validators + set DA validator pairs + fund operators.
+    // Each step uses the chain owner's key (owner_pk). Validator timelock
+    // is pre-computed from the vote-prep output; diamond proxy on gateway
+    // is resolved inside protocol_ops via gateway RPC.
+    for ops in gw_settling_ops {
         let chain_id = ops.chain_id;
-        println!("\n=== Enabling validators for chain {} ===", chain_id);
-        let mut seen = std::collections::HashSet::new();
-        for (name, addr) in [
-            ("commit", &ops.commit_addr),
-            ("prove", &ops.prove_addr),
-            ("execute", &ops.execute_addr),
-        ] {
-            if !seen.insert(addr.clone()) {
-                continue;
-            }
-            println!("  Enabling {name} operator {addr}");
-            let chain_id_str = chain_id.to_string();
-            let gw_chain_id_str = GATEWAY.id.to_string();
-            contracts_backend.forge_script(&[
-                "deploy-scripts/AdminFunctions.s.sol",
-                "--sig", "enableValidatorViaGateway(address,uint256,uint256,uint256,address,address,address,bool)",
-                &bridgehub,
-                "1000000000",
-                &chain_id_str,
-                &gw_chain_id_str,
-                addr,
-                &gw_validator_timelock,
-                &deployer_addr,
-                "true",
-                "--rpc-url", l1_rpc_url,
-                "--broadcast", "--ffi",
-                "--private-key", &ops.owner_pk,
-            ], &[])
-            .with_context(|| format!("enableValidatorViaGateway for {name} operator {addr} on chain {chain_id}"))?;
-        }
 
-        // Set DA validator pair via gateway
+        // protocol_ops migrate step 5: enable-validators (owner_pk)
+        println!("  Enabling validators for chain {chain_id}");
+        contracts_backend
+            .protocol_ops(&[
+                "chain",
+                "gateway",
+                "migrate",
+                "enable-validators",
+                "--bridgehub",
+                &bridgehub,
+                "--chain-id",
+                &chain_id.to_string(),
+                "--gateway-chain-id",
+                &GATEWAY.id.to_string(),
+                "--gateway-rpc-url",
+                &gw_l2_rpc,
+                "--commit-operator",
+                &ops.commit_addr,
+                "--prove-operator",
+                &ops.prove_addr,
+                "--execute-operator",
+                &ops.execute_addr,
+                "--gateway-validator-timelock",
+                &gw_validator_timelock,
+                "--l1-rpc-url",
+                l1_rpc_url,
+                "--private-key",
+                &ops.owner_pk,
+            ])
+            .with_context(|| format!("enable validators for chain {chain_id}"))?;
+
+        // protocol_ops migrate step 6: set-da-validator-pair (owner_pk)
         println!("  Setting DA validator pair via gateway for chain {chain_id}");
-        let chain_diamond_on_gw = {
-            let out = contracts_backend
-                .cast(&[
-                    "call",
-                    "0x0000000000000000000000000000000000010002",
-                    "getZKChain(uint256)(address)",
-                    &chain_id.to_string(),
-                    "--rpc-url",
-                    &gw_l2_rpc,
-                ])
-                .context("query chain diamond on gateway")?;
-            out.trim().to_string()
-        };
-        // Update with the post-migration gateway address (replaces the
-        // pre-migration L1 address captured during chain init).
-        println!(
-            "  Chain {} diamond proxy on gateway: {}",
-            chain_id, chain_diamond_on_gw
-        );
-        gw_settling_diamond_proxies[i] = chain_diamond_on_gw.clone();
-        let chain_id_str = chain_id.to_string();
-        let gw_chain_id_str = GATEWAY.id.to_string();
-        // All currently-generated chains are rollups; switch to a validium
-        // variant here when adding validium-on-gateway coverage.
-        let da_scheme = L2DaCommitmentScheme::BlobsAndPubdataKeccak256;
-        contracts_backend.forge_script(&[
-            "deploy-scripts/AdminFunctions.s.sol",
-            "--sig", "setDAValidatorPairWithGateway(address,uint256,uint256,uint256,address,uint8,address,address,bool)",
-            &bridgehub,
-            "1000000000",
-            &chain_id_str,
-            &gw_chain_id_str,
-            &relayed_sl_da_validator,
-            da_scheme.as_u8_str(),
-            &chain_diamond_on_gw,
-            &deployer_addr,
-            "true",
-            "--rpc-url", l1_rpc_url,
-            "--broadcast", "--ffi",
-            "--private-key", &ops.owner_pk,
-        ], &[])
-        .with_context(|| format!("setDAValidatorPairWithGateway for chain {chain_id}"))?;
+        // Gateway-settling rollup chains use BlobsAndPubdataKeccak256 (scheme 3),
+        // which matches ROLLUP_L2_DA_COMMITMENT_SCHEME in Config.sol and the
+        // RelayedSLDAValidator / CalldataDAGateway pair on the gateway.
+        contracts_backend
+            .protocol_ops(&[
+                "chain",
+                "gateway",
+                "migrate",
+                "set-da-validator-pair",
+                "--bridgehub",
+                &bridgehub,
+                "--chain-id",
+                &chain_id.to_string(),
+                "--gateway-chain-id",
+                &GATEWAY.id.to_string(),
+                "--gateway-rpc-url",
+                &gw_l2_rpc,
+                "--l1-da-validator",
+                &relayed_sl_da_validator,
+                "--l2-da-commitment-scheme",
+                "blobs-and-pubdata-keccak256",
+                "--l1-rpc-url",
+                l1_rpc_url,
+                "--private-key",
+                &ops.owner_pk,
+            ])
+            .with_context(|| format!("set DA validator pair for chain {chain_id}"))?;
 
         println!("  Funding gateway L2 for chain {} operators", chain_id);
         for addr in [&ops.commit_addr, &ops.prove_addr, &ops.execute_addr] {
@@ -1630,7 +1568,7 @@ async fn run_generation_flow(
             &gw_ops.execute_pk,
         )
         .ephemeral(gw_state_archive_abs.to_string_lossy())
-        .forced_price(&zk_token_address, 3000)
+        .forced_price(&zk_token_address, ZK_FORCED_PRICE_USD)
         .build(),
     )?;
     println!("  Updated {}.yaml with ephemeral state", gw_ops.dir_name);
@@ -1666,7 +1604,7 @@ async fn main() -> Result<()> {
     let cacheable = matches!(preset.era_contracts, RepoRef::DockerTag { .. })
         && matches!(preset.zksync_os_server, RepoRef::DockerTag { .. });
     if cacheable && metadata_path.exists() {
-        // Verify the cached state was generated with the same image SHAs.
+        // Verify the cached state was generated with the same image tags.
         // If a newer image has become available since the fallback, regenerate.
         let meta: serde_json::Value =
             serde_json::from_str(&fs::read_to_string(&metadata_path).unwrap_or_default())

@@ -47,6 +47,9 @@ const SERVER_READY_MAX_ATTEMPTS: usize = 30;
 const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const ZKSYNC_OS_SERVER_IMAGE_REPO: &str = "ghcr.io/matter-labs/zksync-os-server";
 
+/// L2 system contract address of the Bridgehub on gateway chains.
+const GATEWAY_L2_BRIDGEHUB: &str = "0x0000000000000000000000000000000000010002";
+
 pub fn get_or_create_run_id(name: &str) -> &'static str {
     TEST_RUN_ID
         .get_or_init(|| name.replace([' ', ':'], "_"))
@@ -344,10 +347,7 @@ impl ServerBuilder {
             if let Some(chain_id) = self.chain_id {
                 let (sl_bridgehub, sl_rpc_url) = if let Some(gw_url) = &self.gateway_rpc_url {
                     // Gateway-settling: query the gateway's L2 bridgehub.
-                    (
-                        "0x0000000000000000000000000000000000010002".to_string(),
-                        gw_url.clone(),
-                    )
+                    (GATEWAY_L2_BRIDGEHUB.to_string(), gw_url.clone())
                 } else if let Some(bh) = &self.bridgehub_addr {
                     // L1-settling: query the L1 bridgehub.
                     (bh.clone(), host_l1_rpc_url.clone())

@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::l1_state::{
-    chain_config_path, load_ecosystem, load_wallets, resolve_l1_state,
-};
+use integration_tests::l1_state::{chain_config_path, load_ecosystem, resolve_l1_state};
 use integration_tests::presets::load_current_preset;
 use integration_tests::server::ServerBuilder;
 
@@ -25,9 +23,6 @@ async fn run_gateway_settling_test() -> Result<()> {
         "Gateway-settling chain {} (diamond_proxy={})",
         chain.chain_id, chain.diamond_proxy
     );
-
-    // Load wallets (used by server configs for operator keys)
-    let _wallets = load_wallets(&preset)?;
 
     println!("\n=== Loading l1-state.json into Anvil ===");
     let state_path = resolve_l1_state(&preset, &eco)?;
@@ -77,13 +72,9 @@ async fn run_gateway_settling_test() -> Result<()> {
         .wait_for_executed_batches_with_traffic()
         .context("gateway-settling chain batches")?;
 
-    chain_server
-        .kill()
-        .map_err(|e| anyhow::anyhow!("kill chain server: {:?}", e))?;
-    gw_server
-        .kill()
-        .map_err(|e| anyhow::anyhow!("kill gateway server: {:?}", e))?;
-    anvil.kill()?;
+    let _ = chain_server.kill();
+    let _ = gw_server.kill();
+    let _ = anvil.kill();
 
     println!("\nTest passed!");
     Ok(())

@@ -341,99 +341,6 @@ fn transfer_new_contracts_ownership(
     Ok(())
 }
 
-/// Check if migration is paused on ChainAssetHandler
-fn check_migration_paused(
-    contracts_backend: &EraContractsBackend,
-    chain_asset_handler: &str,
-    context: &str,
-    l1_rpc_url: &str,
-) -> Result<()> {
-    // Check migrationPaused
-    let result = contracts_backend
-        .cast(&[
-            "call",
-            chain_asset_handler,
-            "migrationPaused()(bool)",
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .context("Failed to call migrationPaused")?;
-    let result = result.trim();
-    println!("  migrationPaused() {} = {}", context, result);
-
-    // Also check which implementation is being used
-    let impl_addr = contracts_backend
-        .cast(&[
-            "storage",
-            chain_asset_handler,
-            "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc",
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .context("Failed to read implementation slot")?;
-    let impl_addr = impl_addr.trim();
-    println!("  Implementation {} = {}", context, impl_addr);
-
-    Ok(())
-}
-
-/// Ensure migration is paused, calling pauseMigration() directly if needed
-fn ensure_migration_paused(
-    contracts_backend: &EraContractsBackend,
-    chain_asset_handler: &str,
-    l1_rpc_url: &str,
-) -> Result<()> {
-    // Check if already paused
-    let result = contracts_backend
-        .cast(&[
-            "call",
-            chain_asset_handler,
-            "migrationPaused()(bool)",
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .context("Failed to call migrationPaused")?;
-    if result.trim() == "true" {
-        println!("  Migration already paused");
-        return Ok(());
-    }
-
-    println!("  Migration not paused, pausing via impersonation...");
-
-    // Get the owner and pause via impersonation
-    let owner = contracts_backend
-        .cast(&[
-            "call",
-            chain_asset_handler,
-            "owner()(address)",
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .context("Failed to read owner")?;
-    let owner = owner.trim().to_string();
-
-    impersonate_account(&owner, l1_rpc_url)?;
-    fund_account(&owner, "1ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)?;
-
-    contracts_backend
-        .cast(&[
-            "send",
-            chain_asset_handler,
-            "pauseMigration()",
-            "--from",
-            &owner,
-            "--rpc-url",
-            l1_rpc_url,
-            "--unlocked",
-        ])
-        .context("Failed to pause migration")?;
-
-    stop_impersonating_account(&owner, l1_rpc_url);
-
-    println!("  ✓ Migration paused via direct call");
-    Ok(())
-}
-
 /// Run ecosystem upgrade stages. Returns script output from no-governance-prepare (no v31-upgrade-*.toml files on disk).
 fn run_ecosystem_upgrades(
     contracts_backend: &EraContractsBackend,
@@ -550,20 +457,7 @@ fn run_ecosystem_upgrades(
     contracts_backend
         .execute_protocol_ops_out(governance_stage0_out, l1_rpc_url, governor_key)
         .context("execute_transactions (governance-stage0) failed")?;
-
-    let chain_asset_handler = extract_json_value(
-        &script_output.core,
-        "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr",
-    )?;
-    check_migration_paused(
-        contracts_backend,
-        &chain_asset_handler,
-        "after governance-stage0",
-        l1_rpc_url,
-    )?;
-    ensure_migration_paused(contracts_backend, &chain_asset_handler, l1_rpc_url)?;
-
-    std::thread::sleep(Duration::from_secs(1));
+    // governance-stage0 includes pauseMigration() via prepareStage0GovernanceCalls()
 
     let governance_stage1_out = "governance_stage1_out.json";
     let governance_stage1_out_arg = contracts_backend.work_path(governance_stage1_out);
@@ -591,14 +485,7 @@ fn run_ecosystem_upgrades(
     contracts_backend.execute_protocol_ops_out(governance_stage1_out, l1_rpc_url, governor_key)
         .context("execute_transactions (governance-stage1) failed - this is required to set protocol version in CTM")?;
 
-    check_migration_paused(
-        contracts_backend,
-        &chain_asset_handler,
-        "after governance-stage1",
-        l1_rpc_url,
-    )?;
-
-    println!("✓ All ecosystem upgrade stages completed");
+    println!("✓ Ecosystem upgrade stages 0-1 completed");
 
     Ok(script_output)
 }
@@ -770,13 +657,10 @@ fn read_l2_block_number_by_tag(
         .with_context(|| format!("Failed to parse decimal block number '{}'", raw))
 }
 
-// FIXME(#7, Stanislav): This test-only drain strategy relies on stopping new
-// block production until `safe == finalized`, which is not what we'll do in
-// production — mainnet keeps producing blocks through an upgrade and
-// `safe` will never catch up to `finalized`. Follow-up should check the
-// protocol version on the server and wait until all blocks with the
-// previous version are finalized, regardless of whether new (next-version)
-// blocks are still being produced.
+/// Wait until committed == executed and latest == safe == finalized on L2.
+/// This is a simplified test-only strategy; production upgrades keep
+/// producing blocks and instead wait for all pre-upgrade-version batches
+/// to finalize.
 fn wait_for_server_batches_to_drain_before_upgrade(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
@@ -983,7 +867,6 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         balance
     );
 
-    println!("Driving L2 traffic until 3 more batches are executed on L1...");
     server
         .wait_for_executed_batches_with_traffic()
         .with_context(|| {
@@ -1040,7 +923,6 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
 
         // Wait for 3 *new* batches produced under v31, regardless of how many were
         // produced during the pre-upgrade phase.
-        println!("Driving post-upgrade traffic until 3 more batches are executed on L1...");
         server
             .wait_for_executed_batches_with_traffic()
             .with_context(|| {

@@ -181,6 +181,12 @@ impl ContractsContainerSession {
         &self.container_name
     }
 
+    /// Rewrite localhost URLs so they resolve inside the Docker container.
+    fn remap_localhost_url(url: &str) -> String {
+        url.replace("://localhost:", "://host.docker.internal:")
+            .replace("://127.0.0.1:", "://host.docker.internal:")
+    }
+
     /// Run `protocol_ops <args>` inside the container.
     /// Rewrites `--l1-rpc-url`, `--gateway-rpc-url`, and `--out` args for Docker.
     pub fn protocol_ops(&self, args: &[&str]) -> anyhow::Result<String> {
@@ -208,11 +214,7 @@ impl ContractsContainerSession {
             }
             if (args[i] == "--l1-rpc-url" || args[i] == "--gateway-rpc-url") && i + 1 < args.len() {
                 rewritten.push(args[i].to_string());
-                rewritten.push(
-                    args[i + 1]
-                        .replace("://localhost:", "://host.docker.internal:")
-                        .replace("://127.0.0.1:", "://host.docker.internal:"),
-                );
+                rewritten.push(Self::remap_localhost_url(args[i + 1]));
                 i += 2;
                 continue;
             }
@@ -232,10 +234,7 @@ impl ContractsContainerSession {
     ) -> anyhow::Result<String> {
         let mut command: Vec<String> = vec!["forge".into(), "script".into()];
         for arg in forge_args {
-            let remapped = arg
-                .replace("://localhost:", "://host.docker.internal:")
-                .replace("://127.0.0.1:", "://host.docker.internal:");
-            command.push(remapped);
+            command.push(Self::remap_localhost_url(arg));
         }
         let cmd_refs: Vec<&str> = command.iter().map(|s| s.as_str()).collect();
         self.exec(&cmd_refs, extra_envs, Some("/contracts/l1-contracts"))
@@ -245,10 +244,7 @@ impl ContractsContainerSession {
     pub fn cast(&self, args: &[&str]) -> anyhow::Result<String> {
         let mut command: Vec<String> = vec!["cast".into()];
         for arg in args {
-            let remapped = arg
-                .replace("://localhost:", "://host.docker.internal:")
-                .replace("://127.0.0.1:", "://host.docker.internal:");
-            command.push(remapped);
+            command.push(Self::remap_localhost_url(arg));
         }
         let cmd_refs: Vec<&str> = command.iter().map(|s| s.as_str()).collect();
         self.exec(&cmd_refs, &[], None)

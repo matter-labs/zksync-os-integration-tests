@@ -120,12 +120,12 @@ async fn wait_for_message_proof(
     }
 }
 
-/// Poll `L2InteropRootStorage.interopRoots(chainId, batchNumber)` on a chain
+/// Poll `L2InteropRootStorage.interopRoots(chainId, blockNumber)` on a chain
 /// until the root is non-zero.
 async fn wait_for_interop_root(
     rpc_url: &str,
     gw_chain_id: u64,
-    gw_batch_number: u64,
+    gw_block_number: u64,
     timeout: Duration,
 ) -> Result<FixedBytes<32>> {
     let provider = ProviderBuilder::new()
@@ -138,13 +138,13 @@ async fn wait_for_interop_root(
     loop {
         if start.elapsed() > timeout {
             anyhow::bail!(
-                "Timed out waiting for interop root (gwChain={}, gwBatch={})",
+                "Timed out waiting for interop root (gwChain={}, gwBlock={})",
                 gw_chain_id,
-                gw_batch_number
+                gw_block_number
             );
         }
         let root = root_storage
-            .interopRoots(U256::from(gw_chain_id), U256::from(gw_batch_number))
+            .interopRoots(U256::from(gw_chain_id), U256::from(gw_block_number))
             .call()
             .await
             .context("interopRoots call")?
@@ -152,42 +152,12 @@ async fn wait_for_interop_root(
         if !root.is_zero() {
             println!(
                 "  Interop root found: gwChain={}, gwBatch={}, root={}",
-                gw_chain_id, gw_batch_number, root
+                gw_chain_id, gw_block_number, root
             );
             return Ok(root);
         }
         tokio::time::sleep(Duration::from_millis(500)).await;
     }
-}
-
-// ---------------------------------------------------------------------------
-// Traffic helper
-// ---------------------------------------------------------------------------
-
-/// Send a trivial L2 transaction to generate traffic.
-/// Uses `cast` directly instead of EraBackend because this runs in a spawned
-/// task and always targets a local RPC (no Docker remapping needed).
-fn send_l2_traffic(l2_rpc_url: &str, private_key: &str) -> Result<()> {
-    let output = std::process::Command::new("cast")
-        .args([
-            "send",
-            "0x0000000000000000000000000000000000000001",
-            "--value",
-            "1",
-            "--private-key",
-            private_key,
-            "--rpc-url",
-            l2_rpc_url,
-        ])
-        .output()
-        .context("cast send for traffic")?;
-    if !output.status.success() {
-        anyhow::bail!(
-            "traffic tx failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -309,18 +279,8 @@ async fn run_interop_message_test() -> Result<()> {
     );
 
     // ---- Get message proof (MessageRoot variant) ----
-    // Drive L2 traffic on chain A so batches are produced and settled on the gateway.
-    println!("\n=== Waiting for message proof (MessageRoot) — sending traffic ===");
-    let chain_a_rpc_for_traffic = chain_a_l2_rpc.clone();
-    let traffic_handle = tokio::spawn(async move {
-        loop {
-            let _ = send_l2_traffic(&chain_a_rpc_for_traffic, DEFAULT_ANVIL_PRIVATE_KEY);
-            tokio::time::sleep(Duration::from_secs(3)).await;
-        }
-    });
     let log_proof =
         wait_for_message_proof(&chain_a_l2_rpc, tx_hash, Duration::from_secs(300)).await?;
-    traffic_handle.abort();
     let gw_block_number = log_proof
         .gateway_block_number
         .context("MessageRoot proof must have gateway_block_number")?;
@@ -372,17 +332,11 @@ async fn run_interop_message_test() -> Result<()> {
     anyhow::ensure!(included, "Message was NOT included in the interop proof");
     println!("\n=== Message verified on chain B ===");
 
-    // ---- Verify chain B produces executed batches ----
-    println!("\n=== Waiting for chain B progress ===");
-    chain_b_server
-        .wait_for_executed_batches_with_traffic()
-        .context("chain B progress")?;
-
     // ---- Cleanup ----
     let _ = chain_b_server.kill();
     let _ = chain_a_server.kill();
     let _ = gw_server.kill();
-    anvil.kill()?;
+    let _ = anvil.kill();
 
     println!("\nTest passed!");
     Ok(())

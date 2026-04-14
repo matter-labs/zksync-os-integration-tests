@@ -1,8 +1,6 @@
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::l1_state::{
-    chain_config_path, load_ecosystem, load_wallets, resolve_l1_state,
-};
+use integration_tests::l1_state::{chain_config_path, load_ecosystem, resolve_l1_state};
 use integration_tests::presets::load_current_preset;
 use integration_tests::server::ServerBuilder;
 
@@ -20,8 +18,6 @@ async fn run_l1_settling_test() -> Result<()> {
         "Testing L1-settling chain {} (diamond_proxy={})",
         chain.chain_id, chain.diamond_proxy
     );
-
-    let _wallets = load_wallets(&preset)?;
 
     println!("\n=== Loading l1-state.json into Anvil ===");
     let state_path = resolve_l1_state(&preset, &eco)?;
@@ -60,10 +56,8 @@ async fn run_l1_settling_test() -> Result<()> {
         chain.chain_id, executed
     );
 
-    server
-        .kill()
-        .map_err(|e| anyhow::anyhow!("kill server: {:?}", e))?;
-    anvil.kill()?;
+    let _ = server.kill();
+    let _ = anvil.kill();
     println!("\nTest passed!");
     Ok(())
 }
