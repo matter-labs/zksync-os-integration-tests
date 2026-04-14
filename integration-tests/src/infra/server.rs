@@ -716,7 +716,7 @@ impl Server {
             ServerRuntime::Docker(container)
         };
 
-        Ok(Self {
+        let server = Self {
             runtime,
             server_name,
             log_label,
@@ -728,7 +728,9 @@ impl Server {
             diamond_proxy_addr: builder.diamond_proxy_addr,
             bridgehub_addr: builder.bridgehub_addr,
             chain_id: builder.chain_id,
-        })
+        };
+
+        Ok(server)
     }
 
     /// Get the container name
@@ -747,6 +749,32 @@ impl Server {
         self.gateway_rpc_url
             .as_deref()
             .unwrap_or(self.host_l1_rpc_url.as_str())
+    }
+
+    /// Poll until `address` has a non-zero L2 balance on this server, or
+    /// `timeout` expires. Useful when the balance comes from a priority-queue
+    /// deposit submitted by `generate-l1-state` that the server hasn't
+    /// processed yet at startup.
+    pub fn wait_for_l2_balance(&self, address: &str, timeout: Duration) -> anyhow::Result<()> {
+        let l2_rpc = self.rpc_url();
+        let deadline = Instant::now() + timeout;
+        loop {
+            let output = std::process::Command::new("cast")
+                .args(["balance", address, "--rpc-url", &l2_rpc])
+                .output()
+                .context("cast balance")?;
+            if output.status.success() {
+                let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let bal: u128 = raw.parse().unwrap_or(0);
+                if bal > 0 {
+                    return Ok(());
+                }
+            }
+            if Instant::now() > deadline {
+                anyhow::bail!("{address} still has zero L2 balance after {timeout:?}");
+            }
+            sleep(Duration::from_secs(2));
+        }
     }
 
     /// Send a tiny self-driven L2 transaction (1 wei to `0x...01`) to nudge
@@ -819,10 +847,22 @@ impl Server {
         let diamond_proxy_addr = self.diamond_proxy_addr.as_deref().ok_or_else(|| {
             anyhow::anyhow!(
                 "Server::wait_for_executed_batches_with_traffic requires \
-                 ServerBuilder::diamond_proxy_addr to be set"
+                 diamond_proxy_addr — could not auto-resolve from config + L1"
             )
         })?;
         let settlement_rpc_url = self.settlement_rpc_url();
+
+        // Ensure the traffic sender has L2 balance before entering the
+        // loop. The deposit may come from a pre-queued priority tx
+        // (generate-l1-state) or an explicit fund_account_via_l1_deposit
+        // call — either way, by the time a caller invokes this method
+        // the deposit has been submitted and just needs the server to
+        // process it.
+        let sender_addr =
+            crate::server_utils::address_from_private_key(crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY)
+                .context("derive traffic sender address")?;
+        self.wait_for_l2_balance(&sender_addr, Duration::from_secs(60))
+            .context("traffic sender has no L2 balance")?;
 
         let start_executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)
             .context("Failed to read initial getTotalBatchesExecuted")?;
