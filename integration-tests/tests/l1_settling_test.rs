@@ -7,6 +7,7 @@ use integration_tests::presets::load_current_preset;
 use integration_tests::server::ServerBuilder;
 
 async fn run_l1_settling_test() -> Result<()> {
+    integration_tests::server::get_or_create_run_id("l1_settling");
     let preset = load_current_preset()?;
     let eco = load_ecosystem(&preset)?;
 

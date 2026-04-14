@@ -195,6 +195,7 @@ fn send_l2_traffic(l2_rpc_url: &str, private_key: &str) -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn run_interop_message_test() -> Result<()> {
+    integration_tests::server::get_or_create_run_id("interop");
     let preset = load_current_preset()?;
     let eco = load_ecosystem(&preset)?;
     anyhow::ensure!(

@@ -468,8 +468,14 @@ impl Server {
         let project_root = find_project_root()?;
 
         // Group all server logs in this test run under test-run-logs/{run_id}.
-        let chain_name = builder.chain_name.as_deref().unwrap_or("unknown");
-        let run_id = get_or_create_run_id(chain_name);
+        // The run ID must be set before any server is spawned — call
+        // `get_or_create_run_id("test_name")` at the top of the test.
+        let run_id = get_run_id().unwrap_or_else(|| {
+            panic!(
+                "No run ID set. Call `integration_tests::server::get_or_create_run_id(\"test_name\")` \
+                 before spawning a server."
+            )
+        });
         let logs_dir = if let Some(override_dir) = builder.logs_dir.as_ref() {
             override_dir.clone()
         } else {
