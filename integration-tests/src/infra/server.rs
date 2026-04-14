@@ -335,10 +335,30 @@ impl ServerBuilder {
         // `host.docker.internal` for the server container.
         let host_l1_rpc_url = anvil.rpc_url().to_string();
 
+        // Resolve diamond proxy from the chain's settlement layer. For
+        // gateway-settling chains the batches are tracked on the gateway's
+        // L2 bridgehub (system contract at 0x…10002), not on the L1
+        // bridgehub. For L1-settling chains we query the L1 bridgehub
+        // that was read from the config YAML.
         if self.diamond_proxy_addr.is_none() {
-            if let (Some(bridgehub), Some(chain_id)) = (&self.bridgehub_addr, self.chain_id) {
-                self.diamond_proxy_addr =
-                    resolve_diamond_proxy(bridgehub, chain_id, &host_l1_rpc_url).ok();
+            if let Some(chain_id) = self.chain_id {
+                let (sl_bridgehub, sl_rpc_url) = if let Some(gw_url) = &self.gateway_rpc_url {
+                    // Gateway-settling: query the gateway's L2 bridgehub.
+                    (
+                        "0x0000000000000000000000000000000000010002".to_string(),
+                        gw_url.clone(),
+                    )
+                } else if let Some(bh) = &self.bridgehub_addr {
+                    // L1-settling: query the L1 bridgehub.
+                    (bh.clone(), host_l1_rpc_url.clone())
+                } else {
+                    // Can't resolve — bridgehub unknown.
+                    (String::new(), String::new())
+                };
+                if !sl_bridgehub.is_empty() {
+                    self.diamond_proxy_addr =
+                        resolve_diamond_proxy(&sl_bridgehub, chain_id, &sl_rpc_url).ok();
+                }
             }
         }
         let (server_root, use_local, image) = match &self.preset.zksync_os_server {
