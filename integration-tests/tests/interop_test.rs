@@ -5,9 +5,7 @@ use alloy::signers::local::LocalSigner;
 use alloy::sol;
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::l1_state::{
-    chain_config_path, load_ecosystem, resolve_l1_state,
-};
+use integration_tests::l1_state::{chain_config_path, load_ecosystem, resolve_l1_state};
 use integration_tests::presets::load_current_preset;
 use std::str::FromStr;
 use std::time::Duration;

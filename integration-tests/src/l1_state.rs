@@ -227,4 +227,3 @@ pub fn load_wallets(preset: &Preset) -> Result<WalletsFile> {
         .with_context(|| format!("read {}", wallets_path.display()))?;
     serde_yaml::from_str(&content).context("parse wallets.yaml")
 }
-

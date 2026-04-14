@@ -1034,9 +1034,8 @@ async fn run_generation_flow(
         },
         gw_chain_out_name,
     )?;
-    let gw_chain_json: serde_json::Value = serde_json::from_str(
-        &contracts_backend.read_protocol_ops_output(gw_chain_out_name)?,
-    )?;
+    let gw_chain_json: serde_json::Value =
+        serde_json::from_str(&contracts_backend.read_protocol_ops_output(gw_chain_out_name)?)?;
     let gw_chain_output = gw_chain_json
         .get("output")
         .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
@@ -1192,10 +1191,7 @@ async fn run_generation_flow(
     // ----------------------------------------------------------------
     // Step 9: Start gateway server
     // ----------------------------------------------------------------
-    println!(
-        "\n=== Starting gateway server (chain {}) ===",
-        GATEWAY.id
-    );
+    println!("\n=== Starting gateway server (chain {}) ===", GATEWAY.id);
     let gw_config_path = output_dir.join(format!("{}.yaml", gw_ops.dir_name));
 
     let anvil_handle = integration_tests::anvil::Anvil::wrap_external(anvil_port);
@@ -1770,18 +1766,18 @@ async fn main() -> Result<()> {
 
     // Chain operator contexts (from wallets.yaml)
     let ops_for = |spec: &ChainSpec| -> Result<ChainOperators> {
-        let w = wallets.chains.get(spec.name).ok_or_else(|| {
-            anyhow::anyhow!("wallets.yaml missing chain '{}'", spec.name)
-        })?;
+        let w = wallets
+            .chains
+            .get(spec.name)
+            .ok_or_else(|| anyhow::anyhow!("wallets.yaml missing chain '{}'", spec.name))?;
         ChainOperators::from_wallets(spec.id, spec.name, w)
     };
     let gw_ops = ops_for(&GATEWAY)?;
     let gw_settling_ops: Vec<ChainOperators> = gateway_settling_chains()
         .map(ops_for)
         .collect::<Result<_>>()?;
-    let l1_settling_ops: Vec<ChainOperators> = l1_settling_chains()
-        .map(ops_for)
-        .collect::<Result<_>>()?;
+    let l1_settling_ops: Vec<ChainOperators> =
+        l1_settling_chains().map(ops_for).collect::<Result<_>>()?;
 
     // ----------------------------------------------------------------
     // Step 1: Build contracts (local only — Docker image has pre-built artifacts)

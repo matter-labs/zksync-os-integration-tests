@@ -22,8 +22,8 @@ fn decompress_l1_state_gz(
     state_gz: &std::path::Path,
     state_json: &std::path::Path,
 ) -> anyhow::Result<()> {
-    let gz_file = File::open(state_gz)
-        .with_context(|| format!("Failed to open {}", state_gz.display()))?;
+    let gz_file =
+        File::open(state_gz).with_context(|| format!("Failed to open {}", state_gz.display()))?;
     let decoder = GzDecoder::new(BufReader::new(gz_file));
     let mut out_file = File::create(state_json)
         .with_context(|| format!("Failed to create {}", state_json.display()))?;

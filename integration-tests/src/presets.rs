@@ -126,9 +126,7 @@ pub fn load_current_preset() -> anyhow::Result<Preset> {
     // consumer) can replay the exact images this run used. This is the
     // answer to "CI failed, what exactly was running?".
     if let Err(e) = write_resolved_refs_file(&preset) {
-        eprintln!(
-            "  (failed to write test-run-logs/resolved-refs.json: {e:#})"
-        );
+        eprintln!("  (failed to write test-run-logs/resolved-refs.json: {e:#})");
     }
 
     Ok(preset)
@@ -178,8 +176,7 @@ fn fallback_warnings(preset: &Preset) -> Vec<String> {
 fn write_resolved_refs_file(preset: &Preset) -> anyhow::Result<()> {
     let root = find_project_root()?;
     let logs_dir = root.join("test-run-logs");
-    std::fs::create_dir_all(&logs_dir)
-        .with_context(|| format!("create {}", logs_dir.display()))?;
+    std::fs::create_dir_all(&logs_dir).with_context(|| format!("create {}", logs_dir.display()))?;
     let path = logs_dir.join("resolved-refs.json");
     let body = serde_json::json!({
         "preset": preset.name,

@@ -192,8 +192,7 @@ impl EraContractsBackend {
                 fs::write(&path, contents).with_context(|| format!("write {}", path.display()))
             }
             EraContractsBackend::Docker { session, work_dir } => {
-                let tempfile_name =
-                    format!(".write_repo_{}.tmp", uuid::Uuid::new_v4().simple());
+                let tempfile_name = format!(".write_repo_{}.tmp", uuid::Uuid::new_v4().simple());
                 let host_tempfile = work_dir.join(&tempfile_name);
                 fs::write(&host_tempfile, contents)
                     .with_context(|| format!("write temp {}", host_tempfile.display()))?;
