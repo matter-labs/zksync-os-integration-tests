@@ -535,7 +535,13 @@ impl Server {
             // on Linux CI, where `--user UID:GID` is set, the host user
             // couldn't create directories there (`Permission denied`).
             let container_db_mount = "/db";
-            let container_rocks_path = "/db/rocksdb";
+            // Point RocksDB directly at the mount root so the host-side
+            // layout (`rocks_path/tree`, `rocks_path/block_replay_wal`, …)
+            // stays flat — matching what the ephemeral-state archiver
+            // (`tar.append_dir_all("node", &gw_rocks_db)`) and unpacker
+            // expect. Previously we used `/db/rocksdb` which added a
+            // subdirectory on the host that broke the archive layout.
+            let container_rocks_path = "/db";
             if builder.ephemeral {
                 // Remap ephemeral_state path: the archive lives in the config
                 // dir on the host, which is mounted at container_config_dir.
