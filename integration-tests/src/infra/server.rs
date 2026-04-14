@@ -526,9 +526,15 @@ impl Server {
                     e
                 ))
             })?;
-            // Mount under the image's declared VOLUME /db (owned by app:app),
-            // not /app/rocksdb (under root-owned /app). This lets the container
-            // run as its default non-root `app` user.
+            // Mount `rocks_path` at `/db` so that both the RocksDB databases
+            // (`general_rocks_db_path = /db/rocksdb`) AND the proof-storage /
+            // block-dump directories (relative paths `./db/fri_proofs/`,
+            // `./db/block_dumps/` from workdir `/`) land inside the same
+            // host-writable bind mount. Previously we mounted at `/db/rocksdb`
+            // which left `/db/fri_proofs/` in the anonymous Docker layer — and
+            // on Linux CI, where `--user UID:GID` is set, the host user
+            // couldn't create directories there (`Permission denied`).
+            let container_db_mount = "/db";
             let container_rocks_path = "/db/rocksdb";
             if builder.ephemeral {
                 // Remap ephemeral_state path: the archive lives in the config
@@ -574,7 +580,7 @@ impl Server {
                 .arg("-v")
                 .arg(format!("{}:{}", config_dir.display(), container_config_dir))
                 .arg("-v")
-                .arg(format!("{}:{}", rocks_path.display(), container_rocks_path))
+                .arg(format!("{}:{}", rocks_path.display(), container_db_mount))
                 // Workdir `/` (not `/app`) so the server's relative config
                 // paths (`./db/fri_proofs/`, `./db/block_dumps/`) resolve to
                 // `/db/...` — the image's writable volume — rather than
