@@ -1142,12 +1142,8 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     let config_path = write_upgrade_server_config(&chain_dir, &contracts, &wallets, 6565)?;
 
     println!("Starting zksync-os-server on v30.2...");
-    let server = ServerBuilder::new(preset, "upgrade_v30_to_v31")
-        .chain_name("default")
+    let server = ServerBuilder::new(preset, "default")
         .config_path(&config_path)
-        .diamond_proxy_addr(&contracts.l1.diamond_proxy_addr)
-        .bridgehub_addr(&contracts.ecosystem_contracts.bridgehub_proxy_addr)
-        .chain_id(6565)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server via ServerBuilder: {:?}", e))?;
     println!("✓ Server started ({})", server.container_name());

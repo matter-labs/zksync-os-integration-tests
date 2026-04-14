@@ -111,6 +111,55 @@ fn host_user_arg() -> Option<String> {
     None
 }
 
+/// Extract a top-level or nested YAML value by key name. Handles both
+/// quoted and unquoted values. Very simple line-based parser — good enough
+/// for the flat configs `ServerConfigBuilder` produces.
+fn extract_yaml_field(yaml: &str, key: &str) -> Option<String> {
+    for line in yaml.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix(key).and_then(|s| s.strip_prefix(':')) {
+            let val = rest.trim().trim_matches('\'').trim_matches('"').trim();
+            if !val.is_empty() {
+                return Some(val.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Query `bridgehub.getZKChain(chain_id)` on L1 to resolve the diamond
+/// proxy address for a chain.
+fn resolve_diamond_proxy(
+    bridgehub_addr: &str,
+    chain_id: u64,
+    l1_rpc_url: &str,
+) -> Result<String, DockerError> {
+    let output = Command::new("cast")
+        .args([
+            "call",
+            bridgehub_addr,
+            "getZKChain(uint256)(address)",
+            &chain_id.to_string(),
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .output()
+        .map_err(|e| DockerError::CommandFailed(format!("cast call getZKChain: {e}")))?;
+    if !output.status.success() {
+        return Err(DockerError::CommandFailed(format!(
+            "getZKChain({chain_id}) on {bridgehub_addr} failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    let addr = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if addr.is_empty() || addr == "0x0000000000000000000000000000000000000000" {
+        return Err(DockerError::CommandFailed(format!(
+            "getZKChain({chain_id}) returned zero address — chain not registered on bridgehub {bridgehub_addr}"
+        )));
+    }
+    Ok(addr)
+}
+
 fn resolve_local_server_binary(server_root: &Path) -> Result<PathBuf, DockerError> {
     let release_bin = server_root.join("target/release/zksync-os-server");
     // Always rebuild to ensure the latest local code is used.
@@ -150,8 +199,11 @@ fn resolve_local_server_binary(server_root: &Path) -> Result<PathBuf, DockerErro
 #[derive(Debug, Clone)]
 pub struct ServerBuilder {
     preset: Preset,
-    /// Explicit name for this test run (used in log directory names).
-    run_name: String,
+    /// Human-readable chain name (e.g. "gateway", "l1_settling"). Used for:
+    /// - log filenames and RocksDB directory names
+    /// - auto-resolving the config path via `chain_config_path(preset, chain_name)`
+    ///   when no explicit `.config_path(…)` is set
+    chain_name: String,
     /// Host port where server JSON-RPC should listen (None = random)
     host_port: Option<u16>,
     /// Override config path (used instead of preset-derived path when set)
@@ -160,18 +212,16 @@ pub struct ServerBuilder {
     rocks_db_path_override: Option<PathBuf>,
     /// Override the logs directory (default: test-run-logs/{run_id}/)
     logs_dir_override: Option<PathBuf>,
-    /// Human-readable chain name for log filenames (e.g. "gateway_settling_a").
-    /// Falls back to the Docker container UUID if not set.
-    chain_name: Option<String>,
     /// Override gateway RPC URL (set via env var at runtime, overrides config YAML value)
     gateway_rpc_url: Option<String>,
-    /// Diamond-proxy address on the settlement layer for this chain. Required by
-    /// [`Server::wait_for_executed_batches_with_traffic`].
+    /// Diamond-proxy address on the settlement layer for this chain.
+    /// Auto-resolved from L1 via `bridgehub.getZKChain(chain_id)` if not
+    /// set; required by [`Server::wait_for_executed_batches_with_traffic`].
     diamond_proxy_addr: Option<String>,
-    /// Bridgehub proxy address on L1. Required by
-    /// [`Server::fund_account_via_l1_deposit`].
+    /// Bridgehub proxy address on L1. Auto-read from config YAML if not set;
+    /// required by [`Server::fund_account_via_l1_deposit`].
     bridgehub_addr: Option<String>,
-    /// Chain ID of the chain this server runs. Required by
+    /// Chain ID. Auto-read from config YAML if not set; required by
     /// [`Server::fund_account_via_l1_deposit`].
     chain_id: Option<u64>,
     /// When true, do NOT set general_rocks_db_path / sequencer_rocks_db_path env vars.
@@ -180,19 +230,23 @@ pub struct ServerBuilder {
 }
 
 impl ServerBuilder {
-    /// Create a new ServerBuilder from a preset.
-    /// `run_name` is an explicit label for this test run (e.g. `"upgrade_v30_to_v31"`),
-    /// used in log directory names under `test-run-logs/`.
-    /// Backend (local vs docker) is determined by preset.zksync_os_server.
-    pub fn new(preset: Preset, run_name: impl Into<String>) -> Self {
+    /// Create a new ServerBuilder.
+    ///
+    /// `chain_name` identifies the chain (e.g. `"l1_settling"`,
+    /// `"gateway_settling_a"`). It is used for log filenames, RocksDB
+    /// directory names, and — when no explicit `.config_path(…)` is set —
+    /// to auto-resolve the config YAML from the preset's l1-state cache
+    /// via `chain_config_path(preset, chain_name)`.
+    ///
+    /// Backend (local vs docker) is determined by `preset.zksync_os_server`.
+    pub fn new(preset: Preset, chain_name: impl Into<String>) -> Self {
         Self {
             preset,
-            run_name: run_name.into(),
+            chain_name: chain_name.into(),
             host_port: None,
             config_path_override: None,
             rocks_db_path_override: None,
             logs_dir_override: None,
-            chain_name: None,
             gateway_rpc_url: None,
             diamond_proxy_addr: None,
             bridgehub_addr: None,
@@ -214,12 +268,6 @@ impl ServerBuilder {
         self
     }
 
-    /// Set the host port (omit to use a random port)
-    pub fn host_port(mut self, port: u16) -> Self {
-        self.host_port = Some(port);
-        self
-    }
-
     /// Use a fixed RocksDB path (local server only). Lets a later process reuse replay / tree state.
     pub fn rocks_db_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.rocks_db_path_override = Some(path.into());
@@ -233,14 +281,6 @@ impl ServerBuilder {
         self
     }
 
-    /// Set a human-readable chain name used in log filenames
-    /// (e.g. "gateway", "gateway_settling_a"). When not set, the Docker
-    /// container UUID is used instead.
-    pub fn chain_name(mut self, name: impl Into<String>) -> Self {
-        self.chain_name = Some(name.into());
-        self
-    }
-
     /// Set gateway RPC URL at runtime (overrides whatever is in config YAML).
     /// Used for gateway-settling chains where the gateway port is only known at test time.
     pub fn gateway_rpc_url(mut self, url: impl Into<String>) -> Self {
@@ -248,47 +288,59 @@ impl ServerBuilder {
         self
     }
 
-    /// Diamond-proxy address on the settlement layer for this chain. Required by
-    /// [`Server::wait_for_executed_batches_with_traffic`].
-    pub fn diamond_proxy_addr(mut self, addr: impl Into<String>) -> Self {
-        self.diamond_proxy_addr = Some(addr.into());
-        self
-    }
-
-    /// Bridgehub proxy address on L1. Required by
-    /// [`Server::fund_account_via_l1_deposit`].
-    pub fn bridgehub_addr(mut self, addr: impl Into<String>) -> Self {
-        self.bridgehub_addr = Some(addr.into());
-        self
-    }
-
-    /// Chain ID of the chain this server runs. Required by
-    /// [`Server::fund_account_via_l1_deposit`].
-    pub fn chain_id(mut self, chain_id: u64) -> Self {
-        self.chain_id = Some(chain_id);
-        self
-    }
-
     /// Spawn the server with the given Anvil L1.
     ///
-    /// A config path must be set via `.config_path()` before calling this method.
-    pub fn spawn(self, anvil: &Anvil) -> Result<Server, DockerError> {
+    /// If no `.config_path(…)` was set, the config is auto-resolved from
+    /// the preset's l1-state cache as `{cache_dir}/{chain_name}.yaml`.
+    ///
+    /// `chain_id` and `bridgehub_addr` are read from the config YAML
+    /// (`genesis.chain_id`, `genesis.bridgehub_address`) if not explicitly set
+    /// via builder methods. `diamond_proxy_addr` is resolved on-chain via
+    /// `bridgehub.getZKChain(chain_id)` if not explicitly set.
+    pub fn spawn(mut self, anvil: &Anvil) -> Result<Server, DockerError> {
         let project_root = find_project_root()?;
         let local_chains_path = project_root.join("local-chains");
-        let config_path = self
-            .config_path_override
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .ok_or_else(|| {
-                DockerError::CommandFailed(
-                    "config_path must be set on ServerBuilder before calling spawn".to_string(),
-                )
-            })?;
+
+        // Auto-resolve config from preset cache if not overridden.
+        let config_path = if let Some(p) = &self.config_path_override {
+            p.to_string_lossy().to_string()
+        } else {
+            let path = crate::l1_state::chain_config_path(&self.preset, &self.chain_name).map_err(
+                |e| {
+                    DockerError::CommandFailed(format!(
+                        "auto-resolve config for chain '{}': {e}",
+                        self.chain_name
+                    ))
+                },
+            )?;
+            path.to_string_lossy().to_string()
+        };
+
+        // --- Auto-fill chain_id, bridgehub_addr, diamond_proxy_addr from config + L1 ---
+        if self.chain_id.is_none() || self.bridgehub_addr.is_none() {
+            if let Ok(content) = std::fs::read_to_string(&config_path) {
+                if self.chain_id.is_none() {
+                    self.chain_id = extract_yaml_field(&content, "chain_id")
+                        .and_then(|s| s.parse::<u64>().ok());
+                }
+                if self.bridgehub_addr.is_none() {
+                    self.bridgehub_addr = extract_yaml_field(&content, "bridgehub_address");
+                }
+            }
+        }
+
         let l1_rpc_url = anvil.rpc_url_for(&self.preset.zksync_os_server);
         // Host-side L1 URL for use from the test harness (cast calls, etc.),
         // as opposed to `l1_rpc_url` which may be rewritten to
         // `host.docker.internal` for the server container.
         let host_l1_rpc_url = anvil.rpc_url().to_string();
+
+        if self.diamond_proxy_addr.is_none() {
+            if let (Some(bridgehub), Some(chain_id)) = (&self.bridgehub_addr, self.chain_id) {
+                self.diamond_proxy_addr =
+                    resolve_diamond_proxy(bridgehub, chain_id, &host_l1_rpc_url).ok();
+            }
+        }
         let (server_root, use_local, image) = match &self.preset.zksync_os_server {
             RepoRef::Path(_) => {
                 let paths = server_paths_for_preset(&self.preset).map_err(|e| {
@@ -307,7 +359,6 @@ impl ServerBuilder {
             ),
         };
         let builder = InnerServerBuilder {
-            run_name: self.run_name,
             host_port: self.host_port,
             l1_rpc_url,
             host_l1_rpc_url,
@@ -317,7 +368,7 @@ impl ServerBuilder {
             use_local,
             rocks_db_path: self.rocks_db_path_override,
             logs_dir: self.logs_dir_override,
-            chain_name: self.chain_name,
+            chain_name: Some(self.chain_name),
             gateway_rpc_url: self.gateway_rpc_url,
             diamond_proxy_addr: self.diamond_proxy_addr,
             bridgehub_addr: self.bridgehub_addr,
@@ -330,7 +381,6 @@ impl ServerBuilder {
 
 #[derive(Debug, Clone)]
 struct InnerServerBuilder {
-    run_name: String,
     host_port: Option<u16>,
     /// L1 URL passed to the server process (may be `host.docker.internal:...` for docker mode).
     l1_rpc_url: String,
@@ -398,7 +448,8 @@ impl Server {
         let project_root = find_project_root()?;
 
         // Group all server logs in this test run under test-run-logs/{run_id}.
-        let run_id = get_or_create_run_id(&builder.run_name);
+        let chain_name = builder.chain_name.as_deref().unwrap_or("unknown");
+        let run_id = get_or_create_run_id(chain_name);
         let logs_dir = if let Some(override_dir) = builder.logs_dir.as_ref() {
             override_dir.clone()
         } else {
@@ -663,11 +714,6 @@ impl Server {
     /// Get the container name
     pub fn container_name(&self) -> &str {
         &self.server_name
-    }
-
-    /// Get the host port
-    pub fn host_port(&self) -> u16 {
-        self.host_port
     }
 
     /// Get the L2 RPC URL

@@ -42,10 +42,7 @@ async fn run_l1_settling_test() -> Result<()> {
     // `generate-l1-state` pre-queued an L1→L2 deposit for
     // DEFAULT_ANVIL_PRIVATE_KEY; the server processes it as it spins up,
     // so we do not need a test-side `fund_account_via_l1_deposit` here.
-    let server = ServerBuilder::new(preset, "l1_settling")
-        .chain_name(&chain.name)
-        .config_path(&config_path)
-        .diamond_proxy_addr(&chain.diamond_proxy)
+    let server = ServerBuilder::new(preset, &chain.name)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server: {:?}", e))?;
 

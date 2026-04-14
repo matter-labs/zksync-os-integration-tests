@@ -50,8 +50,7 @@ async fn run_gateway_settling_test() -> Result<()> {
 
     // ---- Gateway server (ephemeral mode with archived RocksDB) ----
     println!("\n=== Starting gateway server (chain {}) ===", gw.chain_id);
-    let gw_server = ServerBuilder::new(preset.clone(), "gateway_settling")
-        .chain_name(&gw.name)
+    let gw_server = ServerBuilder::new(preset.clone(), &gw.name)
         .ephemeral()
         .config_path(&gw_config_path)
         .spawn(&anvil)
@@ -64,11 +63,8 @@ async fn run_gateway_settling_test() -> Result<()> {
         "\n=== Starting gateway-settling chain {} ===",
         chain.chain_id
     );
-    let chain_server = ServerBuilder::new(preset, "gateway_settling")
-        .chain_name(&chain.name)
-        .config_path(&chain_config)
+    let chain_server = ServerBuilder::new(preset, &chain.name)
         .gateway_rpc_url(&gw_l2_rpc)
-        .diamond_proxy_addr(&chain.diamond_proxy)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start chain server: {:?}", e))?;
     let chain_l2_rpc = chain_server.rpc_url();

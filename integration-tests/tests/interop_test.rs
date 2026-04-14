@@ -241,8 +241,7 @@ async fn run_interop_message_test() -> Result<()> {
 
     // ---- Start gateway ----
     println!("\n=== Starting gateway server (chain {}) ===", gw.chain_id);
-    let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), "interop")
-        .chain_name(&gw.name)
+    let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), &gw.name)
         .ephemeral()
         .config_path(&gw_config)
         .spawn(&anvil)
@@ -252,22 +251,18 @@ async fn run_interop_message_test() -> Result<()> {
 
     // ---- Start chain A (fresh, gateway_rpc_url set via env var) ----
     println!("\n=== Starting chain A (chain {}) ===", chain_a.chain_id);
-    let chain_a_server = integration_tests::server::ServerBuilder::new(preset.clone(), "interop")
-        .chain_name(&chain_a.name)
-        .config_path(&chain_a_config)
-        .gateway_rpc_url(&gw_l2_rpc)
-        .spawn(&anvil)
-        .map_err(|e| anyhow::anyhow!("Failed to start chain A server: {:?}", e))?;
+    let chain_a_server =
+        integration_tests::server::ServerBuilder::new(preset.clone(), &chain_a.name)
+            .gateway_rpc_url(&gw_l2_rpc)
+            .spawn(&anvil)
+            .map_err(|e| anyhow::anyhow!("Failed to start chain A server: {:?}", e))?;
     let chain_a_l2_rpc = chain_a_server.rpc_url();
     println!("Chain A ready at {chain_a_l2_rpc}");
 
     // ---- Start chain B (fresh, gateway_rpc_url set via env var) ----
     println!("\n=== Starting chain B (chain {}) ===", chain_b.chain_id);
-    let chain_b_server = integration_tests::server::ServerBuilder::new(preset, "interop")
-        .chain_name(&chain_b.name)
-        .config_path(&chain_b_config)
+    let chain_b_server = integration_tests::server::ServerBuilder::new(preset, &chain_b.name)
         .gateway_rpc_url(&gw_l2_rpc)
-        .diamond_proxy_addr(&chain_b.diamond_proxy)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start chain B server: {:?}", e))?;
     let chain_b_l2_rpc = chain_b_server.rpc_url();
