@@ -107,22 +107,3 @@ pub fn call_as_impersonated(
     stop_impersonating_account(from, l1_rpc_url);
     result
 }
-
-/// Make a read-only contract call and return the output
-pub fn call_contract_view(
-    contract: &str,
-    function_sig: &str,
-    context_msg: &str,
-    l1_rpc_url: &str,
-) -> Result<std::process::Output> {
-    let output = Command::new("cast")
-        .args(["call", contract, function_sig, "--rpc-url", l1_rpc_url])
-        .output()
-        .with_context(|| context_msg.to_string())?;
-    anyhow::ensure!(
-        output.status.success(),
-        "{context_msg}: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    Ok(output)
-}

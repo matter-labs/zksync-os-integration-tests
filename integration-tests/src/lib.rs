@@ -12,7 +12,6 @@ pub mod preset_paths;
 pub mod presets;
 pub mod server_config;
 pub mod upgrade_config;
-pub mod upgrade_yaml_output_generator;
 
 // Re-exports for backward compatibility with existing test code.
 // Tests import e.g. `integration_tests::anvil::Anvil`.

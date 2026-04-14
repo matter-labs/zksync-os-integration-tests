@@ -10,30 +10,9 @@ use chrono::Local;
 use crate::server::{get_run_id, read_toolchain_from_dir};
 use crate::utils::find_project_root;
 
-pub mod chain;
 pub mod contracts_backend;
 
 pub use contracts_backend::EraContractsBackend;
-
-/// High-level helpers for running `protocol_ops` (RPC URL, backend).
-/// Output files are written to `contracts_backend.work_dir()`.
-pub struct ProtocolOps<'a> {
-    pub l1_rpc_url: String,
-    pub contracts_backend: &'a EraContractsBackend,
-}
-
-impl<'a> ProtocolOps<'a> {
-    pub fn new(l1_rpc_url: impl Into<String>, contracts_backend: &'a EraContractsBackend) -> Self {
-        Self {
-            l1_rpc_url: l1_rpc_url.into(),
-            contracts_backend,
-        }
-    }
-
-    pub fn chain_set_upgrade_timestamp(&self) -> chain::ChainSetUpgradeTimestamp<'_> {
-        chain::ChainSetUpgradeTimestamp::new(self)
-    }
-}
 
 pub const ERA_CONTRACTS_PROTOCOL_IMAGE_REPO: &str = "ghcr.io/matter-labs/protocol-ops";
 

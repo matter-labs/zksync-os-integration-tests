@@ -1654,6 +1654,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     let preset = load_preset(&args)?;
+    integration_tests::server::get_or_create_run_id("generate_l1_state");
 
     // ── Determine output directory ───────────────────────────────────────
     let output_dir = integration_tests::l1_state::cache_dir_for_preset(&preset)?;

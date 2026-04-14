@@ -73,10 +73,15 @@ impl EraContractsBackend {
     /// sub-directories are created inside the container after startup, working
     /// around a macOS Docker/VirtioFS bug where newly-created host directories
     /// are invisible to the VM.
-    pub fn docker(image: &str, run_name: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
+    pub fn docker(image: &str, _run_name: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
         let project_root =
             crate::infra::utils::find_project_root().map_err(|e| anyhow::anyhow!("{e}"))?;
-        let run_id = crate::infra::server::get_or_create_run_id(run_name);
+        let run_id = crate::infra::server::get_run_id().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No run ID set. Call `integration_tests::server::get_or_create_run_id(\"test_name\")` \
+                 before creating an EraContractsBackend."
+            )
+        })?;
         let logs_root = project_root.join("test-run-logs");
         fs::create_dir_all(&logs_root)?;
         let work_dir = logs_root.join(run_id).join("contracts_artifacts");

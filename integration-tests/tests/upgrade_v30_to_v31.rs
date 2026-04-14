@@ -8,7 +8,6 @@ use integration_tests::protocol_ops::EraContractsBackend;
 use integration_tests::server::{L1DepositBaseToken, ServerBuilder};
 use integration_tests::server_utils::address_from_private_key;
 use integration_tests::upgrade_config::{Contracts, WalletsFile};
-use integration_tests::upgrade_yaml_output_generator;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -18,7 +17,6 @@ use std::time::Duration;
 struct NoGovernancePrepareOutput {
     core: serde_json::Value,
     ecosystem: serde_json::Value,
-    run_json: String,
 }
 
 fn parse_no_governance_out_file(out_path: &Path) -> Result<NoGovernancePrepareOutput> {
@@ -37,20 +35,7 @@ fn parse_no_governance_out_file(out_path: &Path) -> Result<NoGovernancePrepareOu
         .get("ecosystem")
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("Missing output.ecosystem in out file"))?;
-    let run_json = output
-        .get("run_json")
-        .and_then(|v| serde_json::to_string(v).ok())
-        .unwrap_or_else(|| "{}".to_string());
-    Ok(NoGovernancePrepareOutput {
-        core,
-        ecosystem,
-        run_json,
-    })
-}
-
-/// Helper to get project root directory
-fn get_project_root() -> PathBuf {
-    integration_tests::utils::find_project_root().expect("Failed to find project root")
+    Ok(NoGovernancePrepareOutput { core, ecosystem })
 }
 
 fn get_default_preset() -> integration_tests::presets::Preset {
@@ -115,72 +100,6 @@ fn write_upgrade_server_config(
     Ok(config_path)
 }
 
-/// Write the `permanent-values.toml` input that era-contracts' upgrade and
-/// CTM-deployment scripts read. Consumers include
-/// `l1-contracts/deploy-scripts/ctm/DeployCTM.s.sol`,
-/// `l1-contracts/scripts/upgrade-script-utils.ts` (reads `upgrade-envs/
-/// permanent-values/<env>.toml`), and the foundry `.env`
-/// `PERMANENT_VALUES_INPUT` variable. We write both `script-config/
-/// permanent-values.toml` (used by forge scripts) and
-/// `upgrade-envs/permanent-values/local.toml` (used by the TypeScript
-/// upgrade helpers).
-fn update_permanent_values(
-    contracts_backend: &EraContractsBackend,
-    contracts: &Contracts,
-) -> Result<()> {
-    print!("  Updating permanent values ... ");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-    // Local upgrade tests use the fixed chain id used by the local stack.
-    let era_chain_id = "6565".to_string();
-
-    // Extract values from Contracts
-    let bridgehub_addr = &contracts.ecosystem_contracts.bridgehub_proxy_addr;
-    let ctm_addr = &contracts.ecosystem_contracts.state_transition_proxy_addr;
-    let bytecodes_supplier = &contracts.ecosystem_contracts.l1_bytecodes_supplier_addr;
-    let create2_factory = &contracts.create2_factory_addr;
-    let create2_salt = &contracts.create2_factory_salt;
-
-    println!("Chain ID: {}", era_chain_id);
-    println!("Bridgehub: {}", bridgehub_addr);
-    println!("CTM: {}", ctm_addr);
-
-    // Create permanent-values.toml
-    // IMPORTANT: is_zk_sync_os = true tells the upgrade scripts to use tx type 126
-    // instead of 254 for upgrade transactions (required for ZKsync OS chains)
-    let permanent_values = format!(
-        r#"era_chain_id = {}
-is_zk_sync_os = true
-
-[core_contracts]
-bridgehub_proxy_addr = "{}"
-
-[ctm_contracts]
-ctm_proxy_addr = "{}"
-l1_bytecodes_supplier_addr = "{}"
-
-[permanent_contracts]
-create2_factory_addr = "{}"
-create2_factory_salt = "{}"
-"#,
-        era_chain_id, bridgehub_addr, ctm_addr, bytecodes_supplier, create2_factory, create2_salt
-    );
-
-    // Write via the backend so it lands in the right place regardless of
-    // whether era-contracts is a local checkout or a docker image.
-    contracts_backend.write_repo_file(
-        "l1-contracts/script-config/permanent-values.toml",
-        &permanent_values,
-    )?;
-    contracts_backend.write_repo_file(
-        "l1-contracts/upgrade-envs/permanent-values/local.toml",
-        &permanent_values,
-    )?;
-
-    println!("✓");
-    Ok(())
-}
-
 /// Extract a string value from JSON by dotted path (e.g. "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr").
 fn extract_json_value(obj: &serde_json::Value, path: &str) -> Result<String> {
     let mut v = obj;
@@ -194,53 +113,16 @@ fn extract_json_value(obj: &serde_json::Value, path: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("Key {:?} is not a string", path))
 }
 
-/// Extract a YAML value from a specific section (e.g., "governor" section's "private_key")
-fn extract_yaml_value_in_section(yaml: &str, section: &str, key: &str) -> Result<String> {
-    let mut in_section = false;
-    for line in yaml.lines() {
-        // Check if we're entering the target section (line starts with section name followed by :)
-        if !line.starts_with(' ') && !line.starts_with('\t') {
-            in_section = line.trim().starts_with(section) && line.contains(':');
-        }
-        // If we're in the section and find the key, extract the value
-        if in_section && line.trim_start().starts_with(key) {
-            if let Some(value) = line.split(':').nth(1) {
-                return Ok(value.trim().to_string());
-            }
-        }
+/// Fund the governor and deployer wallets with ETH so they can pay for
+/// upgrade transactions on Anvil.
+fn fund_governance_accounts(l1_rpc_url: &str, wallets: &WalletsFile) -> Result<()> {
+    for (label, addr) in [
+        ("governor", wallets.ecosystem.governor.address.as_str()),
+        ("deployer", wallets.ecosystem.deployer.address.as_str()),
+    ] {
+        fund_account(addr, "10ether", l1_rpc_url, RICH_ACCOUNT_PRIVATE_KEY)
+            .with_context(|| format!("fund {label} ({addr})"))?;
     }
-    anyhow::bail!(
-        "Could not find key '{}' in section '{}' in YAML",
-        key,
-        section
-    )
-}
-
-/// Fund governance accounts with ETH for upgrade transactions
-fn fund_governance_accounts(
-    contracts_backend: &EraContractsBackend,
-    l1_rpc_url: &str,
-) -> Result<()> {
-    // Governor address that needs funding
-    let governor_address = "0x8002cd98cfb563492a6fb3e7c8243b7b9ad4cc92";
-
-    // Send 10 ETH to governor from rich account
-    // Use high gas price to replace any pending transactions with same nonce
-    contracts_backend
-        .cast(&[
-            "send",
-            governor_address,
-            "--value",
-            "10ether",
-            "--private-key",
-            RICH_ACCOUNT_PRIVATE_KEY,
-            "--rpc-url",
-            l1_rpc_url,
-            "--gas-price",
-            "100gwei",
-        ])
-        .context("Fund governor account")?;
-
     Ok(())
 }
 
@@ -249,7 +131,6 @@ fn fund_governance_accounts(
 /// but we only have the governor wallet's private key
 fn transfer_governance_ownership_to_governor(
     contracts_backend: &EraContractsBackend,
-    _root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
@@ -556,14 +437,13 @@ fn ensure_migration_paused(
 /// Run ecosystem upgrade stages. Returns script output from no-governance-prepare (no v31-upgrade-*.toml files on disk).
 fn run_ecosystem_upgrades(
     contracts_backend: &EraContractsBackend,
-    root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
 ) -> Result<NoGovernancePrepareOutput> {
     println!("\n=== Running Ecosystem Upgrades ===");
 
-    fund_governance_accounts(contracts_backend, l1_rpc_url)?;
+    fund_governance_accounts(l1_rpc_url, wallets)?;
 
     // Stage 0: no-governance-prepare in simulate mode, then execute transactions from --out file
     println!("\n  Running no-governance-prepare (protocol_ops) in simulate mode...");
@@ -626,13 +506,7 @@ fn run_ecosystem_upgrades(
         contracts,
         &script_output.core,
     )?;
-    transfer_governance_ownership_to_governor(
-        contracts_backend,
-        root,
-        l1_rpc_url,
-        contracts,
-        wallets,
-    )?;
+    transfer_governance_ownership_to_governor(contracts_backend, l1_rpc_url, contracts, wallets)?;
 
     // Write v31-upgrade-ecosystem.toml via the backend so it is visible to
     // governance-stage0/1 regardless of whether era-contracts is a local
@@ -732,17 +606,12 @@ fn run_ecosystem_upgrades(
 /// Verify that the chain's protocol version matches the expected v31 version
 fn verify_protocol_version(
     contracts_backend: &EraContractsBackend,
-    _root: &Path,
     l1_rpc_url: &str,
+    contracts: &Contracts,
 ) -> Result<()> {
     println!("\n  Verifying protocol version...");
 
-    let chain_dir = get_default_chain_dir();
-
-    // Read the diamond proxy address from the original contracts.yaml (not the copied one)
-    // The original file has diamond_proxy_addr under the l1: section
-    let contracts_yaml = fs::read_to_string(chain_dir.join("contracts.yaml"))?;
-    let diamond_proxy = extract_yaml_value_in_section(&contracts_yaml, "l1", "diamond_proxy_addr")?;
+    let diamond_proxy = &contracts.l1.diamond_proxy_addr;
     println!("    Diamond proxy: {}", diamond_proxy);
 
     // Get current protocol version from chain
@@ -789,36 +658,9 @@ fn verify_protocol_version(
     Ok(())
 }
 
-/// Generate upgrade YAML output from protocol_ops script output. The
-/// generated YAML is a test-inspection artifact (not consumed by any
-/// downstream script in the currently-enabled steps), so we drop it in
-/// the backend's host-side `work_dir` — that works for both local and
-/// docker era-contracts and keeps the file with the rest of the run's
-/// artifacts.
-fn generate_upgrade_yaml(
-    contracts_backend: &EraContractsBackend,
-    script_output: &NoGovernancePrepareOutput,
-) -> Result<()> {
-    print!("  Generate upgrade YAML output ... ");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
-
-    let yaml_out = contracts_backend.work_dir().join("v31-local-output.yaml");
-    let ecosystem_toml_for_yaml = toml::to_string_pretty(&script_output.ecosystem)
-        .context("Failed to serialize ecosystem to TOML for YAML generator")?;
-    upgrade_yaml_output_generator::generate_upgrade_yaml_output_from_memory(
-        script_output.run_json.as_bytes(),
-        &ecosystem_toml_for_yaml,
-        &yaml_out,
-    )?;
-
-    println!("✓");
-    Ok(())
-}
-
 /// Run chain upgrade
 fn run_chain_upgrade(
     contracts_backend: &EraContractsBackend,
-    _root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
@@ -852,7 +694,6 @@ fn run_chain_upgrade(
 /// Run ecosystem upgrade Stage 2
 fn run_final_upgrade_stages(
     contracts_backend: &EraContractsBackend,
-    _root: &Path,
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
@@ -875,38 +716,7 @@ fn run_final_upgrade_stages(
         ])
         .context("governance-stage2 failed")?;
 
-    // Stage 3 is skipped for local testing because:
-    // 1. It requires v31 contracts to be deployed (l1AssetTracker function)
-    // 2. In fresh test environments, there are no token balances to migrate
-    // 3. The governance stages don't fully upgrade contracts in local testing
-    println!("Stage 3 (token migration) skipped for local testing");
-    println!("Note: Stage 3 is only needed when migrating existing bridged token balances");
-
     Ok(())
-
-    // // Stage 3 (migrate token balances)
-    // // Run with -vvvv for maximum verbosity to see all transaction traces
-    // run_command(
-    //     "Ecosystem upgrade - Stage 3 (migrate token balances)",
-    //     Command::new("forge")
-    //         .args([
-    //             "script",
-    //             "deploy-scripts/upgrade/v31/EcosystemUpgrade_v31.s.sol:EcosystemUpgrade_v31",
-    //             "--sig",
-    //             "stage3()",
-    //             "--rpc-url",
-    //             L1_RPC_URL,
-    //             "--broadcast",
-    //             "--private-key",
-    //             RICH_ACCOUNT_PRIVATE_KEY,
-    //             "--legacy",
-    //             "--slow",
-    //             "--gas-price",
-    //             "50000000000",
-    //             "-vvvv", // Maximum verbosity for full traces
-    //         ])
-    //         .current_dir(era_path.join("contracts/l1-contracts")),
-    // )
 }
 
 fn read_u64_from_cast_call(
@@ -1005,8 +815,8 @@ fn wait_for_server_batches_to_drain_before_upgrade(
                 "  ✓ Drain complete: committed==executed=={} and latest==safe==finalized=={}",
                 committed, latest_block
             );
-            println!("  Waiting additional 30s to ensure server is fully settled before chain upgrade...");
-            std::thread::sleep(Duration::from_secs(60));
+            println!("  Waiting 30s to ensure server is fully settled before chain upgrade...");
+            std::thread::sleep(Duration::from_secs(30));
             return Ok(());
         }
         if start.elapsed() >= timeout {
@@ -1109,7 +919,7 @@ fn schedule_upgrade_timestamp(
 
 #[tokio::test]
 async fn test_v30_to_v31_upgrade() -> Result<()> {
-    let root = get_project_root();
+    integration_tests::server::get_or_create_run_id("upgrade_v30_to_v31");
 
     println!("=== Starting v30 to v31 upgrade test ===\n");
 
@@ -1183,15 +993,9 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
             )
         })?;
 
-    // Update permanent values for upgrade
-    update_permanent_values(&contracts_backend, &contracts)?;
-
     // Run ecosystem upgrade stages (script output via stdout, no v31-upgrade-*.toml files)
-    let script_output =
-        run_ecosystem_upgrades(&contracts_backend, &root, l1_rpc_url, &contracts, &wallets)?;
-
-    // Generate upgrade YAML output from in-memory script output
-    generate_upgrade_yaml(&contracts_backend, &script_output)?;
+    let _script_output =
+        run_ecosystem_upgrades(&contracts_backend, l1_rpc_url, &contracts, &wallets)?;
 
     // Notify server about upcoming upgrade, then wait for commit/execute counters to converge.
     schedule_upgrade_timestamp(&contracts_backend, l1_rpc_url, &contracts, &wallets)?;
@@ -1226,13 +1030,13 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         println!("Keeping zksync-os-server running during chain upgrade...");
 
         // Run chain upgrade
-        run_chain_upgrade(&contracts_backend, &root, l1_rpc_url, &contracts, &wallets)?;
+        run_chain_upgrade(&contracts_backend, l1_rpc_url, &contracts, &wallets)?;
 
         // Verify the protocol version was upgraded to v31
-        verify_protocol_version(&contracts_backend, &root, l1_rpc_url)?;
+        verify_protocol_version(&contracts_backend, l1_rpc_url, &contracts)?;
 
         // Run final upgrade stages
-        run_final_upgrade_stages(&contracts_backend, &root, l1_rpc_url, &contracts, &wallets)?;
+        run_final_upgrade_stages(&contracts_backend, l1_rpc_url, &contracts, &wallets)?;
 
         // Wait for 3 *new* batches produced under v31, regardless of how many were
         // produced during the pre-upgrade phase.
