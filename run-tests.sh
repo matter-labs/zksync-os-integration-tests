@@ -195,10 +195,13 @@ for preset in $all_presets; do
   mkdir -p "$(dirname "$nextest_stderr")"
 
   set +e
-  # NO_COLOR=1 so our grep sees plain text (nextest otherwise wraps
-  # PASS/FAIL tokens in ANSI escape codes when writing to a tty-like sink).
-  NO_COLOR=1 PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
+  # `--color=never` is the canonical way (per nextest docs) to disable
+  # color output. We need plain text so the grep below matches reliably
+  # in CI, where `CARGO_TERM_COLOR=always` would otherwise wrap
+  # `PASS`/`FAIL` tokens in ANSI escape codes.
+  PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
     cargo nextest run \
+      --color=never \
       --package integration-tests \
       --no-fail-fast \
       -E "$filterset" \
