@@ -57,6 +57,11 @@ jobs:
       - name: Build all crates
         run: cargo build --release --workspace
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+
       - name: Run integration tests
         run: ./run-tests.sh
 
