@@ -2,7 +2,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use std::borrow::Cow;
 
@@ -335,109 +335,7 @@ pub fn address_from_private_key(private_key: &str) -> Result<String> {
     Ok(format!("{:?}", signer.address()))
 }
 
-fn cast_balance_transient(stderr: &str) -> bool {
-    stderr.contains("Connection refused")
-        || stderr.contains("tcp connect error")
-        || stderr.contains("client error (Connect)")
-        || stderr.contains("operation timed out")
-        || stderr.contains("timed out")
-}
-
-/// `Ok(None)` = RPC unreachable / transient; `Ok(Some(wei))` = balance (may be 0).
-fn poll_l2_balance_once(address: &str, l2_rpc_url: &str) -> Result<Option<u128>> {
-    let output = Command::new("cast")
-        .args(["balance", address, "--rpc-url", l2_rpc_url])
-        .output()
-        .context("Failed to run cast balance")?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if cast_balance_transient(&stderr) {
-            return Ok(None);
-        }
-        anyhow::bail!("cast balance failed:\nSTDERR:\n{}", stderr);
-    }
-    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    let balance = if let Some(hex) = raw.strip_prefix("0x") {
-        u128::from_str_radix(hex, 16).context("Invalid hex balance")?
-    } else {
-        raw.parse::<u128>().context("Invalid decimal balance")?
-    };
-    Ok(Some(balance))
-}
-
-/// Submit a Bridgehub L1→L2 deposit and poll L2 until `l2_recipient`'s
-/// balance strictly increases. Internal implementation for
-/// [`crate::server::Server::fund_account_via_l1_deposit`].
-///
-/// When `base_token_is_eth = false`, the caller must have pre-approved the
-/// base token to the bridgehub.
-///
-/// When `server_logs_path` is set (or discoverable under `test-run-logs/`),
-/// RPC failures and balance poll timeouts print a server log excerpt so
-/// crashes match `upgrade-tests` / traffic diagnostics.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn fund_l2_via_l1_deposit_ex(
-    l1_rpc_url: &str,
-    l2_rpc_url: &str,
-    bridgehub_addr: &str,
-    chain_id: u64,
-    l2_recipient: &str,
-    amount_ether: f64,
-    balance_poll_timeout: Duration,
-    server_logs_path: Option<&Path>,
-    base_token_is_eth: bool,
-) -> Result<u128> {
-    // Snapshot the balance before submitting the deposit so we can detect
-    // the credit even if the recipient was already funded. A transient RPC
-    // failure is treated as "zero" — the strict-increase check below still
-    // gives us a meaningful signal in that case.
-    let balance_before = poll_l2_balance_once(l2_recipient, l2_rpc_url)
-        .ok()
-        .flatten()
-        .unwrap_or(0);
-
-    if let Err(err) = crate::l1_l2_deposit::submit_l1_to_l2_deposit_ex(
-        l1_rpc_url,
-        bridgehub_addr,
-        chain_id,
-        crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY,
-        amount_ether,
-        Some(l2_recipient),
-        base_token_is_eth,
-    )
-    .await
-    {
-        print_deposit_failure_server_logs(server_logs_path);
-        return Err(err).context("Bridgehub L1→L2 deposit");
-    }
-    let deadline = Instant::now() + balance_poll_timeout;
-    while Instant::now() < deadline {
-        match poll_l2_balance_once(l2_recipient, l2_rpc_url) {
-            Ok(Some(balance)) if balance > balance_before => return Ok(balance),
-            Ok(_) => sleep(Duration::from_secs(2)),
-            Err(err) => {
-                let msg = format!("{err:#}");
-                if rpc_failure_looks_like_server_down(&msg) {
-                    print_deposit_failure_server_logs(server_logs_path);
-                }
-                return Err(err);
-            }
-        }
-    }
-    print_deposit_failure_server_logs(server_logs_path);
-    let logs_hint = server_logs_path
-        .map(|p| format!(" Server logs: {}", p.display()))
-        .unwrap_or_default();
-    anyhow::bail!(
-        "L2 balance for {} did not grow above pre-deposit {} within {:?}.{}",
-        l2_recipient,
-        balance_before,
-        balance_poll_timeout,
-        logs_hint
-    )
-}
-
-fn print_deposit_failure_server_logs(server_logs_path: Option<&Path>) {
+pub(crate) fn print_deposit_failure_server_logs(server_logs_path: Option<&Path>) {
     if let Some(log_path) = server_logs_path {
         if let Err(err) = print_stacktrace_context(log_path, 100) {
             eprintln!(

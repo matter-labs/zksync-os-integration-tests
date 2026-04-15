@@ -2,6 +2,13 @@
 #
 # Orchestrator: run integration tests preset by preset.
 #
+# Tests within a single preset share the same generated l1-state and run in
+# parallel via cargo-nextest (cargo test by itself does not parallelise across
+# integration-test binaries). Presets run sequentially so the l1-state
+# generation step does not have to contend with concurrent tests.
+#
+# Requires `cargo-nextest`: `cargo install cargo-nextest --locked`.
+#
 # Usage:
 #   ./run-tests.sh                              # run all presets from presets.yaml
 #   ./run-tests.sh --presets custom.yaml         # use a different presets file
@@ -12,6 +19,12 @@
 #   ./run-tests.sh --rebuild-cache               # delete cached l1-state before generating
 #
 set -euo pipefail
+
+if ! cargo nextest --version >/dev/null 2>&1; then
+  echo "ERROR: cargo-nextest not found. Install it with:"
+  echo "    cargo install cargo-nextest --locked"
+  exit 1
+fi
 
 PRESETS_FILE="presets.yaml"
 FILTER_PRESET=""
@@ -27,7 +40,7 @@ while [[ $# -gt 0 ]]; do
     --skip-generate)   SKIP_GENERATE=true; shift ;;
     --rebuild-cache)   REBUILD_CACHE=true; shift ;;
     -h|--help)
-      sed -n '3,13p' "$0"
+      sed -n '3,18p' "$0"
       exit 0
       ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
@@ -71,13 +84,6 @@ while IFS= read -r line; do
 done < "$PRESETS_FILE"
 
 all_presets=$(echo "$PAIRS" | awk 'NF {print $1}' | sort -u)
-
-# ---------------------------------------------------------------------------
-# Test name -> cargo command
-# ---------------------------------------------------------------------------
-test_command() {
-  echo "cargo test --package integration-tests --test $1 -- --nocapture"
-}
 
 # ---------------------------------------------------------------------------
 # Validate --preset filter
@@ -153,23 +159,74 @@ for preset in $all_presets; do
     fi
   fi
 
+  # Gather tests for this preset, honouring --test filter.
+  selected_tests=()
   for test_name in $tests; do
     [[ -n "$FILTER_TEST" && "$test_name" != "$FILTER_TEST" ]] && continue
+    selected_tests+=("$test_name")
+  done
 
-    cmd=$(test_command "$test_name")
-    echo ""
-    echo "--- [$preset] $test_name ---"
-    echo "  $cmd"
+  if [[ ${#selected_tests[@]} -eq 0 ]]; then
+    continue
+  fi
 
-    if eval "PRESET_NAME=$preset PRESETS_FILE=$PRESETS_FILE $cmd"; then
+  # Build a nextest filterset expression: binary(a) + binary(b) + ...
+  # Each preset-entry maps to a test file (one #[tokio::test] per binary),
+  # so filtering by binary name is exact.
+  filterset=""
+  for test_name in "${selected_tests[@]}"; do
+    if [[ -z "$filterset" ]]; then
+      filterset="binary(${test_name})"
+    else
+      filterset="${filterset} + binary(${test_name})"
+    fi
+  done
+
+  echo ""
+  echo "--- [$preset] Running ${#selected_tests[@]} tests in parallel via nextest ---"
+  echo "  filter: $filterset"
+
+  # Capture stderr so we can parse per-test pass/fail after the run.
+  # Nextest emits lines like:
+  #   PASS [   0.234s] integration-tests::<binary> <test_fn>
+  #   FAIL [   1.234s] integration-tests::<binary> <test_fn>
+  # to stderr for every test, and exits non-zero if any failed.
+  nextest_stderr="test-run-logs/nextest-${preset}.stderr"
+  mkdir -p "$(dirname "$nextest_stderr")"
+
+  set +e
+  # NO_COLOR=1 so our grep sees plain text (nextest otherwise wraps
+  # PASS/FAIL tokens in ANSI escape codes when writing to a tty-like sink).
+  NO_COLOR=1 PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
+    cargo nextest run \
+      --package integration-tests \
+      --no-fail-fast \
+      -E "$filterset" \
+      2> >(tee "$nextest_stderr" >&2)
+  nextest_exit=$?
+  set -e
+
+  # Parse pass/fail per test binary.
+  for test_name in "${selected_tests[@]}"; do
+    if grep -Eq "^\s*PASS \[.*\] integration-tests::${test_name} " "$nextest_stderr"; then
       echo "  PASS: $test_name"
       total_pass=$((total_pass + 1))
-    else
+    elif grep -Eq "^\s*FAIL \[.*\] integration-tests::${test_name} " "$nextest_stderr"; then
       echo "  FAIL: $test_name"
+      total_fail=$((total_fail + 1))
+      failed_list="${failed_list}  - ${preset}/${test_name}"$'\n'
+    else
+      # Neither PASS nor FAIL observed — treat as failure (build error,
+      # nextest crash, filter mismatch, etc).
+      echo "  FAIL: $test_name (no nextest status — see $nextest_stderr)"
       total_fail=$((total_fail + 1))
       failed_list="${failed_list}  - ${preset}/${test_name}"$'\n'
     fi
   done
+
+  if [[ $nextest_exit -ne 0 ]]; then
+    echo "  (nextest exited with $nextest_exit)"
+  fi
 done
 
 # ---------------------------------------------------------------------------

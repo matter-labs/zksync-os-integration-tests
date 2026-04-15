@@ -142,11 +142,6 @@ const CREATE2_DEPLOYER: &str = "0x4e59b44847b379578588920ca78fbf26c0b4956c";
 /// Anvil-typical L1 gas price (wei) for migration calldata.
 const MIGRATE_L1_GAS_PRICE_WEI: u64 = 1_000_000_000;
 
-/// Longer timeout used while the gateway is draining its post-migration
-/// priority queue; the queue can take noticeably longer to empty than a
-/// normal batch wait.
-const PRIORITY_QUEUE_DRAIN_TIMEOUT: Duration = Duration::from_secs(180);
-
 /// Large mint for ecosystem-wide ZK token balances (10^39 wei).
 const ZK_MINT_AMOUNT_LARGE: &str = "1000000000000000000000000000000000000000";
 
@@ -326,16 +321,23 @@ impl ChainOperators {
         })
     }
 
-    /// All L1 accounts belonging to this chain that need an ETH top-up on L1:
-    /// the chain owner (gas for governance/admin txs) plus the three
-    /// validator operators (gas for commit/prove/execute txs).
-    fn l1_funded_addresses(&self) -> [&str; 4] {
-        [
-            &self.owner_addr,
-            &self.commit_addr,
-            &self.prove_addr,
-            &self.execute_addr,
-        ]
+    /// L1 accounts for this chain that need an ETH top-up on L1.
+    ///
+    /// The chain owner always needs L1 gas (admin/governance calls, including
+    /// migration L1→L2 priority txs). The commit/prove/execute operators only
+    /// need L1 gas when the chain settles on L1 — chains settling on the
+    /// gateway run their operators against the gateway L2 only.
+    fn l1_funded_addresses(&self, settles_on_l1: bool) -> Vec<&str> {
+        if settles_on_l1 {
+            vec![
+                &self.owner_addr,
+                &self.commit_addr,
+                &self.prove_addr,
+                &self.execute_addr,
+            ]
+        } else {
+            vec![&self.owner_addr]
+        }
     }
 }
 
@@ -892,11 +894,14 @@ async fn run_generation_flow(
     )
     .context("fund ecosystem owner")?;
     println!("\n=== Funding L1 owner + operator accounts ===");
-    for ops in std::iter::once(gw_ops)
-        .chain(gw_settling_ops.iter())
-        .chain(l1_settling_ops.iter())
-    {
-        for addr in ops.l1_funded_addresses() {
+    // (chain ops, settles_on_l1). Gateway itself settles on L1; its operators
+    // commit/prove/execute against L1, so they need L1 gas too.
+    let l1_funding_targets: Vec<(&ChainOperators, bool)> = std::iter::once((gw_ops, true))
+        .chain(gw_settling_ops.iter().map(|o| (o, false)))
+        .chain(l1_settling_ops.iter().map(|o| (o, true)))
+        .collect();
+    for (ops, settles_on_l1) in &l1_funding_targets {
+        for addr in ops.l1_funded_addresses(*settles_on_l1) {
             fund_account(addr, "100ether", l1_rpc_url, &keys.deployer_pk)
                 .with_context(|| format!("fund L1 account {addr} for chain {}", ops.chain_id))?;
         }
@@ -1013,6 +1018,11 @@ async fn run_generation_flow(
     //   - L1-settling: ETH base token, no pause
     // Everything else (CTM, DA validator, operators, keys, VM type, factory)
     // is identical, so we drive all three variants through one helper.
+    //
+    // TODO(interop): register each chain's base token on every other chain via
+    // `register_on_all_chains` (see zksync-era's `chain register-on-all-chains`
+    // equivalent). The current interop test only verifies L2→L1 message
+    // inclusion, so cross-chain base-token transfers would need this added.
     // ----------------------------------------------------------------
     let gw_chain_out_name = "chain_init_gateway.json";
     println!(
@@ -1215,7 +1225,7 @@ async fn run_generation_flow(
     println!("\n=== Funding gateway L2 ===");
 
     // The gateway uses ZK base token. Mint ZK tokens to the test account
-    // and approve the bridgehub so L1→L2 deposits can pay in ZK.
+    // and approve the NTV so L1→L2 deposits can pay in ZK.
     let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)?;
     contracts_backend
         .cast(&[
@@ -1451,7 +1461,7 @@ async fn run_generation_flow(
     // 13e: Wait for gateway to drain its priority queue (validator + DA validator txs)
     println!("\n=== Waiting for gateway to drain priority queue ===");
     {
-        let deadline = std::time::Instant::now() + PRIORITY_QUEUE_DRAIN_TIMEOUT;
+        let deadline = std::time::Instant::now() + integration_tests::DEFAULT_WAIT_TIMEOUT;
         loop {
             let raw = contracts_backend.cast(&[
                 "call",
@@ -1471,9 +1481,8 @@ async fn run_generation_flow(
                     queue_size
                 );
             }
-            println!("  Gateway priority queue size: {queue_size}, sending traffic...");
-            let _ = gw_server.send_traffic_tx();
-            std::thread::sleep(Duration::from_secs(3));
+            println!("  Gateway priority queue size: {queue_size}, waiting...");
+            std::thread::sleep(Duration::from_secs(1));
         }
         // Now wait for enough batches to be executed on L1 so the state is visible
         gw_server

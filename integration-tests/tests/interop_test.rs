@@ -256,7 +256,7 @@ async fn run_interop_message_test() -> Result<()> {
     let messenger = IL1Messenger::new(L1_MESSENGER_ADDRESS, &chain_a_provider);
     let message_data = Bytes::from(b"hello interop".to_vec());
 
-    let receipt = tokio::time::timeout(Duration::from_secs(120), async {
+    let receipt = tokio::time::timeout(integration_tests::DEFAULT_WAIT_TIMEOUT, async {
         messenger
             .sendToL1(message_data.clone())
             .send()
@@ -267,7 +267,7 @@ async fn run_interop_message_test() -> Result<()> {
             .context("get L2→L1 message receipt")
     })
     .await
-    .context("L2→L1 message timed out after 120s")??;
+    .context("L2→L1 message wait timed out")??;
 
     anyhow::ensure!(receipt.status(), "L2→L1 message transaction reverted");
     let block_number = receipt.block_number.context("missing block_number")?;

@@ -5,7 +5,7 @@
 use std::str::FromStr;
 
 use alloy::network::{EthereumWallet, TxSigner};
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, FixedBytes, U256};
 use alloy::providers::utils::Eip1559Estimation;
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::LocalSigner;
@@ -85,7 +85,7 @@ pub async fn submit_l1_to_l2_deposit_to(
     private_key: &str,
     amount_ether: f64,
     l2_recipient: Option<&str>,
-) -> Result<()> {
+) -> Result<FixedBytes<32>> {
     submit_l1_to_l2_deposit_ex(
         l1_rpc_url,
         bridgehub_addr,
@@ -118,7 +118,7 @@ pub async fn submit_l1_to_l2_deposit_ex(
     amount_ether: f64,
     l2_recipient: Option<&str>,
     base_token_is_eth: bool,
-) -> Result<()> {
+) -> Result<FixedBytes<32>> {
     let bridgehub_address: Address = bridgehub_addr
         .parse()
         .with_context(|| format!("invalid bridgehub address {bridgehub_addr}"))?;
@@ -212,9 +212,73 @@ pub async fn submit_l1_to_l2_deposit_ex(
         .next()
         .context("no L1→L2 NewPriorityRequest log from deposit tx")?;
 
-    println!(
-        "Successfully submitted L1→L2 deposit (L2 priority tx hash {})",
-        l1_to_l2_tx_log.inner.txHash
-    );
-    Ok(())
+    let l2_tx_hash = l1_to_l2_tx_log.inner.txHash;
+    println!("Successfully submitted L1→L2 deposit (L2 priority tx hash {l2_tx_hash})");
+    Ok(l2_tx_hash)
+}
+
+/// Poll the L2 RPC for the given priority tx's receipt. Returns once the
+/// receipt is available *and* the tx succeeded; errors if the tx reverted
+/// on L2 or the timeout elapses.
+///
+/// Paired with [`submit_l1_to_l2_deposit_to`] / [`submit_l1_to_l2_deposit_ex`]:
+/// those submit the L1 tx and return the predicted L2 hash; this waits for
+/// the L2 side to actually execute. Callers that submit the deposit into a
+/// priority queue with no L2 server yet running should skip this step.
+pub async fn wait_for_l2_priority_tx_receipt(
+    l2_rpc_url: &str,
+    l2_tx_hash: FixedBytes<32>,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    // Issue raw `eth_getTransactionReceipt` calls and parse the result as
+    // generic JSON instead of an alloy-typed receipt. The L2 side returns
+    // ZKsync-specific transaction types (e.g. `0x7f` for L1→L2 priority
+    // txs) that alloy's strict typed-receipt enum rejects. We only need
+    // the `status` field.
+    let client = reqwest::Client::new();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let hash_hex = format!("{l2_tx_hash:#x}");
+    loop {
+        let body = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_getTransactionReceipt",
+            "params": [hash_hex],
+        });
+        let resp = client
+            .post(l2_rpc_url)
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("eth_getTransactionReceipt POST to {l2_rpc_url}"))?;
+        let json: serde_json::Value = resp
+            .json()
+            .await
+            .context("eth_getTransactionReceipt response was not JSON")?;
+        if let Some(err) = json.get("error") {
+            anyhow::bail!("L2 eth_getTransactionReceipt({hash_hex}) RPC error: {err}");
+        }
+        let result = json
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        if !result.is_null() {
+            // status is "0x1" (success) or "0x0" (reverted).
+            match result.get("status").and_then(|v| v.as_str()) {
+                Some("0x1") => return Ok(()),
+                Some("0x0") => {
+                    anyhow::bail!("L1→L2 priority tx {hash_hex} executed on L2 but reverted");
+                }
+                other => {
+                    anyhow::bail!(
+                        "L1→L2 priority tx {hash_hex} receipt has unexpected status field: {other:?}"
+                    );
+                }
+            }
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("L1→L2 priority tx {hash_hex} did not execute on L2 within {timeout:?}");
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
 }

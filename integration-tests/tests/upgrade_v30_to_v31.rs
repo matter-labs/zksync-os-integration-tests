@@ -853,19 +853,11 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     // base_fee ≈ 0.1 gwei. 1 ETH gives enough headroom.
     let test_address = address_from_private_key(DEFAULT_ANVIL_PRIVATE_KEY)
         .context("Failed to derive address for DEFAULT_ANVIL_PRIVATE_KEY")?;
-    let balance = server
+    server
         .fund_account_via_l1_deposit(&test_address, 1.0, L1DepositBaseToken::Eth)
         .await
         .context("Failed to fund DEFAULT_ANVIL_PRIVATE_KEY on L2 via L1 bridge")?;
-    anyhow::ensure!(
-        balance > 0,
-        "DEFAULT_ANVIL_PRIVATE_KEY L2 balance must be > 0, got {}",
-        balance
-    );
-    println!(
-        "✓ DEFAULT_ANVIL_PRIVATE_KEY funded on L2 via L1 bridge (balance {} wei)",
-        balance
-    );
+    println!("✓ DEFAULT_ANVIL_PRIVATE_KEY funded on L2 via L1 bridge");
 
     server
         .wait_for_executed_batches_with_traffic()
@@ -887,7 +879,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         l1_rpc_url,
         server.rpc_url().as_str(),
         &contracts.l1.diamond_proxy_addr,
-        Duration::from_secs(120),
+        integration_tests::DEFAULT_WAIT_TIMEOUT,
     )?;
 
     // STOP HERE — the actual v30 → v31 chain upgrade (and everything

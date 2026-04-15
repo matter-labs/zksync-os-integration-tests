@@ -1,3 +1,13 @@
+use std::time::Duration;
+
+/// Default wait timeout used across batch/deposit/priority-queue polling
+/// loops. Chosen to comfortably cover the slowest CI runs.
+pub const DEFAULT_WAIT_TIMEOUT: Duration = Duration::from_secs(180);
+
+// NOTE: keep log/error messages referring to this timeout abstract
+// (e.g. "wait timeout") instead of quoting the current number of seconds —
+// they would go stale the moment `DEFAULT_WAIT_TIMEOUT` is bumped.
+
 // ── Infrastructure: process management, ports, docker ──
 pub mod infra;
 

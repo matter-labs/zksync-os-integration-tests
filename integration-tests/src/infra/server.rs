@@ -16,7 +16,7 @@ use crate::find_ports::pick_unused_port_sync;
 use crate::preset_paths::server_paths_for_preset;
 use crate::presets::{Preset, RepoRef};
 use crate::server_utils::{
-    fund_l2_via_l1_deposit_ex, get_total_batches_executed, send_traffic_tx,
+    get_total_batches_executed, print_deposit_failure_server_logs, send_traffic_tx,
     strip_ansi_escape_codes_in_file, wait_for_chain_to_be_ready,
 };
 use crate::utils::find_project_root;
@@ -25,12 +25,7 @@ use crate::utils::find_project_root;
 /// [`Server::wait_for_executed_batches_with_traffic`] waits for.
 const DEFAULT_EXTRA_BATCHES: u64 = 3;
 
-/// Default timeout used by [`Server::wait_for_executed_batches_with_traffic`].
-const DEFAULT_BATCH_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// Default L2 balance-poll timeout used by
-/// [`Server::fund_account_via_l1_deposit`].
-const DEFAULT_DEPOSIT_POLL_TIMEOUT: Duration = Duration::from_secs(120);
+use crate::DEFAULT_WAIT_TIMEOUT;
 
 /// Chain base-token mode for [`Server::fund_account_via_l1_deposit`].
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -791,11 +786,11 @@ impl Server {
     }
 
     /// Fund `recipient` on this server's L2 via a Bridgehub L1→L2 deposit of
-    /// `amount` units of the chain's base token, then poll L2 until the
-    /// recipient's balance strictly increases.
+    /// `amount` units of the chain's base token, then wait for the L2
+    /// priority tx to execute.
     ///
     /// Uses Anvil's default pre-funded account as the L1 signer and
-    /// [`DEFAULT_DEPOSIT_POLL_TIMEOUT`] for the balance-poll. When
+    /// [`DEFAULT_WAIT_TIMEOUT`] for the L2 receipt wait. When
     /// `base_token == L1DepositBaseToken::PreApprovedCustom`, the caller must
     /// have already approved the base token to the bridgehub.
     ///
@@ -806,7 +801,7 @@ impl Server {
         recipient: &str,
         amount: f64,
         base_token: L1DepositBaseToken,
-    ) -> anyhow::Result<u128> {
+    ) -> anyhow::Result<()> {
         let bridgehub_addr = self.bridgehub_addr.as_deref().ok_or_else(|| {
             anyhow::anyhow!(
                 "Server::fund_account_via_l1_deposit requires \
@@ -823,18 +818,36 @@ impl Server {
         // Flush docker logs to host before the deposit so the diagnostic
         // reader can find the file if the server crashes mid-operation.
         let _ = self.save_logs();
-        fund_l2_via_l1_deposit_ex(
+
+        let l2_tx_hash = match crate::l1_l2_deposit::submit_l1_to_l2_deposit_ex(
             &self.host_l1_rpc_url,
-            &self.rpc_url(),
             bridgehub_addr,
             chain_id,
-            recipient,
+            crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY,
             amount,
-            DEFAULT_DEPOSIT_POLL_TIMEOUT,
-            Some(logs_path.as_path()),
+            Some(recipient),
             matches!(base_token, L1DepositBaseToken::Eth),
         )
         .await
+        {
+            Ok(hash) => hash,
+            Err(err) => {
+                print_deposit_failure_server_logs(Some(logs_path.as_path()));
+                return Err(err).context("Bridgehub L1→L2 deposit");
+            }
+        };
+
+        if let Err(err) = crate::l1_l2_deposit::wait_for_l2_priority_tx_receipt(
+            &self.rpc_url(),
+            l2_tx_hash,
+            DEFAULT_WAIT_TIMEOUT,
+        )
+        .await
+        {
+            print_deposit_failure_server_logs(Some(logs_path.as_path()));
+            return Err(err);
+        }
+        Ok(())
     }
 
     /// Drive L2 traffic on this server until [`DEFAULT_EXTRA_BATCHES`] more
@@ -846,7 +859,7 @@ impl Server {
     /// still works. Empty-batch behavior isn't what these tests want to
     /// exercise.
     ///
-    /// Uses [`DEFAULT_BATCH_WAIT_TIMEOUT`] and Anvil's default pre-funded
+    /// Uses [`DEFAULT_WAIT_TIMEOUT`] and Anvil's default pre-funded
     /// account as the traffic signer. Requires
     /// [`ServerBuilder::diamond_proxy_addr`] to have been set at build time.
     pub fn wait_for_executed_batches_with_traffic(&self) -> anyhow::Result<u64> {
@@ -903,7 +916,7 @@ impl Server {
                 return Ok(executed);
             }
 
-            if start.elapsed() >= DEFAULT_BATCH_WAIT_TIMEOUT {
+            if start.elapsed() >= DEFAULT_WAIT_TIMEOUT {
                 anyhow::bail!(
                     "Timed out waiting for executed batches. target={}, current={}, sent_txs={}",
                     target,
