@@ -505,7 +505,7 @@ fn verify_protocol_version(
     let version_str = contracts_backend
         .cast(&[
             "call",
-            &diamond_proxy,
+            diamond_proxy,
             "getProtocolVersion()(uint256)",
             "--rpc-url",
             l1_rpc_url,
