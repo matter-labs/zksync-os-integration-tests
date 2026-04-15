@@ -188,8 +188,8 @@ for preset in $all_presets; do
 
   # Capture stderr so we can parse per-test pass/fail after the run.
   # Nextest emits lines like:
-  #   PASS [   0.234s] integration-tests::<binary> <test_fn>
-  #   FAIL [   1.234s] integration-tests::<binary> <test_fn>
+  #   PASS [   0.234s] (1/3) integration-tests::<binary> <test_fn>
+  #   FAIL [   1.234s] (2/3) integration-tests::<binary> <test_fn>
   # to stderr for every test, and exits non-zero if any failed.
   nextest_stderr="test-run-logs/nextest-${preset}.stderr"
   mkdir -p "$(dirname "$nextest_stderr")"
@@ -206,12 +206,26 @@ for preset in $all_presets; do
   nextest_exit=$?
   set -e
 
-  # Parse pass/fail per test binary.
+  # Parse pass/fail per test binary. Scraping nextest's human output
+  # with regex is admittedly a bit overkill — the simpler alternative is
+  # to trust nextest's own exit code and treat the whole preset as one
+  # pass/fail. We do it this way because it keeps the per-test
+  # granularity (and the `failed_list` summary) that the script had
+  # before nextest, which is much more useful for diagnosing CI runs
+  # with many passing tests and a single failure.
+  #
+  # The pattern accounts for nextest's `(N/M)` progress counter between
+  # the timing block and the binary name; `[[:space:]]+` handles any
+  # inter-token whitespace. Sample lines that must match:
+  #
+  #   PASS [   0.234s] integration-tests::<binary> <test_fn>
+  #   PASS [  41.301s] (1/3) integration-tests::<binary> <test_fn>
+  #   FAIL [   1.234s] (2/3) integration-tests::<binary> <test_fn>
   for test_name in "${selected_tests[@]}"; do
-    if grep -Eq "^\s*PASS \[.*\] integration-tests::${test_name} " "$nextest_stderr"; then
+    if grep -Eq "PASS[[:space:]]+\[[^]]*\][[:space:]]+(\([0-9]+/[0-9]+\)[[:space:]]+)?integration-tests::${test_name}[[:space:]]" "$nextest_stderr"; then
       echo "  PASS: $test_name"
       total_pass=$((total_pass + 1))
-    elif grep -Eq "^\s*FAIL \[.*\] integration-tests::${test_name} " "$nextest_stderr"; then
+    elif grep -Eq "FAIL[[:space:]]+\[[^]]*\][[:space:]]+(\([0-9]+/[0-9]+\)[[:space:]]+)?integration-tests::${test_name}[[:space:]]" "$nextest_stderr"; then
       echo "  FAIL: $test_name"
       total_fail=$((total_fail + 1))
       failed_list="${failed_list}  - ${preset}/${test_name}"$'\n'
