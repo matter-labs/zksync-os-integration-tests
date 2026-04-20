@@ -8,31 +8,21 @@ async fn run_gateway_settling_test() -> Result<()> {
     integration_tests::server::get_or_create_run_id("gateway_settling");
     let preset = load_current_preset()?;
     let eco = load_ecosystem(&preset)?;
-    anyhow::ensure!(
-        !eco.gateway_settling_chains.is_empty(),
-        "No gateway-settling chains in ecosystem"
-    );
-    let gw = &eco.gateway;
-    let chain = &eco.gateway_settling_chains[0];
-
-    println!(
-        "Gateway chain {} (diamond_proxy={})",
-        gw.chain_id, gw.diamond_proxy
-    );
-    println!(
-        "Gateway-settling chain {} (diamond_proxy={})",
-        chain.chain_id, chain.diamond_proxy
-    );
 
     println!("\n=== Loading l1-state.json into Anvil ===");
-    let state_path = resolve_l1_state(&preset, &eco)?;
+    let state_path = resolve_l1_state(&preset)?;
     let anvil = Anvil::spawn_with_state(&state_path).await?;
     let l1_rpc_url = anvil.rpc_url().to_string();
     println!("Anvil ready at {l1_rpc_url}");
 
+    let (chain_name, chain_id) = eco.chain_a();
+
+    println!("Gateway chain {}", eco.gateway_chain_id());
+    println!("Gateway-settling chain {chain_id} ({chain_name})");
+
     // Resolve config paths from state directory
-    let gw_config_path = chain_config_path(&preset, &gw.name)?;
-    let chain_config = chain_config_path(&preset, &chain.name)?;
+    let gw_config_path = chain_config_path(&preset, integration_tests::l1_state::GATEWAY_CHAIN_NAME)?;
+    let chain_config = chain_config_path(&preset, chain_name)?;
     anyhow::ensure!(
         gw_config_path.exists(),
         "Gateway config not found: {}",
@@ -45,8 +35,8 @@ async fn run_gateway_settling_test() -> Result<()> {
     );
 
     // ---- Gateway server (ephemeral mode with archived RocksDB) ----
-    println!("\n=== Starting gateway server (chain {}) ===", gw.chain_id);
-    let gw_server = ServerBuilder::new(preset.clone(), &gw.name)
+    println!("\n=== Starting gateway server (chain {}) ===", eco.gateway_chain_id());
+    let gw_server = ServerBuilder::new(preset.clone(), integration_tests::l1_state::GATEWAY_CHAIN_NAME)
         .ephemeral()
         .config_path(&gw_config_path)
         .spawn(&anvil)
@@ -57,9 +47,9 @@ async fn run_gateway_settling_test() -> Result<()> {
     // ---- Gateway-settling chain server (fresh, no ephemeral state) ----
     println!(
         "\n=== Starting gateway-settling chain {} ===",
-        chain.chain_id
+        chain_id
     );
-    let chain_server = ServerBuilder::new(preset, &chain.name)
+    let chain_server = ServerBuilder::new(preset, chain_name)
         .gateway_rpc_url(&gw_l2_rpc)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start chain server: {:?}", e))?;
@@ -69,7 +59,7 @@ async fn run_gateway_settling_test() -> Result<()> {
     // Verify the chain produces and settles batches end-to-end.
     println!("\n=== Waiting for executed batches on gateway-settling chain ===");
     chain_server
-        .wait_for_executed_batches_with_traffic()
+        .wait_for_traffic_tx_executed_on_l1()
         .context("gateway-settling chain batches")?;
 
     let _ = chain_server.kill();

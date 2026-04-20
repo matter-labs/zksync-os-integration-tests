@@ -1,0 +1,118 @@
+name: Upgrade Readiness Check
+
+# Manually triggered. Waits until a chain's pending protocol upgrade has been
+# processed by the server and the L1 batch containing the block before the
+# upgrade block has been executed on the settlement layer, then posts a Slack
+# notification. The tool blocks indefinitely until finalization; the
+# job-level `timeout-minutes` is the only upper bound.
+#
+# The upgrade-readiness-checker binary lives in the era-contracts repo at
+# `tools/upgrade-readiness-checker`. This workflow checks out that repo
+# alongside, builds the tool, and runs it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      era_contracts_ref:
+        description: "era-contracts ref to build the checker from (branch, tag or SHA)"
+        required: false
+        default: "main"
+        type: string
+      chain_name:
+        description: "Human-readable chain name (used in Slack message)"
+        required: true
+        type: string
+      chain_id:
+        description: "L2 chain ID of the chain being upgraded"
+        required: true
+        type: string
+      l2_rpc_url:
+        description: "L2 RPC URL of the chain being upgraded"
+        required: true
+        type: string
+      settlement_rpc_url:
+        description: "Settlement-layer RPC URL (L1 RPC for direct chains, gateway L2 RPC for gateway chains)"
+        required: true
+        type: string
+      bridgehub_address:
+        description: "Bridgehub address on the settlement layer"
+        required: true
+        type: string
+      target_minor_version:
+        description: "Minor component of the target protocol version (e.g. 31 for 0.31.0)"
+        required: true
+        type: string
+      target_patch_version:
+        description: "Patch component of the target protocol version (e.g. 0 for 0.31.0)"
+        required: false
+        default: "0"
+        type: string
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # The tool has no internal timeout — this is the hard upper bound on how
+    # long the workflow will wait for the upgrade to finalize.
+    timeout-minutes: 360
+    steps:
+      - name: Checkout era-contracts
+        uses: actions/checkout@v4
+        with:
+          repository: matter-labs/era-contracts
+          ref: ${{ inputs.era_contracts_ref }}
+          path: era-contracts
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: era-contracts/tools/upgrade-readiness-checker -> target
+
+      - name: Build upgrade-readiness-checker
+        working-directory: era-contracts/tools/upgrade-readiness-checker
+        run: cargo build --release
+
+      - name: Wait for upgrade to finalize
+        id: check
+        working-directory: era-contracts/tools/upgrade-readiness-checker
+        env:
+          CHAIN_ID: ${{ inputs.chain_id }}
+          L2_RPC_URL: ${{ inputs.l2_rpc_url }}
+          SETTLEMENT_RPC_URL: ${{ inputs.settlement_rpc_url }}
+          BRIDGEHUB_ADDRESS: ${{ inputs.bridgehub_address }}
+          TARGET_MINOR_VERSION: ${{ inputs.target_minor_version }}
+          TARGET_PATCH_VERSION: ${{ inputs.target_patch_version }}
+          RUST_LOG: info
+        run: ./target/release/upgrade-readiness-checker
+
+      - name: Notify Slack on success
+        if: success()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.UPGRADE_READINESS_SLACK_WEBHOOK_URL }}
+          CHAIN_NAME: ${{ inputs.chain_name }}
+          CHAIN_ID: ${{ inputs.chain_id }}
+          TARGET_VERSION: "0.${{ inputs.target_minor_version }}.${{ inputs.target_patch_version }}"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data "$(jq -n \
+              --arg text ":white_check_mark: *${CHAIN_NAME}* (chain \`${CHAIN_ID}\`): upgrade to protocol version \`${TARGET_VERSION}\` has been finalized.\n<${RUN_URL}|workflow run>" \
+              '{text: $text}')" \
+            "${SLACK_WEBHOOK_URL}"
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.UPGRADE_READINESS_SLACK_WEBHOOK_URL }}
+          CHAIN_NAME: ${{ inputs.chain_name }}
+          CHAIN_ID: ${{ inputs.chain_id }}
+          TARGET_VERSION: "0.${{ inputs.target_minor_version }}.${{ inputs.target_patch_version }}"
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          curl -sS -X POST -H 'Content-type: application/json' \
+            --data "$(jq -n \
+              --arg text ":x: *${CHAIN_NAME}* (chain \`${CHAIN_ID}\`): upgrade readiness check for protocol version \`${TARGET_VERSION}\` failed or the job timed out.\n<${RUN_URL}|workflow run>" \
+              '{text: $text}')" \
+            "${SLACK_WEBHOOK_URL}"

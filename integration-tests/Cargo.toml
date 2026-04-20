@@ -2,6 +2,10 @@
 name = "integration-tests"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
+
+[build-dependencies]
+serde_yaml = "0.9"
 
 [dependencies]
 alloy = { version = "0.3", default-features = false, features = [

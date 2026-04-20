@@ -8,16 +8,14 @@ ecosystem:
   token_multiplier_setter:
     address: 0x191cef859ae2d797185ab26ec82a950939d69d54
     private_key: 0xd85b9e0d25f832ded41efe74a9a2074a5677e03774f1fdaa6a7d54b944256869
-  # Ecosystem owner EOA — resolved from the v30.2 anvil state:
-  #   Governance.owner() = 0xc32a01Dbc7d293E5c8ac66c3b2321E745c68fc5B
-  # The private key for this address was not persisted when the v30.2
-  # state was generated. The `upgrade_v30_to_v31` test does not need it
-  # (only address/public fields are read). `generate-l1-state` does, but
-  # `generate-l1-state` never loads this file — it generates its own
-  # wallets.yaml via protocol_ops.
+  # Ecosystem owner / governance signer.
+  # The original Governance.owner() was 0xc32a01… whose private key was
+  # not persisted when the v30.2 state was generated. The upgrade test
+  # transfers governance ownership to the governor wallet via anvil
+  # impersonation, so we use the governor's address and key here.
   owner:
-    address: 0xc32a01dbc7d293e5c8ac66c3b2321e745c68fc5b
-    private_key: '0x0000000000000000000000000000000000000000000000000000000000000000'
+    address: 0x06fa851c247578f70d7db3780994cf8ef659c2e2
+    private_key: 0xbde651cec2adffb5f98b137edd1a21f4c736261d4a805a5d4469a46c64a777bb
 default:
   operator:
     address: 0x9d46b85c55f4db9a1059d8f6f54b29d7f238658d

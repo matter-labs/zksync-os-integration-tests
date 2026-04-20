@@ -212,6 +212,17 @@ pub fn strip_ansi_escape_sequences(input: &str) -> String {
 /// server's batch builder. Internal implementation for
 /// [`crate::server::Server::send_traffic_tx`].
 pub(crate) fn send_traffic_tx(l2_rpc_url: &str, sender_private_key: &str) -> Result<()> {
+    send_traffic_tx_returning_hash(l2_rpc_url, sender_private_key).map(|_| ())
+}
+
+/// Same as [`send_traffic_tx`] but returns the tx hash. Used by callers that
+/// need to track the L2 → L1 lifecycle for a *specific* tx (e.g. waiting for
+/// its containing batch to be executed on L1) instead of just nudging the
+/// server.
+pub(crate) fn send_traffic_tx_returning_hash(
+    l2_rpc_url: &str,
+    sender_private_key: &str,
+) -> Result<String> {
     let output = Command::new("cast")
         .args([
             "send",
@@ -222,6 +233,7 @@ pub(crate) fn send_traffic_tx(l2_rpc_url: &str, sender_private_key: &str) -> Res
             sender_private_key,
             "--rpc-url",
             l2_rpc_url,
+            "--json",
         ])
         .output()
         .context("Failed to execute cast send for server traffic")?;
@@ -239,7 +251,84 @@ pub(crate) fn send_traffic_tx(l2_rpc_url: &str, sender_private_key: &str) -> Res
             stderr
         );
     }
-    Ok(())
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let receipt: serde_json::Value = serde_json::from_str(stdout.trim())
+        .with_context(|| format!("parse `cast send --json` output: {stdout}"))?;
+    let hash = receipt
+        .get("transactionHash")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("`cast send --json` output missing transactionHash"))?
+        .to_string();
+    Ok(hash)
+}
+
+/// Poll an L2 RPC for `tx_hash`'s receipt and return its `blockNumber`.
+pub(crate) fn wait_for_l2_tx_block_number(
+    l2_rpc_url: &str,
+    tx_hash: &str,
+    timeout: std::time::Duration,
+) -> Result<u64> {
+    use std::time::Instant;
+    let start = Instant::now();
+    loop {
+        let output = Command::new("cast")
+            .args(["receipt", tx_hash, "--rpc-url", l2_rpc_url, "--json"])
+            .output()
+            .context("spawn `cast receipt`")?;
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let parsed: serde_json::Value = serde_json::from_str(stdout.trim())
+                .with_context(|| format!("parse `cast receipt --json`: {stdout}"))?;
+            if let Some(block_str) = parsed.get("blockNumber").and_then(|v| v.as_str()) {
+                if !block_str.is_empty() && block_str != "null" {
+                    let trimmed = block_str.trim_start_matches("0x");
+                    return u64::from_str_radix(trimmed, 16)
+                        .with_context(|| format!("parse blockNumber {block_str:?}"));
+                }
+            }
+        }
+        if start.elapsed() >= timeout {
+            anyhow::bail!(
+                "L2 tx {tx_hash} receipt not available within {:.1}s",
+                timeout.as_secs_f64(),
+            );
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+}
+
+/// Read the current `finalized` block number from an L2 RPC.
+///
+/// On a zksync-os L2 RPC, `finalized` tracks the highest L2 block whose
+/// containing batch has been executed on the settlement layer. So this
+/// advances only as the commit → prove → execute pipeline finishes.
+pub(crate) fn get_l2_finalized_block_number(l2_rpc_url: &str) -> Result<u64> {
+    let output = Command::new("cast")
+        .args([
+            "block",
+            "finalized",
+            "--field",
+            "number",
+            "--rpc-url",
+            l2_rpc_url,
+        ])
+        .output()
+        .context("spawn `cast block finalized`")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "cast block finalized failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let s = stdout.trim();
+    if let Some(hex) = s.strip_prefix("0x") {
+        u64::from_str_radix(hex, 16)
+            .with_context(|| format!("parse finalized block hex {s:?}"))
+    } else {
+        s.parse::<u64>()
+            .with_context(|| format!("parse finalized block dec {s:?}"))
+    }
 }
 
 fn find_latest_server_log_path() -> Result<Option<std::path::PathBuf>> {
@@ -296,28 +385,102 @@ pub(crate) fn get_total_batches_executed(
     l1_rpc_url: &str,
     diamond_proxy_addr: &str,
 ) -> Result<u64> {
-    let output = Command::new("cast")
-        .args([
-            "call",
-            diamond_proxy_addr,
-            "getTotalBatchesExecuted()(uint256)",
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .output()
-        .context("Failed to execute cast call for getTotalBatchesExecuted")?;
+    cast_u64_call(l1_rpc_url, diamond_proxy_addr, "getTotalBatchesExecuted()(uint256)")
+        .context("Failed to read getTotalBatchesExecuted")
+}
 
+fn get_total_batches_committed(
+    l1_rpc_url: &str,
+    diamond_proxy_addr: &str,
+) -> Result<u64> {
+    cast_u64_call(l1_rpc_url, diamond_proxy_addr, "getTotalBatchesCommitted()(uint256)")
+        .context("Failed to read getTotalBatchesCommitted")
+}
+
+fn cast_u64_call(rpc_url: &str, target: &str, sig: &str) -> Result<u64> {
+    cast_u64_call_at(rpc_url, target, sig, None)
+}
+
+fn cast_u64_call_at(
+    rpc_url: &str,
+    target: &str,
+    sig: &str,
+    block_tag: Option<&str>,
+) -> Result<u64> {
+    let mut args: Vec<&str> = vec!["call", target, sig, "--rpc-url", rpc_url];
+    if let Some(tag) = block_tag {
+        args.extend_from_slice(&["--block", tag]);
+    }
+    let output = Command::new("cast")
+        .args(&args)
+        .output()
+        .with_context(|| format!("spawn `cast call {target} {sig}`"))?;
     if !output.status.success() {
         anyhow::bail!(
-            "cast call failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
+            "cast call {sig} failed:\nSTDOUT:\n{}\nSTDERR:\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
     }
-
     let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    parse_u64_value(&raw)
-        .with_context(|| format!("Unable to parse getTotalBatchesExecuted output: '{}'", raw))
+    parse_u64_value(&raw).with_context(|| format!("parse `{sig}` output '{raw}'"))
+}
+
+/// Poll the chain's diamond proxy on its current settlement layer until
+/// `totalBatchesCommitted == totalBatchesExecuted` and that state remains
+/// stable for `stable_for`.
+///
+/// The stability window guards against racing ahead of a transient
+/// equality — e.g. right after a `notifyServerMigrationToGateway` event,
+/// the server still has one final batch (containing the `SetSLChainId`
+/// system tx) to seal. Naïve `committed == executed` can pass at a lull
+/// before that batch hits L1; the caller would then attempt a
+/// migrate-to-gateway submit that reverts `NotAllBatchesExecuted()`.
+///
+/// Used by flows that require a quiescent chain — e.g. chain upgrades or
+/// migrate-to-gateway submit, both of which revert if the commit/execute
+/// pipeline still has in-flight batches.
+pub fn wait_for_committed_eq_executed(
+    settlement_rpc_url: &str,
+    diamond_proxy_addr: &str,
+    stable_for: Duration,
+    timeout: Duration,
+) -> Result<u64> {
+    let start = std::time::Instant::now();
+    let mut last_log = start;
+    let mut stable_since: Option<std::time::Instant> = None;
+    loop {
+        let committed = get_total_batches_committed(settlement_rpc_url, diamond_proxy_addr)?;
+        let executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)?;
+        if committed == executed {
+            let since = *stable_since.get_or_insert_with(std::time::Instant::now);
+            if since.elapsed() >= stable_for {
+                println!(
+                    "  batches drained: committed == executed == {} on {} (stable for {:?})",
+                    committed, diamond_proxy_addr, stable_for
+                );
+                return Ok(committed);
+            }
+        } else {
+            stable_since = None;
+        }
+        if last_log.elapsed() >= Duration::from_secs(5) {
+            println!(
+                "  waiting for drain on {}: committed={} executed={}",
+                diamond_proxy_addr, committed, executed
+            );
+            last_log = std::time::Instant::now();
+        }
+        if start.elapsed() >= timeout {
+            anyhow::bail!(
+                "Timed out waiting for {} to drain: committed={} executed={}",
+                diamond_proxy_addr,
+                committed,
+                executed,
+            );
+        }
+        sleep(Duration::from_millis(500));
+    }
 }
 
 fn parse_u64_value(raw: &str) -> Result<u64> {

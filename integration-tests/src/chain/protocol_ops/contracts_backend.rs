@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -6,6 +7,94 @@ use anyhow::{Context, Result};
 use crate::presets::{Preset, RepoRef};
 
 use super::{run_protocol_ops_local, ContractsContainerSession, ERA_CONTRACTS_PROTOCOL_IMAGE_REPO};
+
+/// Env vars applied to every local forge / cast invocation. `FOUNDRY_OFFLINE`
+/// suppresses forge's background solc-version checks against
+/// `binaries.soliditylang.org`, which hang on slow connections; relies on
+/// solc already being cached under `~/.svm/`.
+const LOCAL_FOUNDRY_ENV: &[(&str, &str)] = &[("FOUNDRY_OFFLINE", "true")];
+
+/// A single Safe bundle entry parsed from a protocol-ops `manifest.json`.
+pub struct SafeBundleEntry {
+    /// Path to the `.safe.json` file, relative to the work directory.
+    pub path: String,
+    /// Target signer address (lowercase `0x…`).
+    pub target: String,
+}
+
+/// A set of Safe bundles ready to be applied to L1.
+///
+/// Constructed by [`EraContractsBackend::parse_safe_bundles`]; call
+/// [`apply`](Self::apply) with the private keys of the signers that should
+/// broadcast each bundle.
+///
+/// ```ignore
+/// backend
+///     .protocol_ops(&["chain", "gateway", "convert", /* … */,
+///                     "--out", &out_abs])?;
+/// backend
+///     .parse_safe_bundles(&out_rel, l1_rpc_url)?
+///     .apply(&[admin_pk, deployer_pk, governance_pk])?;
+/// ```
+pub struct SafeBundles<'a> {
+    backend: &'a EraContractsBackend,
+    l1_rpc_url: &'a str,
+    pub entries: Vec<SafeBundleEntry>,
+}
+
+impl SafeBundles<'_> {
+    pub fn new<'a>(
+        backend: &'a EraContractsBackend,
+        l1_rpc_url: &'a str,
+        entries: Vec<SafeBundleEntry>,
+    ) -> SafeBundles<'a> {
+        SafeBundles {
+            backend,
+            l1_rpc_url,
+            entries,
+        }
+    }
+
+    /// Apply every bundle to L1, matching each bundle's `target` address
+    /// against the addresses derived from `private_keys`. Fails if any
+    /// bundle's target isn't covered by one of the supplied keys.
+    pub fn apply(&self, private_keys: &[&str]) -> Result<()> {
+        let signer_map: HashMap<String, &str> = private_keys
+            .iter()
+            .map(|pk| {
+                let addr = crate::chain::server_utils::address_from_private_key(pk)?;
+                Ok((addr.to_ascii_lowercase(), *pk))
+            })
+            .collect::<Result<_>>()?;
+
+        let start = std::time::Instant::now();
+        for (i, bundle) in self.entries.iter().enumerate() {
+            let target_lower = bundle.target.to_ascii_lowercase();
+            let pk = signer_map.get(&target_lower).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no private key supplied for Safe bundle target {} \
+                     (bundle #{i}, file {})",
+                    bundle.target,
+                    bundle.path,
+                )
+            })?;
+            self.backend
+                .execute_safe(&bundle.path, self.l1_rpc_url, pk)
+                .with_context(|| {
+                    format!(
+                        "apply Safe bundle #{i} ({}) for target {}",
+                        bundle.path, bundle.target,
+                    )
+                })?;
+        }
+        println!(
+            "  Applied {} Safe bundle(s) in {:.1}s",
+            self.entries.len(),
+            start.elapsed().as_secs_f64(),
+        );
+        Ok(())
+    }
+}
 
 /// Unified backend for running era-contracts tools (protocol_ops, forge, cast).
 /// Local mode runs binaries from the source tree; Docker mode execs into a
@@ -22,6 +111,9 @@ pub enum EraContractsBackend {
     Docker {
         session: ContractsContainerSession,
         work_dir: PathBuf,
+        /// Image tag passed to `protocol-ops.sh` (e.g. `"latest"` or a
+        /// branch-specific tag like `"gateway-commands-in-protocol-ops"`).
+        image_tag: String,
     },
 }
 
@@ -44,20 +136,33 @@ impl EraContractsBackend {
             RepoRef::Path(p) => Self::local(p, work_name),
             RepoRef::DockerTag { tag, .. } => {
                 let image = format!("{}:{}", ERA_CONTRACTS_PROTOCOL_IMAGE_REPO, tag);
-                Self::docker(&image, extra_mounts)
+                Self::docker(&image, tag, extra_mounts)
             }
         }
     }
 
-    /// Create a local backend. Work directory is `era_contracts_path/work/{work_name}`.
-    pub fn local(era_contracts_path: &Path, work_name: &str) -> Result<Self> {
+    /// Create a local backend. Work directory lives under
+    /// `test-run-logs/{run_id}/contracts_artifacts/` (same location as Docker
+    /// mode). A run ID must be set via `get_or_create_run_id` before calling.
+    pub fn local(era_contracts_path: &Path, _work_name: &str) -> Result<Self> {
         let era_path = fs::canonicalize(era_contracts_path).with_context(|| {
             format!(
                 "canonicalize era-contracts path: {}",
                 era_contracts_path.display()
             )
         })?;
-        let work_dir = era_path.join("work").join(work_name);
+        let run_id = crate::infra::server::get_run_id().ok_or_else(|| {
+            anyhow::anyhow!(
+                "No run ID set. Call `integration_tests::server::get_or_create_run_id(\"test_name\")` \
+                 before creating an EraContractsBackend."
+            )
+        })?;
+        let project_root =
+            crate::infra::utils::find_project_root().map_err(|e| anyhow::anyhow!("{e}"))?;
+        let work_dir = project_root
+            .join("test-run-logs")
+            .join(run_id)
+            .join("contracts_artifacts");
         fs::create_dir_all(&work_dir)?;
         fs::create_dir_all(work_dir.join("script-out"))?;
         let work_dir = fs::canonicalize(&work_dir)?;
@@ -72,7 +177,7 @@ impl EraContractsBackend {
     /// sub-directories are created inside the container after startup, working
     /// around a macOS Docker/VirtioFS bug where newly-created host directories
     /// are invisible to the VM.
-    pub fn docker(image: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
+    pub fn docker(image: &str, tag: &str, extra_mounts: &[(&Path, &str)]) -> Result<Self> {
         let project_root =
             crate::infra::utils::find_project_root().map_err(|e| anyhow::anyhow!("{e}"))?;
         let run_id = crate::infra::server::get_run_id().ok_or_else(|| {
@@ -99,7 +204,11 @@ impl EraContractsBackend {
             CONTAINER_LOGS_MOUNT,
             extra_mounts,
         )?;
-        Ok(EraContractsBackend::Docker { session, work_dir })
+        Ok(EraContractsBackend::Docker {
+            session,
+            work_dir,
+            image_tag: tag.to_string(),
+        })
     }
 
     /// Host-side work directory where all outputs are stored.
@@ -195,7 +304,7 @@ impl EraContractsBackend {
                 }
                 fs::write(&path, contents).with_context(|| format!("write {}", path.display()))
             }
-            EraContractsBackend::Docker { session, work_dir } => {
+            EraContractsBackend::Docker { session, work_dir, .. } => {
                 let tempfile_name = format!(".write_repo_{}.tmp", uuid::Uuid::new_v4().simple());
                 let host_tempfile = work_dir.join(&tempfile_name);
                 fs::write(&host_tempfile, contents)
@@ -234,6 +343,17 @@ impl EraContractsBackend {
         }
     }
 
+    /// Return the `PROTOCOL_OPS_SOURCE` value for `protocol-ops.sh`:
+    /// a local era-contracts checkout path or a Docker image tag.
+    pub fn protocol_ops_source(&self) -> String {
+        match self {
+            EraContractsBackend::Local { era_path, .. } => {
+                era_path.to_string_lossy().to_string()
+            }
+            EraContractsBackend::Docker { image_tag, .. } => image_tag.clone(),
+        }
+    }
+
     /// Run `protocol_ops <args>`.
     pub fn protocol_ops(&self, args: &[&str]) -> Result<String> {
         match self {
@@ -253,6 +373,9 @@ impl EraContractsBackend {
                 let l1_contracts = era_path.join("l1-contracts");
                 let mut cmd = std::process::Command::new("forge");
                 cmd.current_dir(&l1_contracts).arg("script");
+                for (k, v) in LOCAL_FOUNDRY_ENV {
+                    cmd.env(k, v);
+                }
                 for (k, v) in envs {
                     cmd.env(k, v);
                 }
@@ -295,11 +418,12 @@ impl EraContractsBackend {
         match self {
             EraContractsBackend::Local { era_path, .. } => {
                 let l1_contracts = era_path.join("l1-contracts");
-                let output = std::process::Command::new("forge")
-                    .current_dir(&l1_contracts)
-                    .args(args)
-                    .output()
-                    .context("forge")?;
+                let mut cmd = std::process::Command::new("forge");
+                cmd.current_dir(&l1_contracts).args(args);
+                for (k, v) in LOCAL_FOUNDRY_ENV {
+                    cmd.env(k, v);
+                }
+                let output = cmd.output().context("forge")?;
                 if !output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -327,10 +451,12 @@ impl EraContractsBackend {
     pub fn cast(&self, args: &[&str]) -> Result<String> {
         match self {
             EraContractsBackend::Local { .. } => {
-                let output = std::process::Command::new("cast")
-                    .args(args)
-                    .output()
-                    .context("cast")?;
+                let mut cmd = std::process::Command::new("cast");
+                cmd.args(args);
+                for (k, v) in LOCAL_FOUNDRY_ENV {
+                    cmd.env(k, v);
+                }
+                let output = cmd.output().context("cast")?;
                 if !output.status.success() {
                     let stdout = String::from_utf8_lossy(&output.stdout);
                     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -372,24 +498,24 @@ impl EraContractsBackend {
         }
     }
 
-    /// Execute transactions from a protocol-ops `--out` file by calling
-    /// `protocol_ops dev execute-transactions`. Renamed from
-    /// `chain execute-simulated-transactions` upstream.
+    /// Execute a single Safe Transaction Builder JSON file via
+    /// `protocol_ops dev execute-safe`.
     ///
-    /// `out_relative` is a filename or relative path within the work directory
-    /// (e.g. `"no_governance_prepare_out.json"`).
-    pub fn execute_protocol_ops_out(
+    /// `safe_relative` is a filename or relative path within the work directory.
+    /// The broadcaster is the supplied `private_key`'s address; forge signs
+    /// locally.
+    pub fn execute_safe(
         &self,
-        out_relative: &str,
+        safe_relative: &str,
         l1_rpc_url: &str,
         private_key: &str,
     ) -> Result<()> {
-        let out_arg = self.work_path(out_relative);
+        let safe_arg = self.work_path(safe_relative);
         self.protocol_ops(&[
             "dev",
-            "execute-transactions",
-            "--out",
-            &out_arg,
+            "execute-safe",
+            "--safe-file",
+            &safe_arg,
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
@@ -397,4 +523,48 @@ impl EraContractsBackend {
         ])
         .map(|_| ())
     }
+
+    /// Parse the `manifest.json` at `safe_dir_relative` (inside the work
+    /// dir) and wrap the listed bundles as a [`SafeBundles`] handle. Use
+    /// after any protocol-ops command that emits a manifest (e.g.
+    /// `chain gateway migrate-to phase-1-submit`,
+    /// `chain gateway convert`).
+    pub fn parse_safe_bundles<'a>(
+        &'a self,
+        safe_dir_relative: &str,
+        l1_rpc_url: &'a str,
+    ) -> Result<SafeBundles<'a>> {
+        let manifest_rel = format!("{safe_dir_relative}/manifest.json");
+        let manifest_body = self
+            .read_protocol_ops_output(&manifest_rel)
+            .with_context(|| format!("read Safe manifest at {manifest_rel}"))?;
+        let manifest: serde_json::Value =
+            serde_json::from_str(&manifest_body).context("parse Safe manifest JSON")?;
+        let entries = manifest
+            .get("bundles")
+            .and_then(|b| b.as_array())
+            .ok_or_else(|| anyhow::anyhow!("Safe manifest missing `bundles` array"))?;
+
+        let bundle_entries: Vec<SafeBundleEntry> = entries
+            .iter()
+            .enumerate()
+            .map(|(i, entry)| {
+                let file = entry
+                    .get("file")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("bundle #{i} missing `file`"))?;
+                let target = entry
+                    .get("target")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| anyhow::anyhow!("bundle #{i} missing `target`"))?;
+                Ok(SafeBundleEntry {
+                    path: format!("{safe_dir_relative}/{file}"),
+                    target: target.to_string(),
+                })
+            })
+            .collect::<Result<_>>()?;
+
+        Ok(SafeBundles::new(self, l1_rpc_url, bundle_entries))
+    }
+
 }

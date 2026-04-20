@@ -16,14 +16,11 @@ use crate::find_ports::pick_unused_port_sync;
 use crate::preset_paths::server_paths_for_preset;
 use crate::presets::{Preset, RepoRef};
 use crate::server_utils::{
-    get_total_batches_executed, print_deposit_failure_server_logs, send_traffic_tx,
-    strip_ansi_escape_codes_in_file, wait_for_chain_to_be_ready,
+    get_l2_finalized_block_number, print_deposit_failure_server_logs, send_traffic_tx,
+    send_traffic_tx_returning_hash, strip_ansi_escape_codes_in_file, wait_for_chain_to_be_ready,
+    wait_for_l2_tx_block_number,
 };
 use crate::utils::find_project_root;
-
-/// Number of *new* executed batches beyond the current count that
-/// [`Server::wait_for_executed_batches_with_traffic`] waits for.
-const DEFAULT_EXTRA_BATCHES: u64 = 3;
 
 use crate::DEFAULT_WAIT_TIMEOUT;
 
@@ -39,11 +36,8 @@ pub enum L1DepositBaseToken {
 
 static TEST_RUN_ID: OnceLock<String> = OnceLock::new();
 const SERVER_READY_MAX_ATTEMPTS: usize = 30;
-const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
+const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const ZKSYNC_OS_SERVER_IMAGE_REPO: &str = "ghcr.io/matter-labs/zksync-os-server";
-
-/// L2 system contract address of the Bridgehub on gateway chains.
-const GATEWAY_L2_BRIDGEHUB: &str = "0x0000000000000000000000000000000000010002";
 
 pub fn get_or_create_run_id(name: &str) -> &'static str {
     TEST_RUN_ID
@@ -125,69 +119,19 @@ fn extract_yaml_field(yaml: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Query `bridgehub.getZKChain(chain_id)` on L1 to resolve the diamond
-/// proxy address for a chain.
-fn resolve_diamond_proxy(
-    bridgehub_addr: &str,
-    chain_id: u64,
-    l1_rpc_url: &str,
-) -> Result<String, DockerError> {
-    let output = Command::new("cast")
-        .args([
-            "call",
-            bridgehub_addr,
-            "getZKChain(uint256)(address)",
-            &chain_id.to_string(),
-            "--rpc-url",
-            l1_rpc_url,
-        ])
-        .output()
-        .map_err(|e| DockerError::CommandFailed(format!("cast call getZKChain: {e}")))?;
-    if !output.status.success() {
-        return Err(DockerError::CommandFailed(format!(
-            "getZKChain({chain_id}) on {bridgehub_addr} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    let addr = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if addr.is_empty() || addr == "0x0000000000000000000000000000000000000000" {
-        return Err(DockerError::CommandFailed(format!(
-            "getZKChain({chain_id}) returned zero address — chain not registered on bridgehub {bridgehub_addr}"
-        )));
-    }
-    Ok(addr)
-}
-
 fn resolve_local_server_binary(server_root: &Path) -> Result<PathBuf, DockerError> {
     let release_bin = server_root.join("target/release/zksync-os-server");
-    // Always rebuild to ensure the latest local code is used.
-    // Use the server repo's toolchain (RUSTUP_TOOLCHAIN) so we don't inherit the integration-tests toolchain.
-    let mut cmd = Command::new("cargo");
-    cmd.arg("build")
-        .arg("--release")
-        .current_dir(server_root)
-        .stdin(Stdio::null())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    if let Some(toolchain) = read_toolchain_from_dir(server_root) {
-        cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
-    }
-    let status = cmd.status().map_err(|e| {
-        DockerError::CommandFailed(format!("Failed to run cargo build --release: {}", e))
-    })?;
-    if !status.success() {
-        return Err(DockerError::CommandFailed(format!(
-            "cargo build --release failed in '{}' with status {}",
-            server_root.display(),
-            status
-        )));
-    }
-
+    // `integration-tests/build.rs` builds the server via `cargo build
+    // --release` before any test runs. By the time we get here the binary
+    // is up-to-date (cargo's fingerprint check inside build.rs is a no-op
+    // when nothing changed).
     if release_bin.exists() {
         Ok(release_bin)
     } else {
         Err(DockerError::CommandFailed(format!(
-            "Expected binary not found after build: {}",
+            "zksync-os-server binary not found at {}. \
+             Run `cargo build --tests` in integration-tests — the binary is \
+             produced by integration-tests/build.rs.",
             release_bin.display()
         )))
     }
@@ -212,10 +156,6 @@ pub struct ServerBuilder {
     logs_dir_override: Option<PathBuf>,
     /// Override gateway RPC URL (set via env var at runtime, overrides config YAML value)
     gateway_rpc_url: Option<String>,
-    /// Diamond-proxy address on the settlement layer for this chain.
-    /// Auto-resolved from L1 via `bridgehub.getZKChain(chain_id)` if not
-    /// set; required by [`Server::wait_for_executed_batches_with_traffic`].
-    diamond_proxy_addr: Option<String>,
     /// Bridgehub proxy address on L1. Auto-read from config YAML if not set;
     /// required by [`Server::fund_account_via_l1_deposit`].
     bridgehub_addr: Option<String>,
@@ -225,6 +165,10 @@ pub struct ServerBuilder {
     /// When true, do NOT set general_rocks_db_path / sequencer_rocks_db_path env vars.
     /// Required for ephemeral mode configs where the server manages its own tempdir.
     ephemeral: bool,
+    /// Extra env vars to inject into the server process (lowercase
+    /// `section_field` form, e.g. `l1_sender_pubdata_mode=RelayedL2Calldata`).
+    /// Override values from the config YAML.
+    extra_envs: Vec<(String, String)>,
 }
 
 impl ServerBuilder {
@@ -246,11 +190,20 @@ impl ServerBuilder {
             rocks_db_path_override: None,
             logs_dir_override: None,
             gateway_rpc_url: None,
-            diamond_proxy_addr: None,
             bridgehub_addr: None,
             chain_id: None,
             ephemeral: false,
+            extra_envs: Vec::new(),
         }
+    }
+
+    /// Inject an extra env var into the server process. Uses lowercase
+    /// `section_field` form matching `smart-config`'s env mapping (e.g.
+    /// `l1_sender_pubdata_mode=RelayedL2Calldata`). Overrides any value
+    /// set in the config YAML.
+    pub fn env(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.extra_envs.push((key.into(), value.into()));
+        self
     }
 
     /// Enable ephemeral mode: skip setting rocks_db env vars so the server's
@@ -333,29 +286,6 @@ impl ServerBuilder {
         // `host.docker.internal` for the server container.
         let host_l1_rpc_url = anvil.rpc_url().to_string();
 
-        // Resolve diamond proxy from the chain's settlement layer. For
-        // gateway-settling chains the batches are tracked on the gateway's
-        // L2 bridgehub (system contract at 0x…10002), not on the L1
-        // bridgehub. For L1-settling chains we query the L1 bridgehub
-        // that was read from the config YAML.
-        if self.diamond_proxy_addr.is_none() {
-            if let Some(chain_id) = self.chain_id {
-                let (sl_bridgehub, sl_rpc_url) = if let Some(gw_url) = &self.gateway_rpc_url {
-                    // Gateway-settling: query the gateway's L2 bridgehub.
-                    (GATEWAY_L2_BRIDGEHUB.to_string(), gw_url.clone())
-                } else if let Some(bh) = &self.bridgehub_addr {
-                    // L1-settling: query the L1 bridgehub.
-                    (bh.clone(), host_l1_rpc_url.clone())
-                } else {
-                    // Can't resolve — bridgehub unknown.
-                    (String::new(), String::new())
-                };
-                if !sl_bridgehub.is_empty() {
-                    self.diamond_proxy_addr =
-                        resolve_diamond_proxy(&sl_bridgehub, chain_id, &sl_rpc_url).ok();
-                }
-            }
-        }
         let (server_root, use_local, image) = match &self.preset.zksync_os_server {
             RepoRef::Path(_) => {
                 let paths = server_paths_for_preset(&self.preset).map_err(|e| {
@@ -385,10 +315,10 @@ impl ServerBuilder {
             logs_dir: self.logs_dir_override,
             chain_name: Some(self.chain_name),
             gateway_rpc_url: self.gateway_rpc_url,
-            diamond_proxy_addr: self.diamond_proxy_addr,
             bridgehub_addr: self.bridgehub_addr,
             chain_id: self.chain_id,
             ephemeral: self.ephemeral,
+            extra_envs: self.extra_envs,
         };
         Server::spawn_inner(builder, server_root)
     }
@@ -409,10 +339,10 @@ struct InnerServerBuilder {
     logs_dir: Option<PathBuf>,
     chain_name: Option<String>,
     gateway_rpc_url: Option<String>,
-    diamond_proxy_addr: Option<String>,
     bridgehub_addr: Option<String>,
     chain_id: Option<u64>,
     ephemeral: bool,
+    extra_envs: Vec<(String, String)>,
 }
 
 /// A running zksync-os-server instance
@@ -430,8 +360,6 @@ pub struct Server {
     host_l1_rpc_url: String,
     /// Gateway RPC URL if this server was configured to settle via a gateway.
     gateway_rpc_url: Option<String>,
-    /// Diamond-proxy address on the settlement layer.
-    diamond_proxy_addr: Option<String>,
     /// Bridgehub proxy address on L1.
     bridgehub_addr: Option<String>,
     /// Chain ID of the chain this server runs.
@@ -519,6 +447,7 @@ impl Server {
                 rocks_path,
                 builder.gateway_rpc_url.clone(),
                 builder.ephemeral,
+                builder.extra_envs.clone(),
             );
             runtime.start_with_log_path(&first_run_log)?;
             ServerRuntime::Local(Box::new(runtime))
@@ -668,6 +597,9 @@ impl Server {
             if let Some(user) = host_user_arg() {
                 cmd.arg("--user").arg(user);
             }
+            for (k, v) in &builder.extra_envs {
+                cmd.arg("-e").arg(format!("{k}={v}"));
+            }
             cmd.arg(&builder.image)
                 .arg("--config")
                 .arg(&container_config_path);
@@ -726,7 +658,6 @@ impl Server {
             run_index: std::cell::Cell::new(1),
             host_l1_rpc_url: builder.host_l1_rpc_url,
             gateway_rpc_url: builder.gateway_rpc_url,
-            diamond_proxy_addr: builder.diamond_proxy_addr,
             bridgehub_addr: builder.bridgehub_addr,
             chain_id: builder.chain_id,
         };
@@ -819,6 +750,10 @@ impl Server {
         // reader can find the file if the server crashes mid-operation.
         let _ = self.save_logs();
 
+        println!(
+            "  L1→L2 deposit: funding {recipient} on chain {chain_id} with {amount} base-token units"
+        );
+
         let l2_tx_hash = match crate::l1_l2_deposit::submit_l1_to_l2_deposit_ex(
             &self.host_l1_rpc_url,
             bridgehub_addr,
@@ -837,6 +772,7 @@ impl Server {
             }
         };
 
+        let wait_start = Instant::now();
         if let Err(err) = crate::l1_l2_deposit::wait_for_l2_priority_tx_receipt(
             &self.rpc_url(),
             l2_tx_hash,
@@ -847,88 +783,70 @@ impl Server {
             print_deposit_failure_server_logs(Some(logs_path.as_path()));
             return Err(err);
         }
+        println!(
+            "  L1→L2 deposit: executed on L2 in {:.2}s",
+            wait_start.elapsed().as_secs_f64()
+        );
         Ok(())
     }
 
-    /// Drive L2 traffic on this server until [`DEFAULT_EXTRA_BATCHES`] more
-    /// batches have been executed on the settlement-layer diamond proxy.
+    /// Send one L2 traffic tx and wait for its containing L2 block to reach
+    /// `finalized` status on this server's L2 RPC.
     ///
-    /// The traffic is intentional, not a workaround for idle batch sealing:
-    /// closing batches that actually contain transactions doubles as an
-    /// end-to-end sanity check that the commit → prove → execute pipeline
-    /// still works. Empty-batch behavior isn't what these tests want to
-    /// exercise.
+    /// On zksync-os the L2 `finalized` tag tracks the highest L2 block whose
+    /// containing batch has been executed on the settlement layer. So once
+    /// `finalized` >= our tx's block, we know the commit → prove → execute
+    /// pipeline has finished for that batch.
     ///
-    /// Uses [`DEFAULT_WAIT_TIMEOUT`] and Anvil's default pre-funded
-    /// account as the traffic signer. Requires
-    /// [`ServerBuilder::diamond_proxy_addr`] to have been set at build time.
-    pub fn wait_for_executed_batches_with_traffic(&self) -> anyhow::Result<u64> {
-        let diamond_proxy_addr = self.diamond_proxy_addr.as_deref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Server::wait_for_executed_batches_with_traffic requires \
-                 diamond_proxy_addr — could not auto-resolve from config + L1"
-            )
-        })?;
-        let settlement_rpc_url = self.settlement_rpc_url();
-
-        // Ensure the traffic sender has L2 balance before entering the
-        // loop. The deposit may come from a pre-queued priority tx
-        // (generate-l1-state) or an explicit fund_account_via_l1_deposit
-        // call — either way, by the time a caller invokes this method
-        // the deposit has been submitted and just needs the server to
-        // process it.
+    /// Works uniformly for L1-settling and gateway-settling chains — the
+    /// server itself knows what its settlement layer is.
+    pub fn wait_for_traffic_tx_executed_on_l1(&self) -> anyhow::Result<u64> {
         let sender_addr =
             crate::server_utils::address_from_private_key(crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY)
                 .context("derive traffic sender address")?;
         self.wait_for_l2_balance(&sender_addr, Duration::from_secs(60))
             .context("traffic sender has no L2 balance")?;
 
-        let start_executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)
-            .context("Failed to read initial getTotalBatchesExecuted")?;
-        let target = start_executed + DEFAULT_EXTRA_BATCHES;
+        let start = Instant::now();
+        let l2_rpc_url = self.rpc_url();
+
+        let tx_hash = send_traffic_tx_returning_hash(
+            l2_rpc_url.as_str(),
+            crate::anvil::DEFAULT_ANVIL_PRIVATE_KEY,
+        )
+        .context("send L2 traffic tx")?;
+
+        let target_block = wait_for_l2_tx_block_number(
+            l2_rpc_url.as_str(),
+            &tx_hash,
+            DEFAULT_WAIT_TIMEOUT,
+        )
+        .with_context(|| format!("wait for blockNumber on L2 tx {tx_hash}"))?;
+
         println!(
-            "Waiting for {} more executed batches (current={}, target={})",
-            DEFAULT_EXTRA_BATCHES, start_executed, target
+            "  Sent L2 tx {tx_hash} in L2 block {target_block}; \
+             waiting for that block to reach finalized"
         );
 
-        let start = Instant::now();
-        let mut tx_count = 0u64;
-        let mut next_progress_at = start + Duration::from_secs(5);
-
         loop {
-            let executed = get_total_batches_executed(settlement_rpc_url, diamond_proxy_addr)
-                .context("Failed to read getTotalBatchesExecuted")?;
-
-            let now = Instant::now();
-            if now >= next_progress_at {
+            let finalized = get_l2_finalized_block_number(l2_rpc_url.as_str())
+                .context("read L2 finalized block number")?;
+            if finalized >= target_block {
                 println!(
-                    "Progress: executed_batches={}, sent_txs={}",
-                    executed, tx_count
+                    "  L2 block {target_block} finalized \
+                     (finalized={finalized}, took {:.1}s)",
+                    start.elapsed().as_secs_f64(),
                 );
-                next_progress_at = now + Duration::from_secs(5);
+                return Ok(target_block);
             }
-
-            if executed >= target {
-                println!(
-                    "Reached executed batches target: {} (sent {} txs)",
-                    executed, tx_count
-                );
-                return Ok(executed);
-            }
-
             if start.elapsed() >= DEFAULT_WAIT_TIMEOUT {
                 anyhow::bail!(
-                    "Timed out waiting for executed batches. target={}, current={}, sent_txs={}",
-                    target,
-                    executed,
-                    tx_count
+                    "Timed out after {:.1}s waiting for L2 block {target_block} \
+                     to reach finalized (finalized={finalized})",
+                    start.elapsed().as_secs_f64(),
                 );
             }
-
-            self.send_traffic_tx()
-                .with_context(|| format!("Failed to send traffic tx #{}", tx_count + 1))?;
-            tx_count += 1;
-            sleep(Duration::from_secs(3));
+            sleep(Duration::from_millis(100));
         }
     }
 
@@ -1032,6 +950,7 @@ struct LocalServerRuntime {
     rocks_db_path: PathBuf,
     gateway_rpc_url: Option<String>,
     ephemeral: bool,
+    extra_envs: Vec<(String, String)>,
     child: Mutex<Option<Child>>,
     current_log_path: Mutex<Option<PathBuf>>,
 }
@@ -1049,6 +968,7 @@ impl LocalServerRuntime {
         rocks_db_path: PathBuf,
         gateway_rpc_url: Option<String>,
         ephemeral: bool,
+        extra_envs: Vec<(String, String)>,
     ) -> Self {
         Self {
             name,
@@ -1061,6 +981,7 @@ impl LocalServerRuntime {
             rocks_db_path,
             gateway_rpc_url,
             ephemeral,
+            extra_envs,
             child: Mutex::new(None),
             current_log_path: Mutex::new(None),
         }
@@ -1168,6 +1089,9 @@ impl LocalServerRuntime {
         cmd.env("status_server_address", format!("0.0.0.0:{}", status_port))
             .env("prover_api_address", format!("0.0.0.0:{}", prover_port))
             .env("observability_prometheus_port", prometheus_port.to_string());
+        for (k, v) in &self.extra_envs {
+            cmd.env(k, v);
+        }
 
         cmd.stdout(Stdio::from(log_file))
             .stderr(Stdio::from(log_file_err));

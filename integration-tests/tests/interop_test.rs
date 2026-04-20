@@ -4,7 +4,6 @@ use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::LocalSigner;
 use alloy::sol;
 use anyhow::{Context, Result};
-use integration_tests::anvil::Anvil;
 use integration_tests::l1_state::{chain_config_path, load_ecosystem, resolve_l1_state};
 use integration_tests::presets::load_current_preset;
 use std::str::FromStr;
@@ -168,29 +167,25 @@ async fn run_interop_message_test() -> Result<()> {
     integration_tests::server::get_or_create_run_id("interop");
     let preset = load_current_preset()?;
     let eco = load_ecosystem(&preset)?;
-    anyhow::ensure!(
-        eco.gateway_settling_chains.len() >= 2,
-        "Interop test needs at least 2 gateway-settling chains, got {}",
-        eco.gateway_settling_chains.len()
-    );
-    let gw = &eco.gateway;
-    let chain_a = &eco.gateway_settling_chains[0];
-    let chain_b = &eco.gateway_settling_chains[1];
 
-    println!("Gateway:  chain {} ({})", gw.chain_id, gw.diamond_proxy);
-    println!(
-        "Chain A:  chain {} ({})",
-        chain_a.chain_id, chain_a.diamond_proxy
-    );
-    println!(
-        "Chain B:  chain {} ({})",
-        chain_b.chain_id, chain_b.diamond_proxy
-    );
+    // Need Anvil up before classifying chains (requires L1 RPC)
+    println!("\n=== Loading l1-state.json into Anvil ===");
+    let state_path = resolve_l1_state(&preset)?;
+    let anvil = integration_tests::anvil::Anvil::spawn_with_state(&state_path).await?;
+    let l1_rpc_url = anvil.rpc_url().to_string();
+    println!("Anvil ready at {l1_rpc_url}");
+
+    let (chain_a_name, chain_a_id) = eco.chain_a();
+    let (chain_b_name, chain_b_id) = eco.chain_b();
+
+    println!("Gateway:  chain {}", eco.gateway_chain_id());
+    println!("Chain A:  chain {chain_a_id} ({chain_a_name})");
+    println!("Chain B:  chain {chain_b_id} ({chain_b_name})");
 
     // Resolve config paths
-    let gw_config = chain_config_path(&preset, &gw.name)?;
-    let chain_a_config = chain_config_path(&preset, &chain_a.name)?;
-    let chain_b_config = chain_config_path(&preset, &chain_b.name)?;
+    let gw_config = chain_config_path(&preset, integration_tests::l1_state::GATEWAY_CHAIN_NAME)?;
+    let chain_a_config = chain_config_path(&preset, chain_a_name)?;
+    let chain_b_config = chain_config_path(&preset, chain_b_name)?;
     for (name, path) in [
         ("Gateway", &gw_config),
         ("Chain A", &chain_a_config),
@@ -204,15 +199,9 @@ async fn run_interop_message_test() -> Result<()> {
         );
     }
 
-    println!("\n=== Loading l1-state.json into Anvil ===");
-    let state_path = resolve_l1_state(&preset, &eco)?;
-    let anvil = Anvil::spawn_with_state(&state_path).await?;
-    let l1_rpc_url = anvil.rpc_url().to_string();
-    println!("Anvil ready at {l1_rpc_url}");
-
     // ---- Start gateway ----
-    println!("\n=== Starting gateway server (chain {}) ===", gw.chain_id);
-    let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), &gw.name)
+    println!("\n=== Starting gateway server (chain {}) ===", eco.gateway_chain_id());
+    let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), integration_tests::l1_state::GATEWAY_CHAIN_NAME)
         .ephemeral()
         .config_path(&gw_config)
         .spawn(&anvil)
@@ -221,9 +210,9 @@ async fn run_interop_message_test() -> Result<()> {
     println!("Gateway ready at {gw_l2_rpc}");
 
     // ---- Start chain A (fresh, gateway_rpc_url set via env var) ----
-    println!("\n=== Starting chain A (chain {}) ===", chain_a.chain_id);
+    println!("\n=== Starting chain A (chain {}) ===", chain_a_id);
     let chain_a_server =
-        integration_tests::server::ServerBuilder::new(preset.clone(), &chain_a.name)
+        integration_tests::server::ServerBuilder::new(preset.clone(), chain_a_name)
             .gateway_rpc_url(&gw_l2_rpc)
             .spawn(&anvil)
             .map_err(|e| anyhow::anyhow!("Failed to start chain A server: {:?}", e))?;
@@ -231,8 +220,8 @@ async fn run_interop_message_test() -> Result<()> {
     println!("Chain A ready at {chain_a_l2_rpc}");
 
     // ---- Start chain B (fresh, gateway_rpc_url set via env var) ----
-    println!("\n=== Starting chain B (chain {}) ===", chain_b.chain_id);
-    let chain_b_server = integration_tests::server::ServerBuilder::new(preset, &chain_b.name)
+    println!("\n=== Starting chain B (chain {}) ===", chain_b_id);
+    let chain_b_server = integration_tests::server::ServerBuilder::new(preset, chain_b_name)
         .gateway_rpc_url(&gw_l2_rpc)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start chain B server: {:?}", e))?;
@@ -296,7 +285,7 @@ async fn run_interop_message_test() -> Result<()> {
     println!("\n=== Waiting for interop root on chain B ===");
     wait_for_interop_root(
         &chain_b_l2_rpc,
-        gw.chain_id,
+        eco.gateway_chain_id(),
         gw_block_number,
         Duration::from_secs(300),
     )

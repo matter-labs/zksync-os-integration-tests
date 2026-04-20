@@ -48,6 +48,7 @@ struct ServerConfig {
     l1_watcher: L1WatcherSection,
     l1_sender: L1SenderSection,
     batcher: BatcherSection,
+    prover_input_generator: ProverInputGeneratorSection,
     prover_api: ProverApiSection,
     #[serde(skip_serializing_if = "Option::is_none")]
     status_server: Option<AddressSection>,
@@ -68,6 +69,14 @@ struct GeneralSection {
     gateway_rpc_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     gateway_chain_id: Option<u64>,
+    /// Default is 7s — the main contributor to commit→prove→execute pipeline
+    /// latency in tests. Each pipeline stage waits one full poll cycle for
+    /// the L1 watcher to observe the prior stage's tx, so 7s × 3 ≈ 21s of
+    /// pure polling.
+    l1_rpc_poll_interval: String,
+    /// Same idea as [`Self::l1_rpc_poll_interval`] for gateway-settling
+    /// chains (the server polls the gateway instead of L1).
+    gateway_rpc_poll_interval: String,
 }
 
 #[derive(Serialize)]
@@ -99,16 +108,39 @@ struct BatcherSection {
 }
 
 #[derive(Serialize)]
-struct FakeProverSection {
+struct ProverInputGeneratorSection {
+    /// Skip RiscV witness generation when fake provers are enabled — the
+    /// witness gets thrown away anyway. Saves several seconds per batch on
+    /// the commit→prove pipeline cold-start.
+    enable_input_generation: bool,
+}
+
+/// Fake FRI prover override: turn the artificial pacing knobs to zero so
+/// proofs are produced as fast as the pipeline can hand jobs over. The
+/// upstream defaults (`compute_time: 2s`, `min_age: 3s`) exist to give real
+/// provers a head start on shared environments — irrelevant for tests.
+#[derive(Serialize)]
+struct FakeFriProverSection {
     enabled: bool,
+    compute_time: String,
+    min_age: String,
+}
+
+/// Fake SNARK prover override: same idea — `max_batch_age: 10s` is the
+/// upstream "wait-for-real-prover" knob and adds straight wall time per
+/// batch in tests that have no real prover at all.
+#[derive(Serialize)]
+struct FakeSnarkProverSection {
+    enabled: bool,
+    max_batch_age: String,
 }
 
 #[derive(Serialize)]
 struct ProverApiSection {
     #[serde(skip_serializing_if = "Option::is_none")]
     address: Option<String>,
-    fake_fri_provers: FakeProverSection,
-    fake_snark_provers: FakeProverSection,
+    fake_fri_provers: FakeFriProverSection,
+    fake_snark_provers: FakeSnarkProverSection,
 }
 
 #[derive(Serialize)]
@@ -217,16 +249,14 @@ impl ServerConfigBuilder {
     }
 
     pub fn build(&self) -> String {
-        let general = if self.ephemeral || self.gateway_rpc_url.is_some() {
-            Some(GeneralSection {
-                ephemeral: if self.ephemeral { Some(true) } else { None },
-                ephemeral_state: self.ephemeral_state.clone(),
-                gateway_rpc_url: self.gateway_rpc_url.clone(),
-                gateway_chain_id: self.gateway_chain_id,
-            })
-        } else {
-            None
-        };
+        let general = Some(GeneralSection {
+            ephemeral: if self.ephemeral { Some(true) } else { None },
+            ephemeral_state: self.ephemeral_state.clone(),
+            gateway_rpc_url: self.gateway_rpc_url.clone(),
+            gateway_chain_id: self.gateway_chain_id,
+            l1_rpc_poll_interval: "100ms".to_string(),
+            gateway_rpc_poll_interval: "100ms".to_string(),
+        });
 
         let mut forced_prices = BTreeMap::new();
         forced_prices.insert(
@@ -262,10 +292,20 @@ impl ServerConfigBuilder {
             batcher: BatcherSection {
                 batch_timeout: "1s".to_string(),
             },
+            prover_input_generator: ProverInputGeneratorSection {
+                enable_input_generation: false,
+            },
             prover_api: ProverApiSection {
                 address: self.prover_api_port.map(|p| format!("0.0.0.0:{p}")),
-                fake_fri_provers: FakeProverSection { enabled: true },
-                fake_snark_provers: FakeProverSection { enabled: true },
+                fake_fri_provers: FakeFriProverSection {
+                    enabled: true,
+                    compute_time: "0ms".to_string(),
+                    min_age: "0ms".to_string(),
+                },
+                fake_snark_provers: FakeSnarkProverSection {
+                    enabled: true,
+                    max_batch_age: "0ms".to_string(),
+                },
             },
             status_server: self.status_port.map(|p| AddressSection {
                 address: format!("0.0.0.0:{p}"),

@@ -17,6 +17,8 @@
 #   ./run-tests.sh --preset v31_draft --test l1_settling_test
 #   ./run-tests.sh --skip-generate               # skip l1-state generation, tests find cached state
 #   ./run-tests.sh --rebuild-cache               # delete cached l1-state before generating
+#   ./run-tests.sh --save-logs                   # stream nextest/test output live AND save the full
+#                                                #   combined run to test-run-logs/nextest-<preset>.log
 #
 set -euo pipefail
 
@@ -31,6 +33,7 @@ FILTER_PRESET=""
 FILTER_TEST=""
 SKIP_GENERATE=false
 REBUILD_CACHE=false
+SAVE_LOGS=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,8 +42,9 @@ while [[ $# -gt 0 ]]; do
     --test)            FILTER_TEST="$2";   shift 2 ;;
     --skip-generate)   SKIP_GENERATE=true; shift ;;
     --rebuild-cache)   REBUILD_CACHE=true; shift ;;
+    --save-logs)       SAVE_LOGS=true; shift ;;
     -h|--help)
-      sed -n '3,18p' "$0"
+      sed -n '3,21p' "$0"
       exit 0
       ;;
     *) echo "Unknown flag: $1"; exit 1 ;;
@@ -136,14 +140,31 @@ for preset in $all_presets; do
   echo "Preset: $preset"
   echo "========================================"
 
-  # Clean stale test-run-logs (server logs, rocksdb) but keep contracts_artifacts/.
-  # We must preserve contracts_artifacts/ because of a macOS Docker/VirtioFS bug:
-  # newly created host directories are invisible to the container VM, so the
-  # Docker session bind-mounts the stable parent (test-run-logs/) and creates
-  # sub-directories inside the container. Deleting contracts_artifacts/ would
-  # force a new mkdir that the running container cannot see.
+  # Clean stale test-run-logs (server logs, rocksdb) but keep contracts_artifacts/
+  # *directories* themselves — their contents are dropped, the dirs survive.
+  #
+  # Why keep the dirs: macOS Docker/VirtioFS has a bug where newly created
+  # host directories are invisible to the container VM, so the Docker session
+  # bind-mounts the stable parent (test-run-logs/) and creates sub-directories
+  # inside the container. Deleting contracts_artifacts/ would force a new
+  # mkdir that the running container cannot see.
+  # Why drop their contents: prior runs' Safe bundles / manifests accumulate
+  # and leak forward across runs, producing confusing stale results
+  # (e.g. `dev execute-safe` replays bundles from a previous run).
   if [[ -d test-run-logs ]]; then
     find test-run-logs -mindepth 2 -maxdepth 2 ! -name contracts_artifacts -exec rm -rf {} + 2>/dev/null || true
+    find test-run-logs -mindepth 3 -maxdepth 3 -path '*/contracts_artifacts/*' -exec rm -rf {} + 2>/dev/null || true
+  fi
+
+  # Rebuild all local contracts + Rust binaries this preset depends on.
+  # Runs unconditionally so edits to era-contracts Solidity or Rust (which
+  # cargo's rerun-if-changed can't catch from an external build script) are
+  # guaranteed to land before the test + generate-l1-state invocations
+  # below pick up `zkout/` and the compiled tool binaries.
+  echo "--- [$preset] Building local contracts + binaries ---"
+  if ! cargo run --release -p build-artifacts -- --preset "$preset" --presets "$PRESETS_FILE"; then
+    echo "ERROR: build-artifacts failed for preset '$preset'"
+    exit 1
   fi
 
   # Generate ecosystem (tests resolve the cache dir themselves via preset)
@@ -194,18 +215,50 @@ for preset in $all_presets; do
   nextest_stderr="test-run-logs/nextest-${preset}.stderr"
   mkdir -p "$(dirname "$nextest_stderr")"
 
+  # With `--save-logs`, also capture the full combined stdout+stderr
+  # (test println!, tracing output, nextest progress) to a stable path so
+  # the full run is still inspectable after the terminal scrolls. Without
+  # the flag we stay on nextest's default capturing behaviour.
+  nextest_log="test-run-logs/nextest-${preset}.log"
+
   set +e
   # `--color=never` is the canonical way (per nextest docs) to disable
   # color output. We need plain text so the grep below matches reliably
   # in CI, where `CARGO_TERM_COLOR=always` would otherwise wrap
   # `PASS`/`FAIL` tokens in ANSI escape codes.
-  PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
-    cargo nextest run \
-      --color=never \
-      --package integration-tests \
-      --no-fail-fast \
-      -E "$filterset" \
-      2> >(tee "$nextest_stderr" >&2)
+  #
+  # `--save-logs` forwards `--no-capture` so tests' println! / `tracing`
+  # output stream live, and tees the full combined run into
+  # `$nextest_log`. Nextest's pass/fail summary lines still land on
+  # stderr, which we continue tee-ing to $nextest_stderr for the
+  # post-run parse.
+  nextest_extra_flags=()
+  if $SAVE_LOGS; then
+    nextest_extra_flags+=(--no-capture)
+    echo "  Saving combined run output to: $nextest_log"
+    # Truncate the log so each invocation starts fresh; the `tee` calls below
+    # append to it, so without this a re-run would concatenate onto the prior
+    # run's output and make log scraping ambiguous.
+    : > "$nextest_log"
+    PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
+      cargo nextest run \
+        --color=never \
+        --package integration-tests \
+        --no-fail-fast \
+        ${nextest_extra_flags[@]+"${nextest_extra_flags[@]}"} \
+        -E "$filterset" \
+        > >(tee -a "$nextest_log") \
+        2> >(tee -a "$nextest_log" "$nextest_stderr" >&2)
+  else
+    PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
+      cargo nextest run \
+        --color=never \
+        --package integration-tests \
+        --no-fail-fast \
+        ${nextest_extra_flags[@]+"${nextest_extra_flags[@]}"} \
+        -E "$filterset" \
+        2> >(tee "$nextest_stderr" >&2)
+  fi
   nextest_exit=$?
   set -e
 

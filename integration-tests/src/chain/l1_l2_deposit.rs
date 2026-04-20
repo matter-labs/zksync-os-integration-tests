@@ -3,6 +3,7 @@
 //! any `zksync-os-server` tooling except the server binary.
 
 use std::str::FromStr;
+use std::time::Instant;
 
 use alloy::network::{EthereumWallet, TxSigner};
 use alloy::primitives::{Address, FixedBytes, U256};
@@ -119,6 +120,7 @@ pub async fn submit_l1_to_l2_deposit_ex(
     l2_recipient: Option<&str>,
     base_token_is_eth: bool,
 ) -> Result<FixedBytes<32>> {
+    let submit_start = Instant::now();
     let bridgehub_address: Address = bridgehub_addr
         .parse()
         .with_context(|| format!("invalid bridgehub address {bridgehub_addr}"))?;
@@ -213,7 +215,10 @@ pub async fn submit_l1_to_l2_deposit_ex(
         .context("no L1→L2 NewPriorityRequest log from deposit tx")?;
 
     let l2_tx_hash = l1_to_l2_tx_log.inner.txHash;
-    println!("Successfully submitted L1→L2 deposit (L2 priority tx hash {l2_tx_hash})");
+    println!(
+        "  L1→L2 deposit: submitted on L1 in {:.2}s, L2 priority tx {l2_tx_hash}",
+        submit_start.elapsed().as_secs_f64()
+    );
     Ok(l2_tx_hash)
 }
 
@@ -279,6 +284,6 @@ pub async fn wait_for_l2_priority_tx_receipt(
         if tokio::time::Instant::now() >= deadline {
             anyhow::bail!("L1→L2 priority tx {hash_hex} did not execute on L2 within {timeout:?}");
         }
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
 }

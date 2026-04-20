@@ -1,0 +1,7 @@
+# Stage environment topology.
+# TODO: fill in real addresses + chain IDs after stage deployment.
+bridgehub: "0x0000000000000000000000000000000000000000"
+deployer:  "0x0000000000000000000000000000000000000000"
+chains:
+  gateway: 0
+  era: 0

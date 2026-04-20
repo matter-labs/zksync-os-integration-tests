@@ -1,0 +1,5 @@
+bridgehub: 0xd8f8df05efacd52f28cdf11be22ce3d6ae0fabf7
+deployer: 0x73e8bbb7fc2761c7ac966609e900c021d137ce42
+chains:
+  default: 6565
+  gateway: 0

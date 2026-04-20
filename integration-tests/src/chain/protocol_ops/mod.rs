@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 use anyhow::Context;
 use chrono::Local;
 
-use crate::server::{get_run_id, read_toolchain_from_dir};
+use crate::server::get_run_id;
 use crate::utils::find_project_root;
 
 pub mod contracts_backend;
 
-pub use contracts_backend::EraContractsBackend;
+pub use contracts_backend::{EraContractsBackend, SafeBundleEntry, SafeBundles};
 
 pub const ERA_CONTRACTS_PROTOCOL_IMAGE_REPO: &str = "ghcr.io/matter-labs/protocol-ops";
 
@@ -278,17 +278,57 @@ fn log_protocol_ops_command_and_output(
     output: &Output,
     elapsed: Duration,
 ) {
-    // Print a concise summary to stdout.
-    let cmd_summary: String = args.iter().take(3).copied().collect::<Vec<_>>().join(" ");
+    // Print a concise summary to stdout:
+    // - path-taking flags (`--safe-file`, `--out`) collapse to just the
+    //   basename (the flag label and directory noise are dropped)
+    // - `--l1-rpc-url` and `--private-key` values are dropped entirely —
+    //   they're noise for traceability and shouldn't leak into logs
+    // - everything else is kept verbatim
+    let cmd_summary: String = {
+        let mut parts: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < args.len() {
+            match args[i] {
+                "--safe-file" | "--out" if i + 1 < args.len() => {
+                    let path = std::path::Path::new(args[i + 1]);
+                    let name = path
+                        .file_name()
+                        .and_then(|f| f.to_str())
+                        .unwrap_or(args[i + 1]);
+                    parts.push(name.to_string());
+                    i += 2;
+                }
+                "--l1-rpc-url" | "--private-key" if i + 1 < args.len() => {
+                    i += 2;
+                }
+                other => {
+                    parts.push(other.to_string());
+                    i += 1;
+                }
+            }
+        }
+        parts.join(" ")
+    };
     let status = if output.status.success() {
         "ok"
     } else {
         "FAILED"
     };
-    println!(
-        "  [{mode}] {cmd_summary} ... {status} ({:.1}s)",
-        elapsed.as_secs_f64()
-    );
+    // `dev execute-safe` runs once per bundle during chain init/upgrades —
+    // the per-bundle stdout line is noise for successful runs. Callers print
+    // their own aggregate timing via `SafeBundles::apply`. Failures still
+    // print so the failing bundle is identifiable.
+    let suppress_stdout = output.status.success()
+        && matches!(
+            (args.first().copied(), args.get(1).copied()),
+            (Some("dev"), Some("execute-safe"))
+        );
+    if !suppress_stdout {
+        println!(
+            "  [{mode}] {cmd_summary} ... {status} ({:.1}s)",
+            elapsed.as_secs_f64()
+        );
+    }
 
     let Some(log_path) = protocol_ops_log_path() else {
         return;
@@ -354,28 +394,20 @@ pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyho
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Manifest path contains invalid UTF-8"))?;
 
-    let mut build_cmd = Command::new("cargo");
-    build_cmd
-        .args(["build", "--release", "--manifest-path", manifest_str])
-        .current_dir(era_contracts_path)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    if let Some(toolchain) = read_toolchain_from_dir(era_contracts_path) {
-        build_cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
-    }
-    let build_output = build_cmd
-        .output()
-        .with_context(|| "Failed to run cargo build for protocol_ops")?;
-    if !build_output.status.success() {
-        let stderr = String::from_utf8_lossy(&build_output.stderr);
-        eprintln!("{}", stderr);
-        anyhow::bail!(
-            "cargo build --release for protocol_ops failed with status: {}\n\nSTDERR:\n{}",
-            build_output.status,
-            stderr
-        );
-    }
+    // `integration-tests/build.rs` builds the `protocol_ops` binary at
+    // cargo compile time, so by the time we get here it is up-to-date.
+    // No per-invocation cargo fingerprint check.
+    let _ = manifest_str;
+    let binary = protocol_ops_dir
+        .join("target/release/protocol_ops")
+        .with_extension(std::env::consts::EXE_EXTENSION);
+    anyhow::ensure!(
+        binary.exists(),
+        "protocol_ops binary not found at {}. \
+         Run `cargo build --tests` in integration-tests — the binary is \
+         produced by integration-tests/build.rs.",
+        binary.display(),
+    );
 
     let broadcast_dir = era_contracts_path.join("l1-contracts/broadcast");
     if broadcast_dir.exists() {
@@ -383,25 +415,42 @@ pub fn run_protocol_ops_local(era_contracts_path: &Path, args: &[&str]) -> anyho
     }
     fs::create_dir_all(&broadcast_dir).context("create broadcast dir")?;
 
-    let binary = protocol_ops_dir
-        .join("target/release/protocol_ops")
-        .with_extension(std::env::consts::EXE_EXTENSION);
     let binary_str = binary
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Binary path contains invalid UTF-8"))?;
-    let escaped_args: Vec<String> = args.iter().map(|a| shell_escape(a)).collect();
-    let args_str = escaped_args.join(" ");
-    let shell_cmd = format!(
-        r#"source "$HOME/.nvm/nvm.sh" 2>/dev/null || true; nvm use 2>/dev/null || true; exec {} {}"#,
-        shell_escape(binary_str),
-        args_str
+
+    // Subcommands that are pure Rust (no Node/TS tooling underneath) skip the
+    // `bash -c 'source nvm.sh; nvm use'` prologue and exec the binary
+    // directly. `source nvm.sh; nvm use` adds ~100–200ms per call, which is
+    // significant for hot paths like `dev execute-safe` (called once per
+    // Safe bundle during chain init).
+    let skip_nvm_shim = matches!(
+        (args.first().copied(), args.get(1).copied()),
+        (Some("dev"), Some("execute-safe"))
     );
 
-    let mut cmd = Command::new("bash");
-    cmd.arg("-c")
-        .arg(&shell_cmd)
-        .current_dir(era_contracts_path)
-        .env("PROTOCOL_CONTRACTS_ROOT", root_str);
+    let mut cmd = if skip_nvm_shim {
+        let mut c = Command::new(binary_str);
+        c.args(args);
+        c
+    } else {
+        let escaped_args: Vec<String> = args.iter().map(|a| shell_escape(a)).collect();
+        let args_str = escaped_args.join(" ");
+        let shell_cmd = format!(
+            r#"source "$HOME/.nvm/nvm.sh" 2>/dev/null || true; nvm use 2>/dev/null || true; exec {} {}"#,
+            shell_escape(binary_str),
+            args_str
+        );
+        let mut c = Command::new("bash");
+        c.arg("-c").arg(&shell_cmd);
+        c
+    };
+    cmd.current_dir(era_contracts_path)
+        .env("PROTOCOL_CONTRACTS_ROOT", root_str)
+        // protocol_ops shells out to forge; keep forge from hitting
+        // binaries.soliditylang.org for version checks (matches local
+        // forge / cast invocations in EraContractsBackend).
+        .env("FOUNDRY_OFFLINE", "true");
 
     let start = Instant::now();
     let output = cmd

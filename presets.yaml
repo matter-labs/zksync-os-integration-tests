@@ -1,13 +1,25 @@
 v31_draft_with_main_server:
-  era_contracts: gateway-commands-in-protocol-ops
-  zksync_os_server: main
+  era_contracts: ../era-contracts
+  zksync_os_server: ../zksync-os-server
   tests:
     - l1_settling_test
     - gateway_settling_test
     - interop_test
+    - add_remove_validator_test
+
+migrate_live_chain_gateway:
+  era_contracts: ../era-contracts
+  zksync_os_server: ../zksync-os-server
+  tests:
+    - migrate_live_chain_from_gateway_test
+    - migrate_live_chain_to_gateway_test
 
 v30_to_v31_upgrade:
-  era_contracts: gateway-commands-in-protocol-ops
-  zksync_os_server: main
+  era_contracts: ../era-contracts
+  # TODO: revert to `main` once the factory_deps + preimage changes on this
+  # branch have landed and a main image with them has been published. Using
+  # the local checkout here so server-side edits (debug logging,
+  # upgrade_tx_watcher tweaks) are exercised by the upgrade test.
+  zksync_os_server: ../zksync-os-server
   tests:
     - upgrade_v30_to_v31

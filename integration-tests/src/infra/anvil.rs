@@ -108,12 +108,12 @@ impl Anvil {
                 .arg("--load-state")
                 .arg(&state_str)
                 .arg("--disable-block-gas-limit")
-                // Mine a block every second even when idle. Anvil's default
-                // is tx-triggered mining only, which starves the server's
-                // L1 watcher (`confirmations: 2` by default) of the
-                // `tip - 2` block range it scans — single L1→L2 deposits
-                // sit invisible to the watcher for the entire test window.
-                .block_time(1)
+            // Instamine — anvil's default. Every tx mines its own block,
+            // so commit/prove/execute bundles from the server's L1 sender
+            // land instantly and the L1 watcher sees them on its next 100ms
+            // poll. Safe because our server config pins
+            // `l1_watcher.confirmations: 0` — the watcher scans up to tip
+            // and doesn't need idle blocks to expose the `tip - N` range.
         });
 
         let provider: Box<dyn std::any::Any + Send + Sync> = Box::new(provider);

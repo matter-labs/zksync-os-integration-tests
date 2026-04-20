@@ -13,36 +13,74 @@ use crate::presets::{Preset, RepoRef};
 // Ecosystem config (ecosystem.yaml)
 // ---------------------------------------------------------------------------
 
+/// Well-known chain name for the gateway in the `chains` map.
+pub const GATEWAY_CHAIN_NAME: &str = "gateway";
+
+/// Well-known chain name for the single L1-settling chain in the fixture
+/// ecosystem produced by `generate-l1-state`.
+pub const L1_SETTLING_CHAIN_NAME: &str = "l1_settling";
+
+/// Well-known chain name for the first gateway-settling chain.
+pub const CHAIN_A_NAME: &str = "gateway_settling_a";
+
+/// Well-known chain name for the second gateway-settling chain.
+pub const CHAIN_B_NAME: &str = "gateway_settling_b";
+
+/// Well-known filename for the Anvil L1 state dump within the cache directory.
+pub const L1_STATE_FILENAME: &str = "l1-state.json";
+
 #[derive(serde::Serialize, serde::Deserialize, Debug)]
 pub struct EcosystemConfig {
-    /// Relative or absolute path to the Anvil l1-state.json dump.
-    pub l1_state: String,
     pub bridgehub: String,
-    pub bytecodes_supplier: String,
-    pub gateway: GatewayMeta,
-    pub gateway_settling_chains: Vec<ChainMeta>,
-    pub l1_settling_chains: Vec<ChainMeta>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-pub struct GatewayMeta {
-    pub chain_id: u64,
-    pub diamond_proxy: String,
-    pub ephemeral_state: String,
-    /// Chain name used as config file prefix and wallets.yaml key (e.g. "gateway").
-    pub name: String,
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Debug)]
-pub struct ChainMeta {
-    pub chain_id: u64,
-    pub diamond_proxy: String,
+    /// Ecosystem-wide deployer EOA — a convenience default consumed by
+    /// callers that need a deployer-role EOA (e.g. the chain-init workflow,
+    /// ecosystem upgrade-prepare). Optional: callers can omit the field and
+    /// pass the deployer explicitly per invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub ephemeral_state: Option<String>,
-    /// Chain name used as config file prefix and wallets.yaml key
-    /// (e.g. "gateway_settling_a", "l1_settling").
-    pub name: String,
+    pub deployer: Option<String>,
+    /// All chains, keyed by chain name → chain ID.
+    /// The gateway chain is stored under the key [`GATEWAY_CHAIN_NAME`].
+    pub chains: std::collections::BTreeMap<String, u64>,
 }
+
+impl EcosystemConfig {
+    /// Gateway chain ID.
+    pub fn gateway_chain_id(&self) -> u64 {
+        self.chains[GATEWAY_CHAIN_NAME]
+    }
+
+    /// Look up a fixture-known chain by its well-known name. Returns the
+    /// `(name, id)` tuple — the name is borrowed from a `'static` constant
+    /// so callers can avoid an allocation.
+    fn chain(&self, name: &'static str) -> (&'static str, u64) {
+        let id = *self
+            .chains
+            .get(name)
+            .unwrap_or_else(|| panic!("ecosystem.yaml missing well-known chain '{name}'"));
+        (name, id)
+    }
+
+    /// The gateway chain (`{name = "gateway", id = 506}` in the fixture).
+    pub fn gateway(&self) -> (&'static str, u64) {
+        self.chain(GATEWAY_CHAIN_NAME)
+    }
+
+    /// The single L1-settling chain in the fixture.
+    pub fn l1_settling(&self) -> (&'static str, u64) {
+        self.chain(L1_SETTLING_CHAIN_NAME)
+    }
+
+    /// First gateway-settling chain in the fixture.
+    pub fn chain_a(&self) -> (&'static str, u64) {
+        self.chain(CHAIN_A_NAME)
+    }
+
+    /// Second gateway-settling chain in the fixture.
+    pub fn chain_b(&self) -> (&'static str, u64) {
+        self.chain(CHAIN_B_NAME)
+    }
+}
+
 
 // ---------------------------------------------------------------------------
 // Wallets
@@ -162,14 +200,80 @@ pub fn cache_dir_for_preset(preset: &Preset) -> Result<PathBuf> {
 
 /// Resolve the ecosystem cache directory for the given preset.
 ///
-/// Computes the deterministic cache directory from the preset and verifies
-/// that `metadata.json` exists inside it — this file is written last by
-/// `generate-l1-state` and proves the directory is complete.
+/// First checks the exact cache dir for the current tip SHA. If not found
+/// (e.g. the remote branch advanced but no image was published), scans
+/// existing cache directories that share the same contracts segment and
+/// picks the most recently modified one. This avoids requiring a full
+/// regeneration when only the server tip moves.
+///
+/// The resolution is memoized per cache-dir name for the lifetime of the
+/// process so the fallback scan + "Cache miss for …" log line only happens
+/// once per preset — callers inside a test invoke this indirectly many
+/// times (via `load_ecosystem`, `load_wallets`, `resolve_l1_state`,
+/// `chain_config_path`, …).
 pub fn resolve_ecosystem_dir(preset: &Preset) -> Result<PathBuf> {
+    use std::sync::{Mutex, OnceLock};
+
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, PathBuf>>> = OnceLock::new();
+    let cache = CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let key = cache_dir_name(preset);
+    if let Some(hit) = cache
+        .lock()
+        .expect("ecosystem-dir cache poisoned")
+        .get(&key)
+        .cloned()
+    {
+        return Ok(hit);
+    }
+
+    let resolved = resolve_ecosystem_dir_uncached(preset)?;
+    cache
+        .lock()
+        .expect("ecosystem-dir cache poisoned")
+        .insert(key, resolved.clone());
+    Ok(resolved)
+}
+
+fn resolve_ecosystem_dir_uncached(preset: &Preset) -> Result<PathBuf> {
     let dir = cache_dir_for_preset(preset)?;
     let marker = dir.join("metadata.json");
+    if marker.exists() {
+        return Ok(dir);
+    }
+
+    // Fallback: find a cache dir with the same contracts segment.
+    let contracts_segment = repo_ref_cache_segment(&preset.era_contracts);
+    let cache_root = dir
+        .parent()
+        .context("cache dir has no parent")?;
+    if let Ok(entries) = fs::read_dir(cache_root) {
+        let mut candidates: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.ends_with(&contracts_segment) && e.path().join("metadata.json").exists()
+            })
+            .map(|e| e.path())
+            .collect();
+        // Pick the most recently modified cache dir.
+        candidates.sort_by_key(|p| {
+            fs::metadata(p.join("metadata.json"))
+                .and_then(|m| m.modified())
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        if let Some(best) = candidates.last() {
+            eprintln!(
+                "  Cache miss for {} — using closest match: {}",
+                dir.display(),
+                best.display(),
+            );
+            return Ok(best.clone());
+        }
+    }
+
     anyhow::ensure!(
-        marker.exists(),
+        false,
         "No completed l1-state generation found at {}\n\
          Run `cargo run -p generate-l1-state -- {}` first.",
         dir.display(),
@@ -186,23 +290,18 @@ pub fn load_ecosystem(preset: &Preset) -> Result<EcosystemConfig> {
     let content =
         fs::read_to_string(&eco_path).with_context(|| format!("read {}", eco_path.display()))?;
     let config: EcosystemConfig = serde_yaml::from_str(&content).context("parse ecosystem.yaml")?;
-    let l1_state_path = resolve_l1_state(preset, &config)?;
+    let l1_state_path = resolve_l1_state(preset)?;
     eprintln!("  l1_state: {}", l1_state_path.display());
     Ok(config)
 }
 
-/// Resolve the l1-state.json path from the `l1_state` field in ecosystem.yaml.
-pub fn resolve_l1_state(preset: &Preset, config: &EcosystemConfig) -> Result<PathBuf> {
-    let dir = cache_dir_for_preset(preset)?;
-    let l1_path = PathBuf::from(&config.l1_state);
-    let resolved = if l1_path.is_absolute() {
-        l1_path
-    } else {
-        dir.join(&l1_path)
-    };
+/// Resolve the l1-state.json path within the preset's cache directory.
+pub fn resolve_l1_state(preset: &Preset) -> Result<PathBuf> {
+    let dir = resolve_ecosystem_dir(preset)?;
+    let resolved = dir.join(L1_STATE_FILENAME);
     anyhow::ensure!(
         resolved.exists(),
-        "l1_state path does not exist: {} (from ecosystem.yaml)",
+        "l1-state.json not found at {}",
         resolved.display(),
     );
     Ok(resolved)
@@ -210,13 +309,13 @@ pub fn resolve_l1_state(preset: &Preset, config: &EcosystemConfig) -> Result<Pat
 
 /// Resolve the chain config file: `<cache_dir>/<chain_name>.yaml`
 pub fn chain_config_path(preset: &Preset, chain_name: &str) -> Result<PathBuf> {
-    let dir = cache_dir_for_preset(preset)?;
+    let dir = resolve_ecosystem_dir(preset)?;
     Ok(dir.join(format!("{chain_name}.yaml")))
 }
 
 /// Load wallets.yaml from the preset's cache directory.
 pub fn load_wallets(preset: &Preset) -> Result<WalletsFile> {
-    let dir = cache_dir_for_preset(preset)?;
+    let dir = resolve_ecosystem_dir(preset)?;
     let wallets_path = dir.join("wallets.yaml");
     anyhow::ensure!(
         wallets_path.exists(),

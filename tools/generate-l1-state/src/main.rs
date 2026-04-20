@@ -28,7 +28,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use integration_tests::anvil_utils::fund_account;
+use integration_tests::anvil_utils::anvil_set_balance;
 use integration_tests::docker::docker_pull_image;
 use integration_tests::l1_state::{ChainWallets, WalletsFile};
 use integration_tests::presets::RepoRef;
@@ -191,6 +191,8 @@ struct DumpStateAnvil {
 
 impl DumpStateAnvil {
     fn spawn(port: u16, dump_state_path: &Path) -> Result<Self> {
+        let anvil_start = std::time::Instant::now();
+
         let child = Command::new("anvil")
             .args([
                 "--preserve-historical-states",
@@ -206,17 +208,20 @@ impl DumpStateAnvil {
             .stderr(Stdio::null())
             .spawn()
             .context("Failed to start anvil")?;
+        println!("Starting anvil took {:.2?}", anvil_start.elapsed());
 
         let rpc_url = format!("http://localhost:{}", port);
 
         integration_tests::server_utils::wait_for_chain_to_be_ready(
             &rpc_url,
             "Anvil",
-            10,
-            Duration::from_secs(1),
+            100,
+            Duration::from_millis(100),
             None,
         )
         .context("Anvil did not become ready")?;
+
+        println!("Anvil became ready after {:.2?}", anvil_start.elapsed());
 
         Ok(Self { child, rpc_url })
     }
@@ -345,252 +350,21 @@ impl ChainOperators {
 // Forge helpers
 // ---------------------------------------------------------------------------
 
-fn run_deploy_gateway_transaction_filterer(
-    contracts_backend: &EraContractsBackend,
-    l1_rpc_url: &str,
-    bridgehub: &str,
-    chain_id: u64,
-    chain_owner_pk: &str,
-) -> Result<()> {
-    println!("  gateway convert deploy-filterer for chain {chain_id}");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "convert",
-            "deploy-filterer",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            chain_owner_pk,
-            "--bridgehub",
-            bridgehub,
-            "--gateway-chain-id",
-            &chain_id.to_string(),
-        ])
-        .with_context(|| format!("gateway convert deploy-filterer for chain {chain_id}"))?;
-    Ok(())
-}
-
-#[derive(serde::Deserialize)]
-struct GatewayStateTransition {
-    validator_timelock_addr: String,
-}
-
 #[derive(serde::Deserialize)]
 struct VotePrepOutput {
+    diamond_cut_data: String,
     relayed_sl_da_validator: String,
-    gateway_state_transition: GatewayStateTransition,
 }
 
-// ---------------------------------------------------------------------------
-// protocol_ops wrappers
-// ---------------------------------------------------------------------------
 
-#[allow(clippy::too_many_arguments)]
-fn run_convert_to_gateway(
-    contracts_backend: &EraContractsBackend,
-    l1_rpc_url: &str,
-    keys: &KeySet,
-    gw_owner_pk: &str,
-    bridgehub: &str,
-    gateway_chain_id: u64,
-    governance_addr: &str,
-    stm_tracker: &str,
-    ctm_proxy: &str,
-    vote_output_path: &str,
-) -> Result<()> {
-    let gw_str = gateway_chain_id.to_string();
-
-    println!("  gateway convert: grant-whitelist");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "convert",
-            "grant-whitelist",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            gw_owner_pk,
-            "--bridgehub",
-            bridgehub,
-            "--gateway-chain-id",
-            &gw_str,
-            "--whitelist-grantees",
-            governance_addr,
-            "--whitelist-grantees",
-            &keys.deployer_addr,
-            "--whitelist-grantees",
-            stm_tracker,
-        ])
-        .context("gateway convert grant-whitelist")?;
-
-    println!("  gateway convert: vote-prepare");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "convert",
-            "vote-prepare",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            &keys.deployer_pk,
-            "--bridgehub",
-            bridgehub,
-            "--gateway-chain-id",
-            &gw_str,
-            "--ctm-representative-chain-id",
-            &gw_str,
-            "--ctm-proxy",
-            ctm_proxy,
-            "--refund-recipient",
-            &keys.deployer_addr,
-            "--testnet-verifier",
-            "--zksync-os",
-            "--vote-preparation-toml",
-            vote_output_path,
-        ])
-        .context("gateway convert vote-prepare")?;
-
-    println!("  gateway convert: governance-execute");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "convert",
-            "governance-execute",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            &keys.ecosystem_owner_pk,
-            "--bridgehub",
-            bridgehub,
-            "--gateway-chain-id",
-            &gw_str,
-            "--governance-address",
-            governance_addr,
-            "--vote-preparation-toml",
-            vote_output_path,
-        ])
-        .context("gateway convert governance-execute")?;
-
-    println!("  gateway convert: revoke-whitelist");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "convert",
-            "revoke-whitelist",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            gw_owner_pk,
-            "--bridgehub",
-            bridgehub,
-            "--gateway-chain-id",
-            &gw_str,
-            "--revoke-address",
-            &keys.deployer_addr,
-        ])
-        .context("gateway convert revoke-whitelist")?;
-
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_migrate_to_gateway(
-    contracts_backend: &EraContractsBackend,
-    l1_rpc_url: &str,
-    chain_owner_pk: &str,
-    bridgehub: &str,
-    chain_id: u64,
-    gateway_chain_id: u64,
-    vote_output_rel: &str,
-    refund_recipient: &str,
-    deposits_already_paused: bool,
-) -> Result<()> {
-    let chain_str = chain_id.to_string();
-    let gw_str = gateway_chain_id.to_string();
-    let gas_str = MIGRATE_L1_GAS_PRICE_WEI.to_string();
-
-    if !deposits_already_paused {
-        println!("  gateway migrate chain {chain_id}: pause-deposits");
-        contracts_backend
-            .protocol_ops(&[
-                "chain",
-                "gateway",
-                "migrate",
-                "pause-deposits",
-                "--l1-rpc-url",
-                l1_rpc_url,
-                "--private-key",
-                chain_owner_pk,
-                "--bridgehub",
-                bridgehub,
-                "--chain-id",
-                &chain_str,
-            ])
-            .context("gateway migrate pause-deposits")?;
-    }
-
-    // Production order: notify the server before submitting the migration
-    // so listeners see the event pre-migration. This is inert here (no L2
-    // server is listening during state generation) but keeps the sequence
-    // faithful to the real flow.
-    println!("  gateway migrate chain {chain_id}: notify-server");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "migrate",
-            "notify-server",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            chain_owner_pk,
-            "--bridgehub",
-            bridgehub,
-            "--chain-id",
-            &chain_str,
-        ])
-        .context("gateway migrate notify-server")?;
-
-    println!("  gateway migrate chain {chain_id}: submit");
-    contracts_backend
-        .protocol_ops(&[
-            "chain",
-            "gateway",
-            "migrate",
-            "submit",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            chain_owner_pk,
-            "--bridgehub",
-            bridgehub,
-            "--chain-id",
-            &chain_str,
-            "--gateway-chain-id",
-            &gw_str,
-            "--l1-gas-price",
-            &gas_str,
-            "--vote-preparation-toml",
-            vote_output_rel,
-            "--refund-recipient",
-            refund_recipient,
-        ])
-        .context("gateway migrate submit")?;
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Genesis generation
 // ---------------------------------------------------------------------------
 
-/// Build a Rust tool from the era-contracts tree (local mode only, no-op for Docker).
+/// Resolve the path to a pre-built era-contracts Rust tool (local mode only,
+/// `None` for Docker).
+///
+/// The binary is produced by `integration-tests/build.rs` at cargo compile
+/// time; this helper never rebuilds it.
 fn build_contracts_tool(
     contracts_backend: &EraContractsBackend,
     tool_subdir: &str,
@@ -607,29 +381,19 @@ fn build_contracts_tool(
         tool_subdir,
         manifest.display()
     );
-    let mut build_cmd = Command::new("cargo");
-    build_cmd
-        .args([
-            "build",
-            "--release",
-            "--manifest-path",
-            manifest.to_str().unwrap(),
-        ])
-        .current_dir(&tool_dir);
-    if let Some(toolchain) = integration_tests::server::read_toolchain_from_dir(&tool_dir) {
-        build_cmd.env("RUSTUP_TOOLCHAIN", &toolchain);
-    }
-    let status = build_cmd
-        .status()
-        .with_context(|| format!("cargo build {}", tool_subdir))?;
-    if !status.success() {
-        anyhow::bail!("cargo build {} failed with status: {}", tool_subdir, status);
-    }
     let bin_name = tool_dir.file_name().unwrap().to_string_lossy().to_string();
     let binary = tool_dir
         .join("target/release")
         .join(&bin_name)
         .with_extension(std::env::consts::EXE_EXTENSION);
+    anyhow::ensure!(
+        binary.exists(),
+        "{} binary not found at {}. \
+         Run `cargo build` in integration-tests — the binary is produced by \
+         integration-tests/build.rs.",
+        tool_subdir,
+        binary.display()
+    );
     Ok(Some(binary))
 }
 
@@ -770,92 +534,14 @@ fn deploy_zk_token(
 // Chain init variants
 // ---------------------------------------------------------------------------
 
-enum ChainInitKind<'a> {
-    /// Gateway chain: ZK-based base token, no deposit pause.
-    Gateway { base_token_addr: &'a str },
-    /// Chain that will later migrate to settle on the gateway.
-    /// `--pause-deposits + --skip-priority-txs` keep the priority queue empty
-    /// so migrate-to-gateway doesn't fail with PriorityQueueNotFullyProcessed,
-    /// avoiding the need for a pre-migration server to drain the queue.
-    GatewaySettling,
-    /// Plain chain that settles on L1. ETH base token, deposits stay live.
-    L1Settling,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_chain_init(
-    contracts_backend: &EraContractsBackend,
-    l1_rpc_url: &str,
-    keys: &KeySet,
-    ops: &ChainOperators,
-    ctm_proxy: &str,
-    l1_da_validator: &str,
-    create2_factory: &str,
-    kind: ChainInitKind<'_>,
-    out_filename: &str,
-) -> Result<()> {
-    let chain_id = ops.chain_id.to_string();
-    let out_arg = contracts_backend.work_path(out_filename);
-
-    let mut args: Vec<&str> = vec![
-        "chain",
-        "init",
-        "--ctm-proxy",
-        ctm_proxy,
-        "--l1-da-validator",
-        l1_da_validator,
-        "--owner",
-        &ops.owner_addr,
-        "--commit-operator",
-        &ops.commit_addr,
-        "--prove-operator",
-        &ops.prove_addr,
-        "--execute-operator",
-        &ops.execute_addr,
-        "--chain-id",
-        &chain_id,
-        "--vm-type",
-        "zksyncos",
-        "--l1-rpc-url",
-        l1_rpc_url,
-        "--private-key",
-        &keys.deployer_pk,
-        "--owner-pk",
-        &ops.owner_pk,
-        "--bridgehub-admin-pk",
-        &keys.ecosystem_owner_pk,
-        "--create2-factory-addr",
-        create2_factory,
-    ];
-
-    match &kind {
-        ChainInitKind::Gateway { base_token_addr } => {
-            args.extend_from_slice(&["--base-token-addr", base_token_addr]);
-        }
-        ChainInitKind::GatewaySettling => {
-            args.extend_from_slice(&["--pause-deposits", "--skip-priority-txs"]);
-        }
-        ChainInitKind::L1Settling => {}
-    }
-
-    args.extend_from_slice(&["--out", &out_arg]);
-
-    contracts_backend.protocol_ops(&args)?;
-    Ok(())
-}
+/// ETH base token address (0x0...01).
+const ETH_BASE_TOKEN: &str = "0x0000000000000000000000000000000000000001";
 
 // ---------------------------------------------------------------------------
 // Generation flow (Steps 3–15)
 // ---------------------------------------------------------------------------
 
-struct FlowResult {
-    bridgehub: String,
-    bytecodes_supplier: String,
-    gw_diamond_proxy: String,
-    gw_settling_diamond_proxies: Vec<String>,
-    l1_settling_diamond_proxies: Vec<String>,
-    gateway_ephemeral_state: PathBuf,
-}
+struct FlowResult {}
 
 #[allow(clippy::too_many_arguments)]
 async fn run_generation_flow(
@@ -872,75 +558,105 @@ async fn run_generation_flow(
 ) -> Result<FlowResult> {
     // ----------------------------------------------------------------
     // Step 3a: Fund all L1 accounts used by the flow
-    //   - Deployer / ecosystem owner (4000 ETH each, from Anvil default)
-    //   - Per-chain owners + validator operators (100 ETH each, from deployer)
+    //   - Deployer / ecosystem owner (4000 ETH each)
+    //   - Per-chain owners + validator operators (100 ETH each)
     // Validators don't spend L1 gas until after chain init, but we fund
     // them here so there is a single funding pass rather than one for
     // owners at the start and another for validators later.
+    //
+    // Uses `anvil_setBalance` (direct state mutation — no tx, no gas, no
+    // nonce) via a native reqwest JSON-RPC call, issued in parallel.
     // ----------------------------------------------------------------
-    println!("\n=== Funding deployer and ecosystem owner ===");
-    fund_account(
-        &keys.deployer_addr,
-        "4000ether",
-        l1_rpc_url,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-    )
-    .context("fund deployer")?;
-    fund_account(
-        &keys.ecosystem_owner_addr,
-        "4000ether",
-        l1_rpc_url,
-        DEFAULT_ANVIL_PRIVATE_KEY,
-    )
-    .context("fund ecosystem owner")?;
-    println!("\n=== Funding L1 owner + operator accounts ===");
+    println!("\n=== Funding L1 accounts ===");
+    let funding_start = std::time::Instant::now();
+    const ETH: u128 = 1_000_000_000_000_000_000;
     // (chain ops, settles_on_l1). Gateway itself settles on L1; its operators
     // commit/prove/execute against L1, so they need L1 gas too.
     let l1_funding_targets: Vec<(&ChainOperators, bool)> = std::iter::once((gw_ops, true))
         .chain(gw_settling_ops.iter().map(|o| (o, false)))
         .chain(l1_settling_ops.iter().map(|o| (o, true)))
         .collect();
+    let mut funding_jobs: Vec<(String, u128, String)> = vec![
+        (keys.deployer_addr.clone(), 4000 * ETH, "deployer".into()),
+        (
+            keys.ecosystem_owner_addr.clone(),
+            4000 * ETH,
+            "ecosystem owner".into(),
+        ),
+    ];
     for (ops, settles_on_l1) in &l1_funding_targets {
         for addr in ops.l1_funded_addresses(*settles_on_l1) {
-            fund_account(addr, "100ether", l1_rpc_url, &keys.deployer_pk)
-                .with_context(|| format!("fund L1 account {addr} for chain {}", ops.chain_id))?;
+            funding_jobs.push((
+                addr.to_string(),
+                100 * ETH,
+                format!("L1 account {addr} for chain {}", ops.chain_id),
+            ));
         }
     }
+    let num_accounts = funding_jobs.len();
+    let mut join_set: tokio::task::JoinSet<Result<()>> = tokio::task::JoinSet::new();
+    for (addr, wei, label) in funding_jobs {
+        let rpc = l1_rpc_url.to_string();
+        join_set.spawn(async move {
+            anvil_set_balance(&addr, wei, &rpc)
+                .await
+                .with_context(|| format!("fund {label}"))
+        });
+    }
+    while let Some(res) = join_set.join_next().await {
+        res.context("funding task join")??;
+    }
+    println!(
+        "Funded {num_accounts} L1 accounts in {:.2?}",
+        funding_start.elapsed()
+    );
 
     // ----------------------------------------------------------------
     // Step 3: Ecosystem init
     // ----------------------------------------------------------------
     println!("\n=== protocol_ops ecosystem init ===");
-    let ecosystem_out_arg = contracts_backend.work_path("ecosystem_init_out.json");
+    // `ecosystem init` is prepare-only (auto-forks L1 via anvil, emits Safe
+    // bundles). We apply each bundle under the deployer key so the
+    // deployments land on the real anvil and subsequent steps see them.
+    let eco_out_dir = "ecosystem_init";
+    let eco_out_dir_arg = contracts_backend.work_path(eco_out_dir);
     contracts_backend.protocol_ops(&[
         "ecosystem",
         "init",
+        "--deployer-address",
+        &keys.deployer_addr,
         "--owner",
         &keys.ecosystem_owner_addr,
-        "--private-key",
-        &keys.deployer_pk,
-        "--owner-pk",
-        &keys.ecosystem_owner_pk,
         "--l1-rpc-url",
         l1_rpc_url,
         "--out",
-        &ecosystem_out_arg,
+        &eco_out_dir_arg,
     ])?;
+    // Apply each Safe bundle: deployer / ecosystem-owner targets sign with
+    // their keys. Eco-init bundles only have these two as targets, so plain
+    // `apply` covers everything.
+    contracts_backend
+        .parse_safe_bundles(eco_out_dir, l1_rpc_url)?
+        .apply(&[&keys.deployer_pk, &keys.ecosystem_owner_pk])?;
 
-    let ecosystem_json: serde_json::Value = serde_json::from_str(
-        &contracts_backend.read_protocol_ops_output("ecosystem_init_out.json")?,
+    // Read deployed addresses from the per-command metadata block in the
+    // bundle dir's `manifest.json`. The first (and only) entry's `.output`
+    // matches the old `ecosystem_init_out.json`'s `.output` shape.
+    let manifest_json: serde_json::Value = serde_json::from_str(
+        &contracts_backend.read_protocol_ops_output(&format!("{eco_out_dir}/manifest.json"))?,
     )?;
-    let output = ecosystem_json
-        .get("output")
-        .ok_or_else(|| anyhow::anyhow!("Missing 'output' in ecosystem init JSON"))?;
+    let output = manifest_json
+        .get("metadata")
+        .and_then(|m| m.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|entry| entry.get("output"))
+        .ok_or_else(|| {
+            anyhow::anyhow!("Missing metadata[0].output in ecosystem init manifest.json")
+        })?;
 
     let bridgehub = extract_json_value(
         output,
         "hub.deployed_addresses.bridgehub.bridgehub_proxy_addr",
-    )?;
-    let ctm_proxy = extract_json_value(
-        output,
-        "ctm.deployed_addresses.state_transition.state_transition_proxy_addr",
     )?;
     let l1_da_validator = extract_json_value(
         output,
@@ -953,13 +669,8 @@ async fn run_generation_flow(
         output,
         "ctm.deployed_addresses.state_transition.bytecodes_supplier_addr",
     )?;
-    let deployer_addr = extract_json_value(output, "hub.deployer_addr")?;
+    let _deployer_addr = extract_json_value(output, "hub.deployer_addr")?;
     let governance_addr = extract_json_value(output, "hub.deployed_addresses.governance_addr")?;
-    let stm_tracker = extract_json_value(
-        output,
-        "hub.deployed_addresses.bridgehub.ctm_deployment_tracker_proxy_addr",
-    )?;
-    let create2_factory = extract_json_value(output, "hub.contracts.create2_factory_addr")?;
 
     if l1_da_validator.is_empty() || l1_da_validator == "0x0000000000000000000000000000000000000000"
     {
@@ -967,7 +678,6 @@ async fn run_generation_flow(
     }
 
     println!("  bridgehub = {bridgehub}");
-    println!("  ctm_proxy = {ctm_proxy}");
     println!("  bytecodes_supplier = {bytecodes_supplier}");
 
     // ----------------------------------------------------------------
@@ -1024,81 +734,155 @@ async fn run_generation_flow(
     // equivalent). The current interop test only verifies L2→L1 message
     // inclusion, so cross-chain base-token transfers would need this added.
     // ----------------------------------------------------------------
-    let gw_chain_out_name = "chain_init_gateway.json";
-    println!(
-        "\n=== protocol_ops chain init: gateway chain {} ===",
-        GATEWAY.id
-    );
-    run_chain_init(
-        contracts_backend,
-        l1_rpc_url,
-        keys,
-        gw_ops,
-        &ctm_proxy,
-        &l1_da_validator,
-        &create2_factory,
-        ChainInitKind::Gateway {
-            base_token_addr: &zk_token_address,
+    // Write ecosystem.yaml early — downstream `chain init` / `chain gateway *`
+    // invocations consume it via `--ecosystem <path>`.
+    let eco_yaml_path = output_dir.join("ecosystem.yaml");
+    let eco_config = integration_tests::l1_state::EcosystemConfig {
+        bridgehub: bridgehub.clone(),
+        // Bake the ecosystem deployer EOA into ecosystem.yaml so downstream
+        // protocol-ops invocations (and CI workflows that wrap them) can
+        // pick it up without a separate env var. External users can override
+        // by passing `--deployer-address` at invocation time.
+        deployer: Some(keys.deployer_addr.clone()),
+        chains: {
+            let mut chains = std::collections::BTreeMap::new();
+            chains.insert(GATEWAY.name.to_string(), GATEWAY.id);
+            for spec in gateway_settling_chains() {
+                chains.insert(spec.name.to_string(), spec.id);
+            }
+            for spec in l1_settling_chains() {
+                chains.insert(spec.name.to_string(), spec.id);
+            }
+            chains
         },
-        gw_chain_out_name,
-    )?;
-    let gw_chain_json: serde_json::Value =
-        serde_json::from_str(&contracts_backend.read_protocol_ops_output(gw_chain_out_name)?)?;
-    let gw_chain_output = gw_chain_json
-        .get("output")
-        .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-    let gw_diamond_proxy = extract_json_value(gw_chain_output, "diamond_proxy_addr")?;
+    };
+    fs::write(&eco_yaml_path, serde_yaml::to_string(&eco_config)?)?;
+    println!("  ecosystem.yaml -> {}", eco_yaml_path.display());
 
-    let mut gw_settling_diamond_proxies = Vec::new();
+    let eco_path = eco_yaml_path.to_string_lossy().to_string();
+
+    // Helper to resolve a chain's diamond proxy from the bridgehub.
+    let resolve_diamond = |chain_id: u64| -> Result<String> {
+        let chain_id_str = chain_id.to_string();
+        let addr = contracts_backend
+            .cast(&[
+                "call",
+                &bridgehub,
+                "getZKChain(uint256)(address)",
+                &chain_id_str,
+                "--rpc-url",
+                l1_rpc_url,
+            ])?
+            .trim()
+            .to_string();
+        Ok(addr)
+    };
+
+    // Helper: run `chain init` directly via protocol-ops, then apply the
+    // emitted Safe bundles with the three signers every chain init needs
+    // (deployer + ecosystem owner + chain owner).
+    //
+    // `extra_flags` is appended verbatim — used by gateway-settling chains
+    // to pass `--pause-deposits true --skip-priority-txs true`.
+    let run_chain_init = |work_subdir: &str,
+                          chain_name: &str,
+                          chain_id: u64,
+                          base_token: &str,
+                          chain_ops: &ChainOperators,
+                          extra_flags: &[&str]|
+     -> Result<()> {
+        let chain_id_str = chain_id.to_string();
+        let safe_rel = format!("{work_subdir}/safe");
+        let safe_abs = contracts_backend.work_path(&safe_rel);
+        let mut args: Vec<&str> = vec![
+            "chain",
+            "init",
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--bridgehub",
+            &bridgehub,
+            "--chain-id",
+            &chain_id_str,
+            "--deployer-address",
+            &keys.deployer_addr,
+            "--l1-da-validator",
+            &l1_da_validator,
+            "--base-token-addr",
+            base_token,
+            "--owner",
+            &chain_ops.owner_addr,
+            "--commit-operator",
+            &chain_ops.commit_addr,
+            "--prove-operator",
+            &chain_ops.prove_addr,
+            "--execute-operator",
+            &chain_ops.execute_addr,
+            "--out",
+            &safe_abs,
+        ];
+        args.extend_from_slice(extra_flags);
+        contracts_backend.protocol_ops(&args).with_context(|| {
+            format!("chain init failed for {chain_name} (id={chain_id})")
+        })?;
+        contracts_backend
+            .parse_safe_bundles(&safe_rel, l1_rpc_url)?
+            .apply(&[
+                &keys.deployer_pk,
+                &keys.ecosystem_owner_pk,
+                &chain_ops.owner_pk,
+            ])
+            .with_context(|| format!("apply chain init bundles for {chain_name}"))?;
+        let _ = chain_name;
+        Ok(())
+    };
+
+    // Gateway chain (custom ZK base token)
+    println!("\n=== chain init: gateway chain {} ===", GATEWAY.id);
+    run_chain_init(
+        "generate_l1_state/chain_init_gateway",
+        GATEWAY.name,
+        GATEWAY.id,
+        &zk_token_address,
+        &gw_ops,
+        &[],
+    )?;
+    let gw_diamond_proxy = resolve_diamond(GATEWAY.id)?;
+
+    // Gateway-settling chains (pause deposits + skip priority txs)
     for ops in gw_settling_ops {
         println!(
-            "\n=== protocol_ops chain init: gateway-settling chain {} ===",
+            "\n=== chain init: gateway-settling chain {} ===",
             ops.chain_id
         );
-        let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
         run_chain_init(
-            contracts_backend,
-            l1_rpc_url,
-            keys,
+            &format!("generate_l1_state/chain_init_{}", ops.chain_id),
+            &ops.dir_name,
+            ops.chain_id,
+            ETH_BASE_TOKEN,
             ops,
-            &ctm_proxy,
-            &l1_da_validator,
-            &create2_factory,
-            ChainInitKind::GatewaySettling,
-            &chain_out_name,
+            &[
+                "--pause-deposits",
+                "true",
+                "--skip-priority-txs",
+                "true",
+            ],
         )?;
-        let chain_json: serde_json::Value =
-            serde_json::from_str(&contracts_backend.read_protocol_ops_output(&chain_out_name)?)?;
-        let chain_output = chain_json
-            .get("output")
-            .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-        gw_settling_diamond_proxies.push(extract_json_value(chain_output, "diamond_proxy_addr")?);
     }
 
-    let mut l1_settling_diamond_proxies = Vec::new();
+    // L1-settling chains (default: ETH base token, deposits live)
     for ops in l1_settling_ops {
         println!(
-            "\n=== protocol_ops chain init: L1-settling chain {} ===",
+            "\n=== chain init: L1-settling chain {} ===",
             ops.chain_id
         );
-        let chain_out_name = format!("chain_init_{}.json", ops.chain_id);
         run_chain_init(
-            contracts_backend,
-            l1_rpc_url,
-            keys,
+            &format!("generate_l1_state/chain_init_{}", ops.chain_id),
+            &ops.dir_name,
+            ops.chain_id,
+            ETH_BASE_TOKEN,
             ops,
-            &ctm_proxy,
-            &l1_da_validator,
-            &create2_factory,
-            ChainInitKind::L1Settling,
-            &chain_out_name,
+            &[],
         )?;
-        let chain_json: serde_json::Value =
-            serde_json::from_str(&contracts_backend.read_protocol_ops_output(&chain_out_name)?)?;
-        let chain_output = chain_json
-            .get("output")
-            .ok_or_else(|| anyhow::anyhow!("Missing output"))?;
-        l1_settling_diamond_proxies.push(extract_json_value(chain_output, "diamond_proxy_addr")?);
     }
 
     // ----------------------------------------------------------------
@@ -1106,32 +890,31 @@ async fn run_generation_flow(
     // (Operator/owner L1 ETH funding already happened in Step 3a.)
     // ----------------------------------------------------------------
     println!("\n=== Funding chain admins with ZK tokens ===");
-    for proxies in [&gw_settling_diamond_proxies, &l1_settling_diamond_proxies] {
-        for diamond_proxy in proxies {
-            let admin = contracts_backend
-                .cast(&[
-                    "call",
-                    diamond_proxy,
-                    "getAdmin()(address)",
-                    "--rpc-url",
-                    l1_rpc_url,
-                ])?
-                .trim()
-                .to_string();
-            contracts_backend
-                .cast(&[
-                    "send",
-                    &zk_token_address,
-                    "mint(address,uint256)",
-                    &admin,
-                    ZK_MINT_AMOUNT_ADMIN,
-                    "--private-key",
-                    &keys.deployer_pk,
-                    "--rpc-url",
-                    l1_rpc_url,
-                ])
-                .with_context(|| format!("mint ZK to chain admin {admin}"))?;
-        }
+    for ops in gateway_settling_chains().chain(l1_settling_chains()) {
+        let diamond_proxy = resolve_diamond(ops.id)?;
+        let admin = contracts_backend
+            .cast(&[
+                "call",
+                &diamond_proxy,
+                "getAdmin()(address)",
+                "--rpc-url",
+                l1_rpc_url,
+            ])?
+            .trim()
+            .to_string();
+        contracts_backend
+            .cast(&[
+                "send",
+                &zk_token_address,
+                "mint(address,uint256)",
+                &admin,
+                ZK_MINT_AMOUNT_ADMIN,
+                "--private-key",
+                &keys.deployer_pk,
+                "--rpc-url",
+                l1_rpc_url,
+            ])
+            .with_context(|| format!("mint ZK to chain admin {admin}"))?;
     }
 
     // ----------------------------------------------------------------
@@ -1186,14 +969,7 @@ async fn run_generation_flow(
         write_chain_config(ops, false, "L1-settling")?;
     }
 
-    // ----------------------------------------------------------------
-    // Step 8c: Copy wallets.yaml (already generated before the flow)
-    // ----------------------------------------------------------------
-    let wallets_path = output_dir.join("wallets.yaml");
-    let work_wallets = contracts_backend.work_dir().join("wallets.yaml");
-    fs::copy(&work_wallets, &wallets_path)
-        .with_context(|| format!("copy wallets to {}", wallets_path.display()))?;
-    println!("  wallets.yaml -> {}", wallets_path.display());
+    // wallets.yaml was already copied next to ecosystem.yaml before chain-init.
 
     // ----------------------------------------------------------------
     // Step 9: Start gateway server
@@ -1218,6 +994,7 @@ async fn run_generation_flow(
         .context("Failed to start gateway server")?;
     let gw_l2_rpc = gw_server.rpc_url();
     println!("  Gateway server ready at {gw_l2_rpc}");
+
 
     // ----------------------------------------------------------------
     // Step 10: Fund gateway L2 (test account + gateway operators)
@@ -1281,7 +1058,7 @@ async fn run_generation_flow(
     // ----------------------------------------------------------------
     println!("\n=== Waiting for gateway batches ===");
     gw_server
-        .wait_for_executed_batches_with_traffic()
+        .wait_for_traffic_tx_executed_on_l1()
         .context("gateway executed batches")?;
 
     // ----------------------------------------------------------------
@@ -1289,165 +1066,203 @@ async fn run_generation_flow(
     // ----------------------------------------------------------------
     println!("\n=== Converting chain {} to gateway ===", GATEWAY.id);
 
-    // Must be /script-out/... — protocol_ops strips the leading "/" and passes
-    // the remainder to forge which checks it against fs_permissions (only
-    // "script-out" relative to the project root is whitelisted).
-    let vote_output_path_rel = "/script-out/gateway_vote_prep_out.toml".to_string();
-    run_deploy_gateway_transaction_filterer(
-        contracts_backend,
-        l1_rpc_url,
-        &bridgehub,
-        GATEWAY.id,
-        &gw_ops.owner_pk,
-    )?;
-    run_convert_to_gateway(
-        contracts_backend,
-        l1_rpc_url,
-        keys,
-        &gw_ops.owner_pk,
-        &bridgehub,
-        GATEWAY.id,
-        &governance_addr,
-        &stm_tracker,
-        &ctm_proxy,
-        &vote_output_path_rel,
-    )?;
+    // Direct `chain gateway convert` — one protocol-ops invocation runs all
+    // five stages (deploy-filterer + grant-whitelist + vote-prepare +
+    // governance-execute + revoke-whitelist) against a single anvil fork and
+    // emits one Safe bundle directory. Must be under `script-out/…` — the
+    // forge script has fs_permissions restricted to that subtree.
+    let vote_output_path_rel = "script-out/gateway_vote_prep_out.toml".to_string();
+    {
+        let gateway_id_str = GATEWAY.id.to_string();
+        let convert_rel = format!("generate_l1_state/gateway_convert_{}", GATEWAY.id);
+        let convert_safe_rel = format!("{convert_rel}/safe");
+        let convert_safe_abs = contracts_backend.work_path(&convert_safe_rel);
+        contracts_backend.protocol_ops(&[
+            "chain",
+            "gateway",
+            "convert",
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--ecosystem",
+            &eco_path,
+            "--chain",
+            "gateway",
+            "--gateway-deployer",
+            &keys.deployer_addr,
+            "--ctm-representative-chain-id",
+            &gateway_id_str,
+            "--vote-preparation-toml",
+            &vote_output_path_rel,
+            "--out",
+            &convert_safe_abs,
+        ])?;
+        contracts_backend
+            .parse_safe_bundles(&convert_safe_rel, l1_rpc_url)?
+            .apply(&[
+                &gw_ops.owner_pk,
+                &keys.deployer_pk,
+                &keys.ecosystem_owner_pk,
+            ])
+            .context("apply gateway convert Safe bundles")?;
+    }
 
     // ----------------------------------------------------------------
     // Step 13: Gateway-settling chains — migrate, finalize, enable validators
+    //
+    // Three `chain gateway migrate-to` phase commands, one per phase:
+    //   phase-1-submit:      notify-server + submit       (chain admin)
+    //   phase-2-finalize:    finalize                     (deployer)
+    //   phase-3-validators:  enable-validators + set-da   (chain admin)
+    //
+    // Phases 1+2 run per-chain (bundle 1 is applied to real L1 before
+    // bundle 2 is simulated — finalize needs the submit priority tx on L1).
+    // Phase 3 runs per-chain after the gateway has stabilised.
     // ----------------------------------------------------------------
 
-    // Read pre-computed gateway addresses from the vote preparation output
+    // Read deployment artifacts from the vote preparation output
     // (written by GatewayVotePreparation.s.sol during convert-to-gateway).
-    // This avoids post-migration RPC queries — all data is available before
-    // any chain is migrated, per reviewer comment #20.
     let gw_vote_toml =
         contracts_backend.read_repo_file("l1-contracts/script-out/gateway_vote_prep_out.toml")?;
     let vote_prep: VotePrepOutput =
         toml::from_str(&gw_vote_toml).context("parse vote preparation output TOML")?;
-    let gw_validator_timelock = vote_prep.gateway_state_transition.validator_timelock_addr;
     let relayed_sl_da_validator = vote_prep.relayed_sl_da_validator;
-    println!("  Gateway L2 ValidatorTimelock (from vote-prep): {gw_validator_timelock}");
     println!("  Gateway relayed SL DA validator: {relayed_sl_da_validator}");
 
-    // 13a: Migrate + confirm transfer for all chains
+    // Save diamond cut data to a file so tests can pass it via
+    // --l1-diamond-cut-data (Anvil state dumps don't preserve historical
+    // events, so the auto-resolution from NewUpgradeCutData events doesn't
+    // work). The format matches what resolve_l1_diamond_cut_data returns.
+    let diamond_cut_data_path = output_dir.join("diamond_cut_data.hex");
+    fs::write(&diamond_cut_data_path, &vote_prep.diamond_cut_data)?;
+    println!("  diamond_cut_data.hex -> {}", diamond_cut_data_path.display());
+
+    // Cache the full vote-prep TOML so skip-generate tests (e.g. live
+    // migrate-to-gateway) can stage it into the era-contracts script-out
+    // directory before invoking the migrate-to phase commands.
+    let vote_prep_toml_path = output_dir.join("gateway_vote_prep_out.toml");
+    fs::write(&vote_prep_toml_path, &gw_vote_toml)?;
+    println!(
+        "  gateway_vote_prep_out.toml -> {}",
+        vote_prep_toml_path.display()
+    );
+
+    // 13a: Phases 1 + 2 per chain.
+    let gateway_chain_id_str = GATEWAY.id.to_string();
+    let l1_gas_price_str = MIGRATE_L1_GAS_PRICE_WEI.to_string();
     for ops in gw_settling_ops {
         let chain_id = ops.chain_id;
         println!("\n=== Migrating chain {} to gateway ===", chain_id);
-        run_migrate_to_gateway(
-            contracts_backend,
+        let migrate_dir = format!("migrate_{chain_id}");
+        let signers: &[&str] = &[&ops.owner_pk, &keys.deployer_pk];
+
+        // Phase 1: notify-server → submit (chain admin), one Safe bundle
+        // emitted directly by `chain gateway migrate-to phase-1-submit`.
+        let phase1_safe_rel = format!("{migrate_dir}/phase1/safe");
+        let phase1_safe_abs = contracts_backend.work_path(&phase1_safe_rel);
+        contracts_backend.protocol_ops(&[
+            "chain",
+            "gateway",
+            "migrate-to",
+            "phase-1-submit",
+            "--l1-rpc-url",
             l1_rpc_url,
-            &ops.owner_pk,
-            &bridgehub,
-            chain_id,
-            GATEWAY.id,
+            "--ecosystem",
+            &eco_path,
+            "--chain",
+            &ops.dir_name,
+            "--gateway-chain-id",
+            &gateway_chain_id_str,
+            "--l1-gas-price",
+            &l1_gas_price_str,
+            "--vote-preparation-toml",
             &vote_output_path_rel,
-            &deployer_addr,
-            true,
-        )?;
-        // Confirm transfer only (deployer_pk). This proves inclusion of the
-        // migration priority tx — no owner authority needed.
-        // Validator enablement is a separate step below (13d).
-        println!("  Confirming transfer for chain {chain_id}");
+            "--refund-recipient",
+            &keys.deployer_addr,
+            "--out",
+            &phase1_safe_abs,
+        ])?;
         contracts_backend
-            .protocol_ops(&[
-                "chain",
-                "gateway",
-                "migrate",
-                "finalize",
-                "--bridgehub",
-                &bridgehub,
-                "--chain-id",
-                &chain_id.to_string(),
-                "--gateway-chain-id",
-                &GATEWAY.id.to_string(),
-                "--gateway-rpc-url",
-                &gw_l2_rpc,
-                "--gateway-diamond-proxy",
-                &gw_diamond_proxy,
-                "--l1-rpc-url",
-                l1_rpc_url,
-                "--private-key",
-                &keys.deployer_pk,
-                "--vote-preparation-toml",
-                &vote_output_path_rel,
-            ])
-            .with_context(|| format!("finalize migration (confirm) for chain {chain_id}"))?;
+            .parse_safe_bundles(&phase1_safe_rel, l1_rpc_url)?
+            .apply(signers)
+            .context("apply migrate phase 1 bundles")?;
+
+        // Phase 2: finalize (deployer) — forks real L1 post-phase-1.
+        let phase2_safe_rel = format!("{migrate_dir}/phase2/safe");
+        let phase2_safe_abs = contracts_backend.work_path(&phase2_safe_rel);
+        contracts_backend.protocol_ops(&[
+            "chain",
+            "gateway",
+            "migrate-to",
+            "phase-2-finalize",
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--ecosystem",
+            &eco_path,
+            "--chain",
+            &ops.dir_name,
+            "--deployer-address",
+            &keys.deployer_addr,
+            "--gateway-rpc-url",
+            &gw_l2_rpc,
+            "--vote-preparation-toml",
+            &vote_output_path_rel,
+            "--out",
+            &phase2_safe_abs,
+        ])?;
+        contracts_backend
+            .parse_safe_bundles(&phase2_safe_rel, l1_rpc_url)?
+            .apply(signers)
+            .context("apply migrate phase 2 bundles")?;
     }
 
     // 13b: Wait for gateway to process all migration L1->L2 priority txs
     println!("\n=== Waiting for gateway to process chain migrations ===");
     gw_server
-        .wait_for_executed_batches_with_traffic()
+        .wait_for_traffic_tx_executed_on_l1()
         .context("gateway batches after migration")?;
 
-    // 13d: Enable validators + set DA validator pairs + fund operators.
-    // Each step uses the chain owner's key (owner_pk). Validator timelock
-    // is pre-computed from the vote-prep output; diamond proxy on gateway
-    // is resolved inside protocol_ops via gateway RPC.
+    // 13d: Phase 3 per chain — enable validators + set DA validator pairs,
+    // then fund operators on gateway L2.
+    let l1_gas_price_str = MIGRATE_L1_GAS_PRICE_WEI.to_string();
     for ops in gw_settling_ops {
         let chain_id = ops.chain_id;
+        println!("\n=== Enabling validators for chain {} on gateway ===", chain_id);
+        let migrate_dir = format!("migrate_{chain_id}");
 
-        // protocol_ops migrate step 5: enable-validators (owner_pk)
-        println!("  Enabling validators for chain {chain_id}");
+        let phase3_safe_rel = format!("{migrate_dir}/phase3/safe");
+        let phase3_safe_abs = contracts_backend.work_path(&phase3_safe_rel);
+        contracts_backend.protocol_ops(&[
+            "chain",
+            "gateway",
+            "migrate-to",
+            "phase-3-validators",
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--ecosystem",
+            &eco_path,
+            "--chain",
+            &ops.dir_name,
+            "--gateway-rpc-url",
+            &gw_l2_rpc,
+            "--commit-operator",
+            &ops.commit_addr,
+            "--prove-operator",
+            &ops.prove_addr,
+            "--execute-operator",
+            &ops.execute_addr,
+            "--l1-da-validator",
+            &relayed_sl_da_validator,
+            "--l2-da-commitment-scheme",
+            "blobs-and-pubdata-keccak256",
+            "--l1-gas-price",
+            &l1_gas_price_str,
+            "--out",
+            &phase3_safe_abs,
+        ])?;
         contracts_backend
-            .protocol_ops(&[
-                "chain",
-                "gateway",
-                "migrate",
-                "enable-validators",
-                "--bridgehub",
-                &bridgehub,
-                "--chain-id",
-                &chain_id.to_string(),
-                "--gateway-chain-id",
-                &GATEWAY.id.to_string(),
-                "--gateway-rpc-url",
-                &gw_l2_rpc,
-                "--commit-operator",
-                &ops.commit_addr,
-                "--prove-operator",
-                &ops.prove_addr,
-                "--execute-operator",
-                &ops.execute_addr,
-                "--gateway-validator-timelock",
-                &gw_validator_timelock,
-                "--l1-rpc-url",
-                l1_rpc_url,
-                "--private-key",
-                &ops.owner_pk,
-            ])
-            .with_context(|| format!("enable validators for chain {chain_id}"))?;
-
-        // protocol_ops migrate step 6: set-da-validator-pair (owner_pk)
-        println!("  Setting DA validator pair via gateway for chain {chain_id}");
-        // Gateway-settling rollup chains use BlobsAndPubdataKeccak256 (scheme 3),
-        // which matches ROLLUP_L2_DA_COMMITMENT_SCHEME in Config.sol and the
-        // RelayedSLDAValidator / CalldataDAGateway pair on the gateway.
-        contracts_backend
-            .protocol_ops(&[
-                "chain",
-                "gateway",
-                "migrate",
-                "set-da-validator-pair",
-                "--bridgehub",
-                &bridgehub,
-                "--chain-id",
-                &chain_id.to_string(),
-                "--gateway-chain-id",
-                &GATEWAY.id.to_string(),
-                "--gateway-rpc-url",
-                &gw_l2_rpc,
-                "--l1-da-validator",
-                &relayed_sl_da_validator,
-                "--l2-da-commitment-scheme",
-                "blobs-and-pubdata-keccak256",
-                "--l1-rpc-url",
-                l1_rpc_url,
-                "--private-key",
-                &ops.owner_pk,
-            ])
-            .with_context(|| format!("set DA validator pair for chain {chain_id}"))?;
+            .parse_safe_bundles(&phase3_safe_rel, l1_rpc_url)?
+            .apply(&[&ops.owner_pk, &keys.deployer_pk])
+            .context("apply migrate phase 3 bundles")?;
 
         println!("  Funding gateway L2 for chain {} operators", chain_id);
         for addr in [&ops.commit_addr, &ops.prove_addr, &ops.execute_addr] {
@@ -1486,7 +1301,7 @@ async fn run_generation_flow(
         }
         // Now wait for enough batches to be executed on L1 so the state is visible
         gw_server
-            .wait_for_executed_batches_with_traffic()
+            .wait_for_traffic_tx_executed_on_l1()
             .context("gateway batches after priority queue drain")?;
     }
 
@@ -1582,14 +1397,11 @@ async fn run_generation_flow(
     )?;
     println!("  Updated {}.yaml with ephemeral state", gw_ops.dir_name);
 
-    Ok(FlowResult {
-        bridgehub,
-        bytecodes_supplier,
-        gw_diamond_proxy,
-        gw_settling_diamond_proxies,
-        l1_settling_diamond_proxies,
-        gateway_ephemeral_state: gw_state_archive,
-    })
+    // ecosystem.yaml is already written and doesn't need further updates —
+    // the gateway ephemeral state path lives in the gateway's chain config YAML.
+    println!("  ecosystem.yaml finalized");
+
+    Ok(FlowResult {})
 }
 
 // ---------------------------------------------------------------------------
@@ -1680,7 +1492,46 @@ async fn main() -> Result<()> {
 
     // Create the era-contracts execution backend (local or Docker session).
     let contracts_backend = EraContractsBackend::from_preset(&preset, "generate_l1_state", &[])?;
-    println!("Work directory: {}", contracts_backend.work_dir().display());
+    // Clear stale artifacts from a previous run. We remove *contents* but keep
+    // the directory itself — Docker mode bind-mounts the parent and the VirtioFS
+    // bug on macOS makes re-created directories invisible to the container.
+    let work_dir = contracts_backend.work_dir();
+    if work_dir.exists() {
+        for entry in fs::read_dir(work_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                fs::remove_dir_all(&path)?;
+            } else {
+                fs::remove_file(&path)?;
+            }
+        }
+    }
+    println!("Work directory: {}", work_dir.display());
+
+    // Clean l1-contracts/script-out/ in local mode. Forge scripts write TOML/JSON
+    // dumps there (e.g. force-deployments-dump.toml), and leftover files from an
+    // earlier run can be picked up by the current run, producing subtle
+    // cross-run contamination (e.g. genesis-hash mismatches). Docker mode starts
+    // a fresh container each run, so script-out is already pristine there.
+    if let Some(era_path) = contracts_backend.era_path() {
+        let script_out = era_path.join("l1-contracts").join("script-out");
+        if script_out.exists() {
+            for entry in fs::read_dir(&script_out)? {
+                let entry = entry?;
+                if entry.file_name() == ".gitkeep" {
+                    continue;
+                }
+                let path = entry.path();
+                if path.is_dir() {
+                    fs::remove_dir_all(&path)?;
+                } else {
+                    fs::remove_file(&path)?;
+                }
+            }
+        }
+    }
+
     if let EraContractsBackend::Docker { ref session, .. } = contracts_backend {
         println!(
             "Started era-contracts Docker session: {}",
@@ -1695,6 +1546,12 @@ async fn main() -> Result<()> {
     let chains_arg = all_chain_names.join(",");
     println!("\n=== Generating wallets.yaml ===");
     let work_wallets = run_wallets_gen(&contracts_backend, &chains_arg)?;
+    // Copy to output_dir alongside ecosystem.yaml so downstream helpers
+    // that infer wallets.yaml from ecosystem.yaml's parent directory can
+    // find it.
+    let wallets_dst = output_dir.join("wallets.yaml");
+    fs::copy(&work_wallets, &wallets_dst)
+        .with_context(|| format!("copy wallets to {}", wallets_dst.display()))?;
     let wallets: WalletsFile = serde_yaml::from_str(
         &fs::read_to_string(&work_wallets)
             .with_context(|| format!("read {}", work_wallets.display()))?,
@@ -1722,22 +1579,13 @@ async fn main() -> Result<()> {
     let l1_settling_ops: Vec<ChainOperators> =
         l1_settling_chains().map(ops_for).collect::<Result<_>>()?;
 
-    // ----------------------------------------------------------------
-    // Step 1: Build contracts (local only — Docker image has pre-built artifacts)
-    // ----------------------------------------------------------------
-    if let Some(era_path) = era_local_path(&preset) {
-        println!("\n=== Building contracts ===");
-        let status = Command::new("yarn")
-            .args(["build-all-contracts"])
-            .current_dir(&era_path)
-            .status()
-            .context("yarn build-all-contracts")?;
-        if !status.success() {
-            anyhow::bail!("yarn build-all-contracts failed");
-        }
-        println!("  Contracts built");
+    // Contracts (`yarn build-all-contracts`) and server / protocol_ops
+    // binaries are built by `integration-tests/build.rs` at cargo compile
+    // time — by the time this tool starts, everything is up-to-date.
+    if era_local_path(&preset).is_some() {
+        println!("\n=== Contracts built by integration-tests/build.rs ===");
     } else {
-        println!("\n=== Skipping contract build (using Docker image) ===");
+        println!("\n=== Using Docker image for contracts ===");
     }
 
     // ----------------------------------------------------------------
@@ -1774,7 +1622,7 @@ async fn main() -> Result<()> {
     anvil.terminate()?;
 
     // Propagate any error from the main flow
-    let flow = result?;
+    let _flow = result?;
 
     if !output_path.exists() {
         anyhow::bail!("Anvil did not write state file: {}", output_path.display());
@@ -1785,44 +1633,6 @@ async fn main() -> Result<()> {
         output_path.display(),
         file_size as f64 / 1_048_576.0
     );
-
-    // Write ecosystem.yaml alongside the state file
-    let eco_path = output_dir.join("ecosystem.yaml");
-    let eco_config = integration_tests::l1_state::EcosystemConfig {
-        l1_state: output_path
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .to_string(),
-        bridgehub: flow.bridgehub,
-        bytecodes_supplier: flow.bytecodes_supplier,
-        gateway: integration_tests::l1_state::GatewayMeta {
-            chain_id: GATEWAY.id,
-            diamond_proxy: flow.gw_diamond_proxy,
-            ephemeral_state: flow.gateway_ephemeral_state.to_string_lossy().to_string(),
-            name: GATEWAY.name.to_string(),
-        },
-        gateway_settling_chains: gateway_settling_chains()
-            .enumerate()
-            .map(|(i, spec)| integration_tests::l1_state::ChainMeta {
-                chain_id: spec.id,
-                diamond_proxy: flow.gw_settling_diamond_proxies[i].clone(),
-                ephemeral_state: None,
-                name: spec.name.to_string(),
-            })
-            .collect(),
-        l1_settling_chains: l1_settling_chains()
-            .enumerate()
-            .map(|(i, spec)| integration_tests::l1_state::ChainMeta {
-                chain_id: spec.id,
-                diamond_proxy: flow.l1_settling_diamond_proxies[i].clone(),
-                ephemeral_state: None,
-                name: spec.name.to_string(),
-            })
-            .collect(),
-    };
-    fs::write(&eco_path, serde_yaml::to_string(&eco_config)?)?;
-    println!("Ecosystem config: {}", eco_path.display());
 
     // Write metadata.json last — its presence marks the cache entry as complete.
     // Store the actual image SHAs so we can detect when a newer image is available.

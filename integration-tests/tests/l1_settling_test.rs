@@ -9,23 +9,16 @@ async fn run_l1_settling_test() -> Result<()> {
     let preset = load_current_preset()?;
     let eco = load_ecosystem(&preset)?;
 
-    anyhow::ensure!(
-        !eco.l1_settling_chains.is_empty(),
-        "No L1-settling chains in ecosystem"
-    );
-    let chain = &eco.l1_settling_chains[0];
-    println!(
-        "Testing L1-settling chain {} (diamond_proxy={})",
-        chain.chain_id, chain.diamond_proxy
-    );
-
     println!("\n=== Loading l1-state.json into Anvil ===");
-    let state_path = resolve_l1_state(&preset, &eco)?;
+    let state_path = resolve_l1_state(&preset)?;
     let anvil = Anvil::spawn_with_state(&state_path).await?;
     let l1_rpc_url = anvil.rpc_url().to_string();
     println!("Anvil ready at {l1_rpc_url}");
 
-    let config_path = chain_config_path(&preset, &chain.name)?;
+    let (chain_name, chain_id) = eco.l1_settling();
+    println!("Testing L1-settling chain {chain_id} ({chain_name})");
+
+    let config_path = chain_config_path(&preset, chain_name)?;
     anyhow::ensure!(
         config_path.exists(),
         "Chain config not found: {}",
@@ -34,12 +27,12 @@ async fn run_l1_settling_test() -> Result<()> {
 
     println!(
         "\n=== Starting server for L1-settling chain {} ===",
-        chain.chain_id
+        chain_id
     );
     // `generate-l1-state` pre-queued an L1→L2 deposit for
     // DEFAULT_ANVIL_PRIVATE_KEY; the server processes it as it spins up,
     // so we do not need a test-side `fund_account_via_l1_deposit` here.
-    let server = ServerBuilder::new(preset, &chain.name)
+    let server = ServerBuilder::new(preset, chain_name)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server: {:?}", e))?;
 
@@ -48,12 +41,12 @@ async fn run_l1_settling_test() -> Result<()> {
 
     println!("\n=== Waiting for executed batches ===");
     let executed = server
-        .wait_for_executed_batches_with_traffic()
+        .wait_for_traffic_tx_executed_on_l1()
         .context("wait for executed batches")?;
 
     println!(
         "\n=== L1-settling chain {} reached {} executed batches ===",
-        chain.chain_id, executed
+        chain_id, executed
     );
 
     let _ = server.kill();

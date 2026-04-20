@@ -180,7 +180,6 @@ The `run_name` (second argument) is used for log directory naming. The third arg
 | `run(&[command], workdir)` | Run an arbitrary command (e.g. `zksync-os-genesis-gen`) |
 | `read_protocol_ops_output(relative)` | Read a file written by `protocol_ops --out` from the work directory |
 | `read_repo_file(relative)` | Read a file relative to the era-contracts repo root |
-| `execute_protocol_ops_out(file, rpc, key)` | Execute transactions from a `protocol_ops --out` JSON file |
 | `work_dir()` | Host-side path where all outputs are stored |
 | `work_path(relative)` | Resolve a path inside the work directory (host or container, depending on mode) |
 | `repo_path(relative)` | Resolve a path relative to the era-contracts root |
