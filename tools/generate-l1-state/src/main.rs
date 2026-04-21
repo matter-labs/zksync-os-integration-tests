@@ -984,12 +984,9 @@ async fn run_generation_flow(
     if gw_rocks_db.exists() {
         fs::remove_dir_all(&gw_rocks_db).context("remove stale gateway_rocksdb")?;
     }
-    let logs_dir = output_dir.join("logs");
-    fs::create_dir_all(&logs_dir).context("create logs dir for state generation")?;
     let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), GATEWAY.name)
         .config_path(&gw_config_path)
         .rocks_db_path(&gw_rocks_db)
-        .logs_dir(&logs_dir)
         .spawn(&anvil_handle)
         .context("Failed to start gateway server")?;
     let gw_l2_rpc = gw_server.rpc_url();
