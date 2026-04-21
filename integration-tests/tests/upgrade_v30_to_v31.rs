@@ -936,7 +936,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     let config_path = write_upgrade_server_config(&chain_dir, &contracts, &wallets, 6565)?;
 
     println!("Starting zksync-os-server on v30.2...");
-    let server = ServerBuilder::new(preset, "default")
+    let server = ServerBuilder::new(preset.clone(), "default")
         .config_path(&config_path)
         .spawn(&anvil)
         .map_err(|e| anyhow::anyhow!("Failed to start server via ServerBuilder: {:?}", e))?;
@@ -1010,10 +1010,17 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     )?;
     let target_minor = ((packed >> 32) & 0xFFFF_FFFF) as u32;
     let target_patch = (packed & 0xFFFF_FFFF) as u32;
+    // URLs handed to the readiness-checker must match its network context.
+    // Dispatch on `preset.zksync_os_server`'s shape (mirrors the existing
+    // `Anvil::rpc_url_for` / `Server::rpc_url_for` convention): DockerTag
+    // implies a dockerised test setup where native child processes reach
+    // host-published ports via `host.docker.internal`.
+    let l1_url_for_checker = anvil.rpc_url_for(&preset.zksync_os_server);
+    let l2_url_for_checker = server.rpc_url_for(&preset.zksync_os_server);
     wait_for_server_to_process_upgrade(
         &contracts_backend,
-        l1_rpc_url,
-        server.rpc_url().as_str(),
+        &l1_url_for_checker,
+        &l2_url_for_checker,
         &contracts,
         6565,
         target_minor,

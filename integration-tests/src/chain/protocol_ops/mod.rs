@@ -30,8 +30,6 @@ const PROTOCOL_OPS_DOCKER_ENV: &[(&str, &str)] = &[("FOUNDRY_DISABLE_NIGHTLY_WAR
 /// the amd64 image runs under Rosetta). Start once, exec many.
 pub struct ContractsContainerSession {
     container_name: String,
-    /// Host-side work directory.
-    host_work_dir: PathBuf,
     /// Container-side work directory (e.g. `/contracts/work/{name}`).
     container_work_dir: String,
 }
@@ -58,7 +56,6 @@ impl ContractsContainerSession {
         // Ensure host dirs exist (for reading outputs back later).
         let script_out = work_dir.join("script-out");
         fs::create_dir_all(&script_out)?;
-        let abs_work = fs::canonicalize(work_dir)?;
         let abs_mount_root = fs::canonicalize(mount_root)?;
 
         let name = format!("era-session-{}", uuid::Uuid::new_v4());
@@ -97,7 +94,6 @@ impl ContractsContainerSession {
 
         let session = Self {
             container_name: name,
-            host_work_dir: abs_work,
             container_work_dir: container_work_dir.to_string(),
         };
 
@@ -137,9 +133,7 @@ impl ContractsContainerSession {
         let mut cmd = Command::new("docker");
         cmd.arg("exec");
         for (k, v) in envs {
-            let v = v
-                .replace("://localhost:", "://host.docker.internal:")
-                .replace("://127.0.0.1:", "://host.docker.internal:");
+            let v = remap_localhost_url(v);
             cmd.arg("-e").arg(format!("{}={}", k, v));
         }
         if let Some(wd) = workdir {
@@ -181,40 +175,19 @@ impl ContractsContainerSession {
         &self.container_name
     }
 
-    /// Rewrite localhost URLs so they resolve inside the Docker container.
-    fn remap_localhost_url(url: &str) -> String {
-        url.replace("://localhost:", "://host.docker.internal:")
-            .replace("://127.0.0.1:", "://host.docker.internal:")
-    }
-
     /// Run `protocol_ops <args>` inside the container.
-    /// Rewrites `--l1-rpc-url`, `--gateway-rpc-url`, and `--out` args for Docker.
+    /// Rewrites `--l1-rpc-url` and `--gateway-rpc-url` values so `localhost` /
+    /// `127.0.0.1` resolve to the Docker host. Path arguments (`--out`,
+    /// `--safe-file`, …) are passed through verbatim; callers must build them
+    /// with `EraContractsBackend::work_path` so they already refer to
+    /// container-visible paths.
     pub fn protocol_ops(&self, args: &[&str]) -> anyhow::Result<String> {
         let mut rewritten: Vec<String> = Vec::with_capacity(args.len());
         let mut i = 0;
         while i < args.len() {
-            if args[i] == "--out" && i + 1 < args.len() {
-                // Rewrite host path → container path. Strip the host work_dir
-                // prefix and map into the container work_dir.
-                let host_path = std::path::Path::new(args[i + 1]);
-                let relative = host_path
-                    .strip_prefix(&self.host_work_dir)
-                    .unwrap_or_else(|_| {
-                        // Fallback: just use filename
-                        Path::new(host_path.file_name().unwrap_or_default())
-                    });
-                rewritten.push(args[i].to_string());
-                rewritten.push(format!(
-                    "{}/{}",
-                    self.container_work_dir,
-                    relative.display()
-                ));
-                i += 2;
-                continue;
-            }
             if (args[i] == "--l1-rpc-url" || args[i] == "--gateway-rpc-url") && i + 1 < args.len() {
                 rewritten.push(args[i].to_string());
-                rewritten.push(Self::remap_localhost_url(args[i + 1]));
+                rewritten.push(remap_localhost_url(args[i + 1]));
                 i += 2;
                 continue;
             }
@@ -234,7 +207,7 @@ impl ContractsContainerSession {
     ) -> anyhow::Result<String> {
         let mut command: Vec<String> = vec!["forge".into(), "script".into()];
         for arg in forge_args {
-            command.push(Self::remap_localhost_url(arg));
+            command.push(remap_localhost_url(arg));
         }
         let cmd_refs: Vec<&str> = command.iter().map(|s| s.as_str()).collect();
         self.exec(&cmd_refs, extra_envs, Some("/contracts/l1-contracts"))
@@ -244,11 +217,24 @@ impl ContractsContainerSession {
     pub fn cast(&self, args: &[&str]) -> anyhow::Result<String> {
         let mut command: Vec<String> = vec!["cast".into()];
         for arg in args {
-            command.push(Self::remap_localhost_url(arg));
+            command.push(remap_localhost_url(arg));
         }
         let cmd_refs: Vec<&str> = command.iter().map(|s| s.as_str()).collect();
         self.exec(&cmd_refs, &[], None)
     }
+}
+
+/// Rewrite `localhost` / `127.0.0.1` URLs so they resolve from inside a
+/// Docker container reaching the host. Values without those prefixes pass
+/// through unchanged.
+///
+/// Callers must decide *when* this remap is appropriate (e.g. unconditionally
+/// when executing inside `ContractsContainerSession`, or gated on
+/// `/.dockerenv` when spawning a native child that inherits an in-container
+/// network namespace).
+pub fn remap_localhost_url(url: &str) -> String {
+    url.replace("://localhost:", "://host.docker.internal:")
+        .replace("://127.0.0.1:", "://host.docker.internal:")
 }
 
 impl Drop for ContractsContainerSession {

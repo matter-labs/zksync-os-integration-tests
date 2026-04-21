@@ -2,13 +2,16 @@
 //!
 //! Replicates the L1 setup from `update_server.py` / `protocol_ops_init` test:
 //!  1. Build contracts (local only — Docker image has pre-built artifacts)
+//!  1a. Generate genesis.json (must run before any forge script — `DeployCTM`
+//!      reads `genesis_root` from `configs/genesis/zksync-os/latest.json` and
+//!      bakes it into the CTM on L1)
 //!  2. Start Anvil with `--dump-state`
 //!  3. Deploy L1 contracts via `protocol_ops ecosystem init`
 //!  4. Register gateway chain via `protocol_ops chain init`
 //!  5. Register gateway-settling chains (with `--pause-deposits --skip-priority-txs`)
 //!  6. Register L1-settling chains
 //!  7. Fund all operator accounts on L1
-//!  8. Generate genesis.json, per-chain config files, and wallets.yaml
+//!  8. Write per-chain config files and wallets.yaml
 //!  9. Start gateway server
 //! 10. Fund gateway L2 (test account + operators)
 //! 11. Wait for gateway executed batches
@@ -555,6 +558,7 @@ async fn run_generation_flow(
     output_path: &Path,
     preset: &integration_tests::presets::Preset,
     anvil_port: u16,
+    genesis_path: &Path,
 ) -> Result<FlowResult> {
     // ----------------------------------------------------------------
     // Step 3a: Fund all L1 accounts used by the flow
@@ -918,16 +922,7 @@ async fn run_generation_flow(
     }
 
     // ----------------------------------------------------------------
-    // Step 8: Generate genesis.json into output directory
-    // ----------------------------------------------------------------
-    let work_genesis = run_genesis_gen(contracts_backend)?;
-    let genesis_path = output_dir.join("genesis.json");
-    fs::copy(&work_genesis, &genesis_path)
-        .with_context(|| format!("copy genesis to {}", genesis_path.display()))?;
-    let genesis_path = genesis_path.canonicalize()?;
-
-    // ----------------------------------------------------------------
-    // Step 8b: Write per-chain config files into output directory
+    // Step 8: Write per-chain config files into output directory
     //   gateway.yaml, gateway_settling_a.yaml, gateway_settling_b.yaml, l1_settling.yaml
     // ----------------------------------------------------------------
     println!("\n=== Writing chain configs ===");
@@ -1585,6 +1580,18 @@ async fn main() -> Result<()> {
         println!("\n=== Using Docker image for contracts ===");
     }
 
+    // Regenerate configs/genesis/zksync-os/latest.json from current bytecodes
+    // *before* any forge script runs. `DeployCTM.s.sol` reads `genesis_root`
+    // out of that file and bakes it into the CTM on L1; if genesis-gen ran
+    // after ecosystem init, L1 would be registered with a stale root and the
+    // server's freshly-computed root would mismatch on startup.
+    println!("\n=== Generating genesis.json ===");
+    let work_genesis = run_genesis_gen(&contracts_backend)?;
+    let genesis_path = output_dir.join("genesis.json");
+    fs::copy(&work_genesis, &genesis_path)
+        .with_context(|| format!("copy genesis to {}", genesis_path.display()))?;
+    let genesis_path = genesis_path.canonicalize()?;
+
     // ----------------------------------------------------------------
     // Step 2: Start Anvil with --dump-state
     // ----------------------------------------------------------------
@@ -1609,6 +1616,7 @@ async fn main() -> Result<()> {
         &output_path,
         &preset,
         anvil_port,
+        &genesis_path,
     )
     .await;
 

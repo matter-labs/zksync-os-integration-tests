@@ -300,6 +300,8 @@ fn docker_image_repo_for_key(key: &str) -> Option<&'static str> {
 /// ancestor.
 /// Returns `(image_sha, tip_sha, fell_back)`.
 fn resolve_git_ref_with_image(
+    preset_name: &str,
+    key: &str,
     repo_url: &str,
     image_repo: &str,
     git_ref: &str,
@@ -320,7 +322,7 @@ fn resolve_git_ref_with_image(
     }
 
     eprintln!(
-        "  Image {} not found, checking {} previous commits...",
+        "  [{preset_name} / {key}] Image {} not found, checking {} previous commits...",
         &tip_sha[..12],
         IMAGE_FALLBACK_DEPTH
     );
@@ -331,7 +333,7 @@ fn resolve_git_ref_with_image(
         let image = format!("{}:{}", image_repo, sha);
         if docker_image_exists(&image) {
             eprintln!(
-                "  Falling back to {} (latest commit with image)",
+                "  [{preset_name} / {key}] Falling back to {} (latest commit with image)",
                 &sha[..12]
             );
             return Some((sha.clone(), tip_sha.clone(), true));
@@ -370,7 +372,7 @@ fn parse_repo_ref(
     if let (Some(repo_url), Some(image_repo)) =
         (github_repo_for_key(key), docker_image_repo_for_key(key))
     {
-        match resolve_git_ref_with_image(repo_url, image_repo, value) {
+        match resolve_git_ref_with_image(preset_name, key, repo_url, image_repo, value) {
             Some((image_sha, tip, fell_back)) => {
                 if fell_back {
                     eprintln!(

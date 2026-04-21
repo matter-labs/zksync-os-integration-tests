@@ -153,7 +153,6 @@ if [[ "$(uname -s)" == "Linux" ]]; then
 else
   # macOS / Docker Desktop: rewrite localhost → host.docker.internal in args.
   docker_args+=(--add-host=host.docker.internal:host-gateway)
-  docker_args+=(-e ETH_RPC_URL="${ETH_RPC_URL:-http://host.docker.internal:8545}")
   rewritten=()
   for arg in "$@"; do
     arg="${arg//:\/\/localhost:/:\/\/host.docker.internal:}"

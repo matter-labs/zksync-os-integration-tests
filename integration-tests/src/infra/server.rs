@@ -670,9 +670,20 @@ impl Server {
         &self.server_name
     }
 
-    /// Get the L2 RPC URL
+    /// Get the L2 RPC URL (localhost-side; works for callers running on the host).
     pub fn rpc_url(&self) -> String {
         format!("http://127.0.0.1:{}", self.host_port)
+    }
+
+    /// Get the L2 RPC URL appropriate for a consumer matching `repo_ref`.
+    /// Path = localhost; DockerTag = `host.docker.internal` (for consumers
+    /// running inside a Docker container that need to reach the server's
+    /// host-published port). Mirrors [`Anvil::rpc_url_for`].
+    pub fn rpc_url_for(&self, repo_ref: &RepoRef) -> String {
+        match repo_ref {
+            RepoRef::Path(_) => self.rpc_url(),
+            RepoRef::DockerTag { .. } => format!("http://host.docker.internal:{}", self.host_port),
+        }
     }
 
     /// Settlement-layer RPC URL: the gateway's L2 RPC when this server was
