@@ -174,7 +174,7 @@ for preset in $all_presets; do
       rm -rf l1-state-cache
     fi
     echo "--- [$preset] Generating ecosystem ---"
-    if ! cargo run --release -p generate-l1-state -- "$preset"; then
+    if ! PRESETS_FILE="$PRESETS_FILE" cargo run --release -p generate-l1-state -- "$preset"; then
       echo "ERROR: generate-l1-state failed for preset '$preset'"
       exit 1
     fi
