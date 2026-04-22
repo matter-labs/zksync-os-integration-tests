@@ -1,0 +1,9 @@
+v30_to_v31_upgrade:
+  era_contracts: kl/l2V31upgrade
+  # TODO: revert to `main` once the factory_deps + preimage changes on this
+  # branch have landed and a main image with them has been published. Using
+  # the local checkout here so server-side edits (debug logging,
+  # upgrade_tx_watcher tweaks) are exercised by the upgrade test.
+  zksync_os_server: gateway-live-migration-fixes
+  tests:
+    - upgrade_v30_to_v31
