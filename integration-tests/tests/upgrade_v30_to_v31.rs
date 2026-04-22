@@ -734,6 +734,7 @@ fn wait_for_server_to_process_upgrade(
             &minor_str,
             "--target-patch-version",
             &patch_str,
+            "--zksync-os",
         ])
         .status()
         .context("failed to spawn upgrade-readiness-checker")?;
