@@ -1487,21 +1487,7 @@ async fn main() -> Result<()> {
     // Create the era-contracts execution backend (local or Docker session).
     let contracts_backend = EraContractsBackend::from_preset(&preset, "generate_l1_state", &[])?;
     let output_path = contracts_backend.work_dir().join("l1-state.json");
-    // Clear stale artifacts from a previous run. We remove *contents* but keep
-    // the directory itself — Docker mode bind-mounts the parent and the VirtioFS
-    // bug on macOS makes re-created directories invisible to the container.
     let work_dir = contracts_backend.work_dir();
-    if work_dir.exists() {
-        for entry in fs::read_dir(work_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-            if path.is_dir() {
-                fs::remove_dir_all(&path)?;
-            } else {
-                fs::remove_file(&path)?;
-            }
-        }
-    }
     println!("Work directory: {}", work_dir.display());
 
     // Clean l1-contracts/script-out/ in local mode. Forge scripts write TOML/JSON

@@ -50,7 +50,7 @@ use integration_tests::l1_state::{
     chain_config_path, load_ecosystem, load_wallets, resolve_ecosystem_dir, resolve_l1_state,
 };
 use integration_tests::presets::load_current_preset;
-use integration_tests::protocol_ops::{EraContractsBackend, CONTAINER_L1_STATE_CACHE_MOUNT};
+use integration_tests::protocol_ops::EraContractsBackend;
 use integration_tests::server::ServerBuilder;
 
 sol! {
@@ -153,14 +153,7 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
         .wait_for_traffic_tx_executed_on_l1()
         .context("L1-settling chain batches (pre-migration)")?;
 
-    // Mount the preset's l1-state-cache/<key> dir into the container so
-    // protocol_ops can read ecosystem.yaml from the host cache.
-    let eco_dir = resolve_ecosystem_dir(&preset)?;
-    let contracts_backend = EraContractsBackend::from_preset(
-        &preset,
-        "migrate_to_gateway",
-        &[(&eco_dir, CONTAINER_L1_STATE_CACHE_MOUNT)],
-    )?;
+    let contracts_backend = EraContractsBackend::from_preset(&preset, "migrate_to_gateway", &[])?;
 
     // Stage the cached vote-prep TOML into the era-contracts script-out
     // directory so phase commands can read it at the forge-canonical path
@@ -177,11 +170,7 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
         .context("stage gateway_vote_prep_out.toml into era-contracts script-out")?;
     let vote_prep_path_rel = "/script-out/gateway_vote_prep_out.toml".to_string();
 
-    let eco_path = contracts_backend.path_under_mount(
-        &eco_dir,
-        CONTAINER_L1_STATE_CACHE_MOUNT,
-        "ecosystem.yaml",
-    );
+    let eco_path = contracts_backend.ecosystem_yaml_path(&preset)?;
 
     let signers: &[&str] = &[&chain_owner_pk, &deployer_pk];
     let l1_gas_price = "1000000000".to_string();

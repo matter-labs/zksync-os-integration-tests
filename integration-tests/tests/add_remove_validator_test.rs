@@ -8,9 +8,7 @@
 
 use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
-use integration_tests::l1_state::{
-    load_ecosystem, load_wallets, resolve_ecosystem_dir, resolve_l1_state,
-};
+use integration_tests::l1_state::{load_ecosystem, load_wallets, resolve_l1_state};
 use integration_tests::presets::load_current_preset;
 use integration_tests::protocol_ops::EraContractsBackend;
 
@@ -209,8 +207,7 @@ async fn run_add_remove_validator_test() -> Result<()> {
     // `test-run-logs/add_remove_validator/<subdir>/safe`. A per-invocation
     // UUID keeps concurrent test runs isolated and prevents stale bundles
     // from a prior run leaking into the current `manifest.json`.
-    let eco_dir = resolve_ecosystem_dir(&preset)?;
-    let eco_path = eco_dir.join("ecosystem.yaml").to_string_lossy().to_string();
+    let eco_path = contracts_backend.ecosystem_yaml_path(&preset)?;
     let run_tag = uuid::Uuid::new_v4();
     let add_subdir = format!("add_remove_validator_{run_tag}/validator_add");
     let remove_subdir = format!("add_remove_validator_{run_tag}/validator_remove");

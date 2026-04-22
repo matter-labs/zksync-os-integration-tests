@@ -38,7 +38,7 @@ use integration_tests::l1_state::{
     chain_config_path, load_ecosystem, load_wallets, resolve_l1_state,
 };
 use integration_tests::presets::load_current_preset;
-use integration_tests::protocol_ops::{EraContractsBackend, CONTAINER_L1_STATE_CACHE_MOUNT};
+use integration_tests::protocol_ops::EraContractsBackend;
 use integration_tests::server::ServerBuilder;
 
 use alloy::primitives::keccak256;
@@ -196,15 +196,9 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
         .wait_for_traffic_tx_executed_on_l1()
         .context("gateway-settling chain batches (pre-migration)")?;
 
-    // Mount the preset's l1-state-cache/<key> dir into the container so
-    // protocol_ops can read ecosystem.yaml from the host cache. Host-side test
-    // code reads other files (diamond_cut_data.hex) directly from `eco_dir`.
     let eco_dir = integration_tests::l1_state::resolve_ecosystem_dir(&preset)?;
-    let contracts_backend = EraContractsBackend::from_preset(
-        &preset,
-        "migrate_live_chain_from_gateway",
-        &[(&eco_dir, CONTAINER_L1_STATE_CACHE_MOUNT)],
-    )?;
+    let contracts_backend =
+        EraContractsBackend::from_preset(&preset, "migrate_live_chain_from_gateway", &[])?;
 
     let gateway_diamond_proxy = bh
         .getZKChain(U256::from(eco.gateway_chain_id()))
@@ -287,11 +281,7 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
         .context("read diamond_cut_data.hex — regenerate l1-state cache")?;
     let l1_diamond_cut_data = l1_diamond_cut_data.trim().to_string();
 
-    let eco_path = contracts_backend.path_under_mount(
-        &eco_dir,
-        CONTAINER_L1_STATE_CACHE_MOUNT,
-        "ecosystem.yaml",
-    );
+    let eco_path = contracts_backend.ecosystem_yaml_path(&preset)?;
     let signers: &[&str] = &[&chain_owner_pk, &deployer_pk];
 
     // Per-run UUID suffix in the work dir: `contracts_artifacts/` survives

@@ -120,12 +120,11 @@ pub enum EraContractsBackend {
 /// Container-side mount point for the stable `test-run-logs` directory.
 const CONTAINER_LOGS_MOUNT: &str = "/contracts/test-run-logs";
 
-/// Container-side mount point convention for a preset's `l1-state-cache/<key>`
-/// directory. Tests that need protocol_ops (running inside the container) to
-/// read files from the preset cache pass this as the target of an extra mount
-/// and use [`EraContractsBackend::path_under_mount`] to translate host paths
-/// into their container equivalents.
-pub const CONTAINER_L1_STATE_CACHE_MOUNT: &str = "/contracts/l1-state-cache";
+/// Container-side mount point for the preset's `l1-state-cache/<key>`
+/// directory. [`EraContractsBackend::from_preset`] bind-mounts the resolved
+/// host cache here automatically so protocol_ops (running inside the
+/// container) can read `ecosystem.yaml` and sibling fixtures directly.
+const CONTAINER_L1_STATE_CACHE_MOUNT: &str = "/contracts/l1-state-cache";
 
 impl EraContractsBackend {
     /// Create an `EraContractsBackend` from a preset configuration.
@@ -134,6 +133,12 @@ impl EraContractsBackend {
     ///
     /// `extra_mounts` are additional `(host_path, container_path)` volume mounts
     /// for Docker mode. They are ignored in local mode.
+    ///
+    /// In Docker mode this additionally bind-mounts the preset's resolved
+    /// l1-state-cache directory at [`CONTAINER_L1_STATE_CACHE_MOUNT`] so
+    /// protocol_ops can read `ecosystem.yaml` and sibling fixtures straight
+    /// from the cache. Use [`Self::ecosystem_yaml_path`] to get a path
+    /// suitable for the `--ecosystem` flag.
     pub fn from_preset(
         preset: &Preset,
         work_name: &str,
@@ -143,7 +148,13 @@ impl EraContractsBackend {
             RepoRef::Path(p) => Self::local(p, work_name),
             RepoRef::DockerTag { tag, .. } => {
                 let image = format!("{}:{}", ERA_CONTRACTS_PROTOCOL_IMAGE_REPO, tag);
-                Self::docker(&image, tag, extra_mounts)
+                let cache_dir = crate::l1_state::resolve_ecosystem_dir(preset).context(
+                    "resolve preset l1-state-cache dir for default Docker mount \
+                     (run `generate-l1-state` first if the cache is missing)",
+                )?;
+                let mut mounts: Vec<(&Path, &str)> = extra_mounts.to_vec();
+                mounts.push((cache_dir.as_path(), CONTAINER_L1_STATE_CACHE_MOUNT));
+                Self::docker(&image, tag, &mounts)
             }
         }
     }
@@ -226,6 +237,28 @@ impl EraContractsBackend {
         }
     }
 
+    /// Path to `ecosystem.yaml` as seen from inside the backend, ready to be
+    /// passed as `--ecosystem` to a protocol_ops invocation.
+    ///
+    /// - Local: host path from [`crate::l1_state::resolve_ecosystem_dir`].
+    /// - Docker: container path `{CONTAINER_L1_STATE_CACHE_MOUNT}/ecosystem.yaml`,
+    ///   backed by the l1-state-cache bind-mount that [`Self::from_preset`]
+    ///   sets up.
+    pub fn ecosystem_yaml_path(&self, preset: &Preset) -> Result<String> {
+        match self {
+            EraContractsBackend::Local { .. } => {
+                let cache_dir = crate::l1_state::resolve_ecosystem_dir(preset)?;
+                Ok(cache_dir
+                    .join("ecosystem.yaml")
+                    .to_string_lossy()
+                    .to_string())
+            }
+            EraContractsBackend::Docker { .. } => {
+                Ok(format!("{}/ecosystem.yaml", CONTAINER_L1_STATE_CACHE_MOUNT))
+            }
+        }
+    }
+
     /// Return a path suitable for passing to tools running inside the backend.
     /// Both modes resolve this to the same physical location.
     ///
@@ -253,32 +286,6 @@ impl EraContractsBackend {
                 era_path.join(relative).to_string_lossy().to_string()
             }
             EraContractsBackend::Docker { .. } => format!("/contracts/{}", relative),
-        }
-    }
-
-    /// For a file under a host directory that's been bind-mounted into the
-    /// container as an `extra_mount`, return the path visible inside the
-    /// backend.
-    ///
-    /// - Local: `host_root.join(relative)` as a host path string (the
-    ///   filesystem is directly visible; `container_root` is ignored).
-    /// - Docker: `"{container_root}/{relative}"`.
-    ///
-    /// `host_root` / `container_root` must match a mount pair passed as
-    /// `extra_mounts` to [`Self::from_preset`] / [`Self::docker`].
-    pub fn path_under_mount(
-        &self,
-        host_root: &Path,
-        container_root: &str,
-        relative: &str,
-    ) -> String {
-        match self {
-            EraContractsBackend::Local { .. } => {
-                host_root.join(relative).to_string_lossy().to_string()
-            }
-            EraContractsBackend::Docker { .. } => {
-                format!("{}/{}", container_root.trim_end_matches('/'), relative)
-            }
         }
     }
 
