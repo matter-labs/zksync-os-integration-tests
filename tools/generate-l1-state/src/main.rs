@@ -2,9 +2,9 @@
 //!
 //! Replicates the L1 setup from `update_server.py` / `protocol_ops_init` test:
 //!  1. Build contracts (local only — Docker image has pre-built artifacts)
-//!  1a. Generate genesis.json (must run before any forge script — `DeployCTM`
-//!      reads `genesis_root` from `configs/genesis/zksync-os/latest.json` and
-//!      bakes it into the CTM on L1)
+//!     1a. Generate genesis.json (must run before any forge script — `DeployCTM`
+//!     reads `genesis_root` from `configs/genesis/zksync-os/latest.json` and
+//!     bakes it into the CTM on L1)
 //!  2. Start Anvil with `--dump-state`
 //!  3. Deploy L1 contracts via `protocol_ops ecosystem init`
 //!  4. Register gateway chain via `protocol_ops chain init`
@@ -845,7 +845,7 @@ async fn run_generation_flow(
         GATEWAY.name,
         GATEWAY.id,
         &zk_token_address,
-        &gw_ops,
+        gw_ops,
         &[],
     )?;
     let gw_diamond_proxy = resolve_diamond(GATEWAY.id)?;
@@ -926,7 +926,7 @@ async fn run_generation_flow(
         let mut builder = ServerConfigBuilder::new(
             &bridgehub,
             &bytecodes_supplier,
-            &genesis_path,
+            genesis_path,
             ops.chain_id,
             &ops.commit_pk,
             &ops.prove_pk,
@@ -1380,7 +1380,7 @@ async fn run_generation_flow(
         integration_tests::server_config::ServerConfigBuilder::new(
             &bridgehub,
             &bytecodes_supplier,
-            &genesis_path,
+            genesis_path,
             GATEWAY.id,
             &gw_ops.commit_pk,
             &gw_ops.prove_pk,

@@ -34,10 +34,11 @@
 //!     (batches 1..=N) live on the old L1 diamond — the migration copies
 //!     totals via `Migrator.forwardedBridgeMint` but not event history — so
 //!     init panics with "failed to find committed batch X on L1".
-//!   Re-enable this test once the server supports bootstrapping on a
-//!   post-migration settlement layer (e.g. by trusting local RocksDB state
-//!   instead of rescanning SL events, or adding a post-migration init
-//!   codepath). Until then this test is not listed in presets.yaml.
+//!
+//! Re-enable this test once the server supports bootstrapping on a
+//! post-migration settlement layer (e.g. by trusting local RocksDB state
+//! instead of rescanning SL events, or adding a post-migration init
+//! codepath). Until then this test is not listed in presets.yaml.
 use std::time::Duration;
 
 use alloy::primitives::{Address, U256};
