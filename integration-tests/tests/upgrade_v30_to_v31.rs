@@ -760,6 +760,24 @@ fn run_stage3_token_migration(
     println!("\n  Running ecosystem upgrade stage3 (token migration)...");
     let deployer_key = wallets.ecosystem.deployer.private_key.as_str();
     let bridgehub = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
+
+    // Stage3 reads `l1-contracts/script-config/v31-bridged-tokens.toml` listing
+    // legacy bridged tokens to register in the NTV. A fresh test chain has none,
+    // but the file must exist or `vm.readFile` reverts. Create an empty one.
+    if let Some(era_path) = contracts_backend.era_path() {
+        let bridged_tokens_toml = era_path
+            .join("l1-contracts/script-config/v31-bridged-tokens.toml");
+        if !bridged_tokens_toml.exists() {
+            fs::write(&bridged_tokens_toml, "[tokens]\nbridged_tokens = []\n")
+                .with_context(|| {
+                    format!(
+                        "Failed to write placeholder bridged-tokens toml at {}",
+                        bridged_tokens_toml.display()
+                    )
+                })?;
+        }
+    }
+
     contracts_backend
         .forge_script(
             &[

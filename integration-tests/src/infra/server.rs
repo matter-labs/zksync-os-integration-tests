@@ -35,8 +35,8 @@ pub enum L1DepositBaseToken {
 }
 
 static TEST_RUN_ID: OnceLock<String> = OnceLock::new();
-const SERVER_READY_MAX_ATTEMPTS: usize = 30;
-const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(100);
+const SERVER_READY_MAX_ATTEMPTS: usize = 60;
+const SERVER_READY_RETRY_DELAY: Duration = Duration::from_millis(500);
 const ZKSYNC_OS_SERVER_IMAGE_REPO: &str = "ghcr.io/matter-labs/zksync-os-server";
 
 pub fn get_or_create_run_id(name: &str) -> &'static str {
