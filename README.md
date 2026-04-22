@@ -288,7 +288,6 @@ rm -rf test-run-logs l1-state-cache
 .
 ├── presets.yaml                  # Preset definitions
 ├── run-tests.sh                  # Main test orchestrator
-├── protocol-ops.sh               # Local-debugging wrapper: `docker run protocol-ops …`
 ├── integration-tests/            # Rust crate: test infra + test files
 │   ├── src/
 │   │   ├── presets.rs            # Preset loading and resolution

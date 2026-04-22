@@ -554,7 +554,6 @@ async fn run_generation_flow(
     gw_ops: &ChainOperators,
     gw_settling_ops: &[ChainOperators],
     l1_settling_ops: &[ChainOperators],
-    output_dir: &Path,
     output_path: &Path,
     preset: &integration_tests::presets::Preset,
     anvil_port: u16,
@@ -740,7 +739,7 @@ async fn run_generation_flow(
     // ----------------------------------------------------------------
     // Write ecosystem.yaml early — downstream `chain init` / `chain gateway *`
     // invocations consume it via `--ecosystem <path>`.
-    let eco_yaml_path = output_dir.join("ecosystem.yaml");
+    let eco_yaml_path = contracts_backend.work_dir().join("ecosystem.yaml");
     let eco_config = integration_tests::l1_state::EcosystemConfig {
         bridgehub: bridgehub.clone(),
         // Bake the ecosystem deployer EOA into ecosystem.yaml so downstream
@@ -763,7 +762,7 @@ async fn run_generation_flow(
     fs::write(&eco_yaml_path, serde_yaml::to_string(&eco_config)?)?;
     println!("  ecosystem.yaml -> {}", eco_yaml_path.display());
 
-    let eco_path = eco_yaml_path.to_string_lossy().to_string();
+    let eco_path = contracts_backend.work_path("ecosystem.yaml");
 
     // Helper to resolve a chain's diamond proxy from the bridgehub.
     let resolve_diamond = |chain_id: u64| -> Result<String> {
@@ -949,7 +948,9 @@ async fn run_generation_flow(
             builder = builder.gateway("RUNTIME", GATEWAY.id);
         }
         fs::write(
-            output_dir.join(format!("{}.yaml", ops.dir_name)),
+            contracts_backend
+                .work_dir()
+                .join(format!("{}.yaml", ops.dir_name)),
             builder.build(),
         )?;
         println!("  {}.yaml ({label})", ops.dir_name);
@@ -970,7 +971,9 @@ async fn run_generation_flow(
     // Step 9: Start gateway server
     // ----------------------------------------------------------------
     println!("\n=== Starting gateway server (chain {}) ===", GATEWAY.id);
-    let gw_config_path = output_dir.join(format!("{}.yaml", gw_ops.dir_name));
+    let gw_config_path = contracts_backend
+        .work_dir()
+        .join(format!("{}.yaml", gw_ops.dir_name));
 
     let anvil_handle = integration_tests::anvil::Anvil::wrap_external(anvil_port);
     let gw_rocks_db = contracts_backend.work_dir().join("gateway_rocksdb");
@@ -1124,14 +1127,14 @@ async fn run_generation_flow(
     // --l1-diamond-cut-data (Anvil state dumps don't preserve historical
     // events, so the auto-resolution from NewUpgradeCutData events doesn't
     // work). The format matches what resolve_l1_diamond_cut_data returns.
-    let diamond_cut_data_path = output_dir.join("diamond_cut_data.hex");
+    let diamond_cut_data_path = contracts_backend.work_dir().join("diamond_cut_data.hex");
     fs::write(&diamond_cut_data_path, &vote_prep.diamond_cut_data)?;
     println!("  diamond_cut_data.hex -> {}", diamond_cut_data_path.display());
 
     // Cache the full vote-prep TOML so skip-generate tests (e.g. live
     // migrate-to-gateway) can stage it into the era-contracts script-out
     // directory before invoking the migrate-to phase commands.
-    let vote_prep_toml_path = output_dir.join("gateway_vote_prep_out.toml");
+    let vote_prep_toml_path = contracts_backend.work_dir().join("gateway_vote_prep_out.toml");
     fs::write(&vote_prep_toml_path, &gw_vote_toml)?;
     println!(
         "  gateway_vote_prep_out.toml -> {}",
@@ -1373,7 +1376,9 @@ async fn run_generation_flow(
         .canonicalize()
         .unwrap_or_else(|_| gw_state_archive.clone());
     fs::write(
-        output_dir.join(format!("{}.yaml", gw_ops.dir_name)),
+        contracts_backend
+            .work_dir()
+            .join(format!("{}.yaml", gw_ops.dir_name)),
         integration_tests::server_config::ServerConfigBuilder::new(
             &bridgehub,
             &bytecodes_supplier,
@@ -1480,10 +1485,10 @@ async fn main() -> Result<()> {
     let generation_start = std::time::Instant::now();
     fs::create_dir_all(&output_dir)?;
     let output_dir = fs::canonicalize(&output_dir)?;
-    let output_path = output_dir.join("l1-state.json");
 
     // Create the era-contracts execution backend (local or Docker session).
     let contracts_backend = EraContractsBackend::from_preset(&preset, "generate_l1_state", &[])?;
+    let output_path = contracts_backend.work_dir().join("l1-state.json");
     // Clear stale artifacts from a previous run. We remove *contents* but keep
     // the directory itself — Docker mode bind-mounts the parent and the VirtioFS
     // bug on macOS makes re-created directories invisible to the container.
@@ -1538,12 +1543,6 @@ async fn main() -> Result<()> {
     let chains_arg = all_chain_names.join(",");
     println!("\n=== Generating wallets.yaml ===");
     let work_wallets = run_wallets_gen(&contracts_backend, &chains_arg)?;
-    // Copy to output_dir alongside ecosystem.yaml so downstream helpers
-    // that infer wallets.yaml from ecosystem.yaml's parent directory can
-    // find it.
-    let wallets_dst = output_dir.join("wallets.yaml");
-    fs::copy(&work_wallets, &wallets_dst)
-        .with_context(|| format!("copy wallets to {}", wallets_dst.display()))?;
     let wallets: WalletsFile = serde_yaml::from_str(
         &fs::read_to_string(&work_wallets)
             .with_context(|| format!("read {}", work_wallets.display()))?,
@@ -1586,11 +1585,7 @@ async fn main() -> Result<()> {
     // after ecosystem init, L1 would be registered with a stale root and the
     // server's freshly-computed root would mismatch on startup.
     println!("\n=== Generating genesis.json ===");
-    let work_genesis = run_genesis_gen(&contracts_backend)?;
-    let genesis_path = output_dir.join("genesis.json");
-    fs::copy(&work_genesis, &genesis_path)
-        .with_context(|| format!("copy genesis to {}", genesis_path.display()))?;
-    let genesis_path = genesis_path.canonicalize()?;
+    let genesis_path = run_genesis_gen(&contracts_backend)?.canonicalize()?;
 
     // ----------------------------------------------------------------
     // Step 2: Start Anvil with --dump-state
@@ -1612,7 +1607,6 @@ async fn main() -> Result<()> {
         &gw_ops,
         &gw_settling_ops,
         &l1_settling_ops,
-        &output_dir,
         &output_path,
         &preset,
         anvil_port,
@@ -1638,6 +1632,21 @@ async fn main() -> Result<()> {
         output_path.display(),
         file_size as f64 / 1_048_576.0
     );
+
+    // Copy cacheable artifacts from the transient work_dir into output_dir.
+    // Subdirectories (safe-bundle dirs, rocksdb, etc.) are ephemeral — only
+    // top-level regular files are persisted.
+    let work_dir = contracts_backend.work_dir();
+    for entry in fs::read_dir(work_dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let src = entry.path();
+        let dst = output_dir.join(entry.file_name());
+        fs::copy(&src, &dst)
+            .with_context(|| format!("copy {} to {}", src.display(), dst.display()))?;
+    }
 
     // Write metadata.json last — its presence marks the cache entry as complete.
     // Store the actual image SHAs so we can detect when a newer image is available.

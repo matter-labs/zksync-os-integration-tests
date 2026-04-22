@@ -384,13 +384,12 @@ async fn run_ecosystem_upgrades(
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
-    eco_yaml_path: &Path,
 ) -> Result<UpgradePrepareOutput> {
     println!("\n=== Running Ecosystem Upgrades (direct protocol-ops) ===");
 
     fund_governance_accounts(l1_rpc_url, wallets)?;
 
-    let eco_path_str = eco_yaml_path.to_string_lossy().to_string();
+    let eco_path_str = contracts_backend.work_path("ecosystem.yaml");
     let deployer_key = wallets.ecosystem.deployer.private_key.as_str();
     let governor_key = wallets.ecosystem.governor.private_key.as_str();
     let deployer_addr = wallets.ecosystem.deployer.address.as_str();
@@ -559,28 +558,6 @@ fn verify_protocol_version(
     Ok(())
 }
 
-/// Path under `test-run-logs/upgrade_v30_to_v31/` for this test's Safe bundles.
-///
-/// Every admin-action call in this test goes through the prepare → execute-safe
-/// pattern: protocol-ops runs the forge script under `--simulate` against a
-/// forked anvil and drops a Gnosis Safe Transaction Builder JSON bundle into
-/// this directory; the test then applies each bundle against the real anvil via
-/// `dev execute-safe`. Keeping the bundles inside the run-logs tree means they
-/// stay inspectable after the test (both pass and fail) and don't collide with
-/// bundles produced by earlier runs.
-fn safe_bundle_dir(subdir: &str) -> Result<PathBuf> {
-    let project_root = std::env::var("CARGO_MANIFEST_DIR")
-        .map(PathBuf::from)
-        .context("CARGO_MANIFEST_DIR must be set (cargo test provides it)")?;
-    Ok(project_root
-        .parent()
-        .context("no parent for CARGO_MANIFEST_DIR")?
-        .join("test-run-logs")
-        .join("upgrade_v30_to_v31")
-        .join("prepare_bundles")
-        .join(subdir))
-}
-
 /// Return the one `.safe.json` file protocol-ops emitted into `dir`. Bails if
 /// the count isn't exactly one — that would mean the protocol-ops command grew
 /// to emit multiple bundles and the caller needs updating to iterate them.
@@ -631,18 +608,18 @@ fn run_chain_upgrade(
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
-    eco_yaml_path: &Path,
     chain_name: &str,
 ) -> Result<()> {
     let _ = contracts; // kept for signature parity with other upgrade helpers
     println!("\n  Preparing chain upgrade Safe bundle (protocol_ops --simulate)...");
     let governor_key = wallets.ecosystem.governor.private_key.as_str();
     let access_control_restriction = contracts.l1.access_control_restriction_addr.as_str();
-    let eco_path_str = eco_yaml_path.to_string_lossy().to_string();
+    let eco_path_str = contracts_backend.work_path("ecosystem.yaml");
 
-    let out_dir = safe_bundle_dir("chain_upgrade")?;
-    reset_safe_bundle_dir(&out_dir)?;
-    let out_dir_str = out_dir.to_string_lossy().to_string();
+    let out_rel = "chain_upgrade";
+    let out_host = contracts_backend.work_dir().join(out_rel);
+    reset_safe_bundle_dir(&out_host)?;
+    let out_arg = contracts_backend.work_path(out_rel);
 
     contracts_backend
         .protocol_ops(&[
@@ -651,7 +628,7 @@ fn run_chain_upgrade(
             "--l1-rpc-url",
             l1_rpc_url,
             "--out",
-            &out_dir_str,
+            &out_arg,
             "--ecosystem",
             &eco_path_str,
             "--chain",
@@ -661,8 +638,13 @@ fn run_chain_upgrade(
         ])
         .context("chain upgrade --simulate failed")?;
 
-    let bundle = single_safe_bundle(&out_dir)?;
-    println!("  chain upgrade Safe bundle: {}", bundle.display());
+    let bundle_host = single_safe_bundle(&out_host)?;
+    let bundle_name = bundle_host
+        .file_name()
+        .and_then(|n| n.to_str())
+        .context("safe bundle filename not valid UTF-8")?;
+    let bundle_arg = contracts_backend.work_path(&format!("{out_rel}/{bundle_name}"));
+    println!("  chain upgrade Safe bundle: {}", bundle_host.display());
 
     println!("  Applying chain upgrade bundle via `dev execute-safe`...");
     contracts_backend
@@ -670,7 +652,7 @@ fn run_chain_upgrade(
             "dev",
             "execute-safe",
             "--safe-file",
-            &bundle.to_string_lossy(),
+            &bundle_arg,
             "--l1-rpc-url",
             l1_rpc_url,
             "--private-key",
@@ -715,7 +697,7 @@ fn wait_for_server_to_process_upgrade(
     let minor_str = target_minor.to_string();
     let patch_str = target_patch.to_string();
 
-    let status = std::process::Command::new("cargo")
+    let mut child = std::process::Command::new("cargo")
         .args([
             "run",
             "--release",
@@ -736,8 +718,27 @@ fn wait_for_server_to_process_upgrade(
             &patch_str,
             "--zksync-os",
         ])
-        .status()
+        .spawn()
         .context("failed to spawn upgrade-readiness-checker")?;
+
+    // The tool retries forever on RPC errors. Cap the wall-clock here so a
+    // dead L2 server (connection refused) doesn't hang the test.
+    let timeout = Duration::from_secs(30);
+    let deadline = std::time::Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait().context("wait on upgrade-readiness-checker")? {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                anyhow::bail!(
+                    "upgrade-readiness-checker did not finish within {:?}",
+                    timeout
+                );
+            }
+            None => std::thread::sleep(Duration::from_millis(250)),
+        }
+    };
 
     anyhow::ensure!(
         status.success(),
@@ -970,9 +971,10 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         })?;
 
     // Synthesize a minimal ecosystem.yaml from contracts.yaml for
-    // protocol-ops (which takes --ecosystem <path>). Place next to
-    // wallets.yaml so downstream helpers can find both.
-    let eco_yaml_path = chain_dir.join("ecosystem.yaml");
+    // protocol-ops (which takes --ecosystem <path>). Write it into the
+    // backend's work_dir so it's visible inside the Docker container
+    // (only work_dir is mounted).
+    let eco_yaml_path = contracts_backend.work_dir().join("ecosystem.yaml");
     write_synthetic_ecosystem_yaml(
         &contracts,
         6565,
@@ -981,14 +983,8 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     )?;
 
     // Run ecosystem upgrade stages via direct protocol-ops.
-    let _script_output = run_ecosystem_upgrades(
-        &contracts_backend,
-        l1_rpc_url,
-        &contracts,
-        &wallets,
-        &eco_yaml_path,
-    )
-    .await?;
+    let _script_output =
+        run_ecosystem_upgrades(&contracts_backend, l1_rpc_url, &contracts, &wallets).await?;
 
     // Notify server about the upcoming upgrade. The `wait_for_server_to_process_upgrade`
     // call below (via upgrade-readiness-checker) enforces the stronger invariant we
@@ -1031,14 +1027,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     println!("Keeping zksync-os-server running during chain upgrade...");
 
     // Run chain upgrade
-    run_chain_upgrade(
-        &contracts_backend,
-        l1_rpc_url,
-        &contracts,
-        &wallets,
-        &eco_yaml_path,
-        "default",
-    )?;
+    run_chain_upgrade(&contracts_backend, l1_rpc_url, &contracts, &wallets, "default")?;
 
     // Verify the protocol version was upgraded to v31
     verify_protocol_version(&contracts_backend, l1_rpc_url, &contracts)?;
