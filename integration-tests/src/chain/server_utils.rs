@@ -323,8 +323,7 @@ pub(crate) fn get_l2_finalized_block_number(l2_rpc_url: &str) -> Result<u64> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let s = stdout.trim();
     if let Some(hex) = s.strip_prefix("0x") {
-        u64::from_str_radix(hex, 16)
-            .with_context(|| format!("parse finalized block hex {s:?}"))
+        u64::from_str_radix(hex, 16).with_context(|| format!("parse finalized block hex {s:?}"))
     } else {
         s.parse::<u64>()
             .with_context(|| format!("parse finalized block dec {s:?}"))
@@ -385,16 +384,21 @@ pub(crate) fn get_total_batches_executed(
     l1_rpc_url: &str,
     diamond_proxy_addr: &str,
 ) -> Result<u64> {
-    cast_u64_call(l1_rpc_url, diamond_proxy_addr, "getTotalBatchesExecuted()(uint256)")
-        .context("Failed to read getTotalBatchesExecuted")
+    cast_u64_call(
+        l1_rpc_url,
+        diamond_proxy_addr,
+        "getTotalBatchesExecuted()(uint256)",
+    )
+    .context("Failed to read getTotalBatchesExecuted")
 }
 
-fn get_total_batches_committed(
-    l1_rpc_url: &str,
-    diamond_proxy_addr: &str,
-) -> Result<u64> {
-    cast_u64_call(l1_rpc_url, diamond_proxy_addr, "getTotalBatchesCommitted()(uint256)")
-        .context("Failed to read getTotalBatchesCommitted")
+fn get_total_batches_committed(l1_rpc_url: &str, diamond_proxy_addr: &str) -> Result<u64> {
+    cast_u64_call(
+        l1_rpc_url,
+        diamond_proxy_addr,
+        "getTotalBatchesCommitted()(uint256)",
+    )
+    .context("Failed to read getTotalBatchesCommitted")
 }
 
 fn cast_u64_call(rpc_url: &str, target: &str, sig: &str) -> Result<u64> {

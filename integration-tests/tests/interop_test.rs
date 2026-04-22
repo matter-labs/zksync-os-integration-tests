@@ -200,12 +200,18 @@ async fn run_interop_message_test() -> Result<()> {
     }
 
     // ---- Start gateway ----
-    println!("\n=== Starting gateway server (chain {}) ===", eco.gateway_chain_id());
-    let gw_server = integration_tests::server::ServerBuilder::new(preset.clone(), integration_tests::l1_state::GATEWAY_CHAIN_NAME)
-        .ephemeral()
-        .config_path(&gw_config)
-        .spawn(&anvil)
-        .map_err(|e| anyhow::anyhow!("Failed to start gateway: {:?}", e))?;
+    println!(
+        "\n=== Starting gateway server (chain {}) ===",
+        eco.gateway_chain_id()
+    );
+    let gw_server = integration_tests::server::ServerBuilder::new(
+        preset.clone(),
+        integration_tests::l1_state::GATEWAY_CHAIN_NAME,
+    )
+    .ephemeral()
+    .config_path(&gw_config)
+    .spawn(&anvil)
+    .map_err(|e| anyhow::anyhow!("Failed to start gateway: {:?}", e))?;
     let gw_l2_rpc = gw_server.rpc_url();
     println!("Gateway ready at {gw_l2_rpc}");
 

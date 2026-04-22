@@ -66,8 +66,7 @@ fn extract_relayed_sl_da_validator(toml_body: &str) -> Result<String> {
     struct VotePrep {
         relayed_sl_da_validator: String,
     }
-    let parsed: VotePrep =
-        toml::from_str(toml_body).context("parse gateway_vote_prep_out.toml")?;
+    let parsed: VotePrep = toml::from_str(toml_body).context("parse gateway_vote_prep_out.toml")?;
     Ok(parsed.relayed_sl_da_validator)
 }
 
@@ -125,11 +124,14 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
         "\n=== Starting gateway server (chain {}) ===",
         eco.gateway_chain_id()
     );
-    let gw_server = ServerBuilder::new(preset.clone(), integration_tests::l1_state::GATEWAY_CHAIN_NAME)
-        .ephemeral()
-        .config_path(&gw_config)
-        .spawn(&anvil)
-        .map_err(|e| anyhow::anyhow!("Failed to start gateway: {:?}", e))?;
+    let gw_server = ServerBuilder::new(
+        preset.clone(),
+        integration_tests::l1_state::GATEWAY_CHAIN_NAME,
+    )
+    .ephemeral()
+    .config_path(&gw_config)
+    .spawn(&anvil)
+    .map_err(|e| anyhow::anyhow!("Failed to start gateway: {:?}", e))?;
     let gw_l2_rpc = gw_server.rpc_url();
     println!("Gateway ready at {gw_l2_rpc}");
 
@@ -362,8 +364,8 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
         .context("migrate-to-gateway phase 3 (validators)")?;
     contracts_backend
         .parse_safe_bundles(&phase3_safe_rel, &l1_rpc_url)?
-    .apply(signers)
-    .context("apply migrate-to-gateway phase 3 bundles")?;
+        .apply(signers)
+        .context("apply migrate-to-gateway phase 3 bundles")?;
 
     // ── Verify: settlementLayer flipped to gateway ───────────────────────
     let bridgehub_contract = IBridgehub::new(bridgehub_addr, &l1_provider);

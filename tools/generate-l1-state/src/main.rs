@@ -359,7 +359,6 @@ struct VotePrepOutput {
     relayed_sl_da_validator: String,
 }
 
-
 // Genesis generation
 // ---------------------------------------------------------------------------
 
@@ -824,9 +823,9 @@ async fn run_generation_flow(
             &safe_abs,
         ];
         args.extend_from_slice(extra_flags);
-        contracts_backend.protocol_ops(&args).with_context(|| {
-            format!("chain init failed for {chain_name} (id={chain_id})")
-        })?;
+        contracts_backend
+            .protocol_ops(&args)
+            .with_context(|| format!("chain init failed for {chain_name} (id={chain_id})"))?;
         contracts_backend
             .parse_safe_bundles(&safe_rel, l1_rpc_url)?
             .apply(&[
@@ -863,21 +862,13 @@ async fn run_generation_flow(
             ops.chain_id,
             ETH_BASE_TOKEN,
             ops,
-            &[
-                "--pause-deposits",
-                "true",
-                "--skip-priority-txs",
-                "true",
-            ],
+            &["--pause-deposits", "true", "--skip-priority-txs", "true"],
         )?;
     }
 
     // L1-settling chains (default: ETH base token, deposits live)
     for ops in l1_settling_ops {
-        println!(
-            "\n=== chain init: L1-settling chain {} ===",
-            ops.chain_id
-        );
+        println!("\n=== chain init: L1-settling chain {} ===", ops.chain_id);
         run_chain_init(
             &format!("generate_l1_state/chain_init_{}", ops.chain_id),
             &ops.dir_name,
@@ -989,7 +980,6 @@ async fn run_generation_flow(
         .context("Failed to start gateway server")?;
     let gw_l2_rpc = gw_server.rpc_url();
     println!("  Gateway server ready at {gw_l2_rpc}");
-
 
     // ----------------------------------------------------------------
     // Step 10: Fund gateway L2 (test account + gateway operators)
@@ -1129,12 +1119,17 @@ async fn run_generation_flow(
     // work). The format matches what resolve_l1_diamond_cut_data returns.
     let diamond_cut_data_path = contracts_backend.work_dir().join("diamond_cut_data.hex");
     fs::write(&diamond_cut_data_path, &vote_prep.diamond_cut_data)?;
-    println!("  diamond_cut_data.hex -> {}", diamond_cut_data_path.display());
+    println!(
+        "  diamond_cut_data.hex -> {}",
+        diamond_cut_data_path.display()
+    );
 
     // Cache the full vote-prep TOML so skip-generate tests (e.g. live
     // migrate-to-gateway) can stage it into the era-contracts script-out
     // directory before invoking the migrate-to phase commands.
-    let vote_prep_toml_path = contracts_backend.work_dir().join("gateway_vote_prep_out.toml");
+    let vote_prep_toml_path = contracts_backend
+        .work_dir()
+        .join("gateway_vote_prep_out.toml");
     fs::write(&vote_prep_toml_path, &gw_vote_toml)?;
     println!(
         "  gateway_vote_prep_out.toml -> {}",
@@ -1221,7 +1216,10 @@ async fn run_generation_flow(
     let l1_gas_price_str = MIGRATE_L1_GAS_PRICE_WEI.to_string();
     for ops in gw_settling_ops {
         let chain_id = ops.chain_id;
-        println!("\n=== Enabling validators for chain {} on gateway ===", chain_id);
+        println!(
+            "\n=== Enabling validators for chain {} on gateway ===",
+            chain_id
+        );
         let migrate_dir = format!("migrate_{chain_id}");
 
         let phase3_safe_rel = format!("{migrate_dir}/phase3/safe");

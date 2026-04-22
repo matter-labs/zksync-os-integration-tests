@@ -66,7 +66,10 @@ fn main() -> Result<()> {
     }
 
     for era in &era_paths {
-        eprintln!("build-artifacts: building era-contracts in {}", era.display());
+        eprintln!(
+            "build-artifacts: building era-contracts in {}",
+            era.display()
+        );
         build_era(era)?;
     }
     for server in &server_paths {
@@ -85,8 +88,7 @@ fn collect_local_paths(
     let mut era = BTreeSet::new();
     let mut server = BTreeSet::new();
 
-    let parsed: serde_yaml::Value =
-        serde_yaml::from_str(yaml).context("parse presets.yaml")?;
+    let parsed: serde_yaml::Value = serde_yaml::from_str(yaml).context("parse presets.yaml")?;
     let map = parsed
         .as_mapping()
         .context("presets.yaml root is not a mapping")?;
@@ -144,8 +146,7 @@ fn build_era(era: &Path) -> Result<()> {
         cmd.arg("build-all-contracts").current_dir(era);
         scrub_outer_cargo_env(&mut cmd);
         pipe_to_tty(&mut cmd);
-        run(&mut cmd)
-            .with_context(|| format!("yarn build-all-contracts in {}", era.display()))?;
+        run(&mut cmd).with_context(|| format!("yarn build-all-contracts in {}", era.display()))?;
     }
 
     for sub in [
@@ -232,9 +233,7 @@ fn pipe_to_tty(cmd: &mut Command) {
 }
 
 fn run(cmd: &mut Command) -> Result<()> {
-    let status = cmd
-        .status()
-        .with_context(|| format!("spawn {cmd:?}"))?;
+    let status = cmd.status().with_context(|| format!("spawn {cmd:?}"))?;
     if !status.success() {
         anyhow::bail!("command failed (exit {status}): {cmd:?}");
     }

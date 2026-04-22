@@ -21,7 +21,8 @@ async fn run_gateway_settling_test() -> Result<()> {
     println!("Gateway-settling chain {chain_id} ({chain_name})");
 
     // Resolve config paths from state directory
-    let gw_config_path = chain_config_path(&preset, integration_tests::l1_state::GATEWAY_CHAIN_NAME)?;
+    let gw_config_path =
+        chain_config_path(&preset, integration_tests::l1_state::GATEWAY_CHAIN_NAME)?;
     let chain_config = chain_config_path(&preset, chain_name)?;
     anyhow::ensure!(
         gw_config_path.exists(),
@@ -35,20 +36,23 @@ async fn run_gateway_settling_test() -> Result<()> {
     );
 
     // ---- Gateway server (ephemeral mode with archived RocksDB) ----
-    println!("\n=== Starting gateway server (chain {}) ===", eco.gateway_chain_id());
-    let gw_server = ServerBuilder::new(preset.clone(), integration_tests::l1_state::GATEWAY_CHAIN_NAME)
-        .ephemeral()
-        .config_path(&gw_config_path)
-        .spawn(&anvil)
-        .map_err(|e| anyhow::anyhow!("Failed to start gateway server: {:?}", e))?;
+    println!(
+        "\n=== Starting gateway server (chain {}) ===",
+        eco.gateway_chain_id()
+    );
+    let gw_server = ServerBuilder::new(
+        preset.clone(),
+        integration_tests::l1_state::GATEWAY_CHAIN_NAME,
+    )
+    .ephemeral()
+    .config_path(&gw_config_path)
+    .spawn(&anvil)
+    .map_err(|e| anyhow::anyhow!("Failed to start gateway server: {:?}", e))?;
     let gw_l2_rpc = gw_server.rpc_url();
     println!("Gateway server ready at {gw_l2_rpc}");
 
     // ---- Gateway-settling chain server (fresh, no ephemeral state) ----
-    println!(
-        "\n=== Starting gateway-settling chain {} ===",
-        chain_id
-    );
+    println!("\n=== Starting gateway-settling chain {} ===", chain_id);
     let chain_server = ServerBuilder::new(preset, chain_name)
         .gateway_rpc_url(&gw_l2_rpc)
         .spawn(&anvil)

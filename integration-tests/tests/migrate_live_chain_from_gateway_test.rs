@@ -161,12 +161,18 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
     let gw_config = chain_config_path(&preset, integration_tests::l1_state::GATEWAY_CHAIN_NAME)?;
     let chain_config = chain_config_path(&preset, chain_name)?;
 
-    println!("\n=== Starting gateway server (chain {}) ===", eco.gateway_chain_id());
-    let gw_server = ServerBuilder::new(preset.clone(), integration_tests::l1_state::GATEWAY_CHAIN_NAME)
-        .ephemeral()
-        .config_path(&gw_config)
-        .spawn(&anvil)
-        .map_err(|e| anyhow::anyhow!("Failed to start gateway: {:?}", e))?;
+    println!(
+        "\n=== Starting gateway server (chain {}) ===",
+        eco.gateway_chain_id()
+    );
+    let gw_server = ServerBuilder::new(
+        preset.clone(),
+        integration_tests::l1_state::GATEWAY_CHAIN_NAME,
+    )
+    .ephemeral()
+    .config_path(&gw_config)
+    .spawn(&anvil)
+    .map_err(|e| anyhow::anyhow!("Failed to start gateway: {:?}", e))?;
     let gw_l2_rpc = gw_server.rpc_url();
     println!("Gateway ready at {gw_l2_rpc}");
 
@@ -264,7 +270,10 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
         let owner_balance = owner_balance_raw.trim();
 
         println!("  ChainAdmin ({chain_admin}) ZK balance: {balance}");
-        println!("  Chain owner EOA ({}) ZK balance: {owner_balance}", chain_wallets.owner.address);
+        println!(
+            "  Chain owner EOA ({}) ZK balance: {owner_balance}",
+            chain_wallets.owner.address
+        );
         println!("  Gateway base token (ZK): {base_token}");
     }
 
@@ -376,7 +385,10 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
                 }
             }
         }
-        println!("  [debug] chain_owner L1 txs in new blocks: {}", found.len());
+        println!(
+            "  [debug] chain_owner L1 txs in new blocks: {}",
+            found.len()
+        );
         for (i, h) in found.iter().enumerate() {
             let receipt = l1_provider
                 .get_transaction_receipt(*h)
@@ -487,8 +499,7 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
         // Look for DepositsPaused(uint256,uint256) from the chain's L1
         // diamond. Its absence would mean phase-0's pause call never
         // actually ran on the Migrator facet.
-        let deposits_paused_topic =
-            keccak256("DepositsPaused(uint256,uint256)");
+        let deposits_paused_topic = keccak256("DepositsPaused(uint256,uint256)");
         let filter = Filter::new()
             .address(chain_l1_diamond)
             .event_signature(deposits_paused_topic)
@@ -643,10 +654,9 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
     // L1. `.apply()` above emitted it on the gateway diamond proxy. Scan
     // from block 0 — the diamond-proxy address filter already scopes the
     // search correctly.
-    let l2_priority_tx_hash =
-        fetch_priority_op_l2_hash(&l1_rpc_url, gateway_diamond_proxy, 0)
-            .await
-            .context("extract L2 priority tx hash from submit's L1 receipt")?;
+    let l2_priority_tx_hash = fetch_priority_op_l2_hash(&l1_rpc_url, gateway_diamond_proxy, 0)
+        .await
+        .context("extract L2 priority tx hash from submit's L1 receipt")?;
     let l2_priority_tx_hex = format!("{l2_priority_tx_hash:#x}");
     println!("  L2 priority tx hash (on gateway): {l2_priority_tx_hex}");
 

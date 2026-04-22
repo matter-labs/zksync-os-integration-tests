@@ -337,7 +337,9 @@ impl EraContractsBackend {
                 }
                 fs::write(&path, contents).with_context(|| format!("write {}", path.display()))
             }
-            EraContractsBackend::Docker { session, work_dir, .. } => {
+            EraContractsBackend::Docker {
+                session, work_dir, ..
+            } => {
                 let tempfile_name = format!(".write_repo_{}.tmp", uuid::Uuid::new_v4().simple());
                 let host_tempfile = work_dir.join(&tempfile_name);
                 fs::write(&host_tempfile, contents)
@@ -380,9 +382,7 @@ impl EraContractsBackend {
     /// a local era-contracts checkout path or a Docker image tag.
     pub fn protocol_ops_source(&self) -> String {
         match self {
-            EraContractsBackend::Local { era_path, .. } => {
-                era_path.to_string_lossy().to_string()
-            }
+            EraContractsBackend::Local { era_path, .. } => era_path.to_string_lossy().to_string(),
             EraContractsBackend::Docker { image_tag, .. } => image_tag.clone(),
         }
     }
@@ -599,5 +599,4 @@ impl EraContractsBackend {
 
         Ok(SafeBundles::new(self, l1_rpc_url, bundle_entries))
     }
-
 }

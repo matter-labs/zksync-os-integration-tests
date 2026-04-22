@@ -827,12 +827,9 @@ impl Server {
         )
         .context("send L2 traffic tx")?;
 
-        let target_block = wait_for_l2_tx_block_number(
-            l2_rpc_url.as_str(),
-            &tx_hash,
-            DEFAULT_WAIT_TIMEOUT,
-        )
-        .with_context(|| format!("wait for blockNumber on L2 tx {tx_hash}"))?;
+        let target_block =
+            wait_for_l2_tx_block_number(l2_rpc_url.as_str(), &tx_hash, DEFAULT_WAIT_TIMEOUT)
+                .with_context(|| format!("wait for blockNumber on L2 tx {tx_hash}"))?;
 
         println!(
             "  Sent L2 tx {tx_hash} in L2 block {target_block}; \

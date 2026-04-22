@@ -81,7 +81,6 @@ impl EcosystemConfig {
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Wallets
 // ---------------------------------------------------------------------------
@@ -243,9 +242,7 @@ fn resolve_ecosystem_dir_uncached(preset: &Preset) -> Result<PathBuf> {
 
     // Fallback: find a cache dir with the same contracts segment.
     let contracts_segment = repo_ref_cache_segment(&preset.era_contracts);
-    let cache_root = dir
-        .parent()
-        .context("cache dir has no parent")?;
+    let cache_root = dir.parent().context("cache dir has no parent")?;
     if let Ok(entries) = fs::read_dir(cache_root) {
         let mut candidates: Vec<PathBuf> = entries
             .filter_map(|e| e.ok())

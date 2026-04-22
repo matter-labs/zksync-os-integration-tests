@@ -21,11 +21,10 @@ struct UpgradePrepareOutput {
 }
 
 fn parse_upgrade_prepare_manifest(manifest_path: &Path) -> Result<UpgradePrepareOutput> {
-    let content = fs::read_to_string(manifest_path).with_context(|| {
-        format!("Failed to read manifest: {}", manifest_path.display())
-    })?;
-    let root: serde_json::Value = serde_json::from_str(&content)
-        .context("Failed to parse upgrade-prepare manifest.json")?;
+    let content = fs::read_to_string(manifest_path)
+        .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
+    let root: serde_json::Value =
+        serde_json::from_str(&content).context("Failed to parse upgrade-prepare manifest.json")?;
     let output = root
         .get("metadata")
         .and_then(|m| m.as_array())
@@ -75,7 +74,10 @@ fn write_synthetic_ecosystem_yaml(
         deployer: Some(deployer_addr.to_string()),
         chains: {
             let mut chains = std::collections::BTreeMap::new();
-            chains.insert(integration_tests::l1_state::GATEWAY_CHAIN_NAME.to_string(), 0);
+            chains.insert(
+                integration_tests::l1_state::GATEWAY_CHAIN_NAME.to_string(),
+                0,
+            );
             chains.insert("default".to_string(), chain_id);
             chains
         },
@@ -424,7 +426,10 @@ async fn run_ecosystem_upgrades(
             "--deployer-address",
             deployer_addr,
             "--bytecodes-supplier-address",
-            contracts.ecosystem_contracts.l1_bytecodes_supplier_addr.as_str(),
+            contracts
+                .ecosystem_contracts
+                .l1_bytecodes_supplier_addr
+                .as_str(),
             "--rollup-da-manager-address",
             contracts.ecosystem_contracts.l1_rollup_da_manager.as_str(),
             "--is-zk-sync-os",
@@ -589,8 +594,7 @@ fn single_safe_bundle(dir: &Path) -> Result<PathBuf> {
 /// fail). Deletes the directory entirely if it exists and recreates it empty.
 fn reset_safe_bundle_dir(dir: &Path) -> Result<()> {
     if dir.exists() {
-        fs::remove_dir_all(dir)
-            .with_context(|| format!("remove_dir_all {}", dir.display()))?;
+        fs::remove_dir_all(dir).with_context(|| format!("remove_dir_all {}", dir.display()))?;
     }
     fs::create_dir_all(dir).with_context(|| format!("mkdir -p {}", dir.display()))?;
     Ok(())
@@ -682,9 +686,9 @@ fn wait_for_server_to_process_upgrade(
 ) -> Result<()> {
     println!("\n  Waiting for server to process L2 upgrade tx (upgrade-readiness-checker)...");
 
-    let era_path = contracts_backend
-        .era_path()
-        .ok_or_else(|| anyhow::anyhow!("upgrade-readiness-checker requires a local era-contracts checkout"))?;
+    let era_path = contracts_backend.era_path().ok_or_else(|| {
+        anyhow::anyhow!("upgrade-readiness-checker requires a local era-contracts checkout")
+    })?;
     let tool_dir = era_path.join("tools").join("upgrade-readiness-checker");
     let manifest = tool_dir.join("Cargo.toml");
     anyhow::ensure!(
@@ -726,7 +730,10 @@ fn wait_for_server_to_process_upgrade(
     let timeout = Duration::from_secs(30);
     let deadline = std::time::Instant::now() + timeout;
     let status = loop {
-        match child.try_wait().context("wait on upgrade-readiness-checker")? {
+        match child
+            .try_wait()
+            .context("wait on upgrade-readiness-checker")?
+        {
             Some(status) => break status,
             None if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
@@ -765,16 +772,17 @@ fn run_stage3_token_migration(
     // legacy bridged tokens to register in the NTV. A fresh test chain has none,
     // but the file must exist or `vm.readFile` reverts. Create an empty one.
     if let Some(era_path) = contracts_backend.era_path() {
-        let bridged_tokens_toml = era_path
-            .join("l1-contracts/script-config/v31-bridged-tokens.toml");
+        let bridged_tokens_toml =
+            era_path.join("l1-contracts/script-config/v31-bridged-tokens.toml");
         if !bridged_tokens_toml.exists() {
-            fs::write(&bridged_tokens_toml, "[tokens]\nbridged_tokens = []\n")
-                .with_context(|| {
+            fs::write(&bridged_tokens_toml, "[tokens]\nbridged_tokens = []\n").with_context(
+                || {
                     format!(
                         "Failed to write placeholder bridged-tokens toml at {}",
                         bridged_tokens_toml.display()
                     )
-                })?;
+                },
+            )?;
         }
     }
 
@@ -1045,7 +1053,13 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     println!("Keeping zksync-os-server running during chain upgrade...");
 
     // Run chain upgrade
-    run_chain_upgrade(&contracts_backend, l1_rpc_url, &contracts, &wallets, "default")?;
+    run_chain_upgrade(
+        &contracts_backend,
+        l1_rpc_url,
+        &contracts,
+        &wallets,
+        "default",
+    )?;
 
     // Verify the protocol version was upgraded to v31
     verify_protocol_version(&contracts_backend, l1_rpc_url, &contracts)?;
