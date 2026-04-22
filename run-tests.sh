@@ -126,8 +126,8 @@ fi
 # ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
-total_pass=0
-total_fail=0
+presets_passed=0
+presets_failed=0
 failed_list=""
 
 mkdir -p test-run-logs
@@ -207,95 +207,47 @@ for preset in $all_presets; do
   echo "--- [$preset] Running ${#selected_tests[@]} tests in parallel via nextest ---"
   echo "  filter: $filterset"
 
-  # Capture stderr so we can parse per-test pass/fail after the run.
-  # Nextest emits lines like:
-  #   PASS [   0.234s] (1/3) integration-tests::<binary> <test_fn>
-  #   FAIL [   1.234s] (2/3) integration-tests::<binary> <test_fn>
-  # to stderr for every test, and exits non-zero if any failed.
-  nextest_stderr="test-run-logs/nextest-${preset}.stderr"
-  mkdir -p "$(dirname "$nextest_stderr")"
-
-  # With `--save-logs`, also capture the full combined stdout+stderr
-  # (test println!, tracing output, nextest progress) to a stable path so
-  # the full run is still inspectable after the terminal scrolls. Without
-  # the flag we stay on nextest's default capturing behaviour.
+  # With `--save-logs`, capture the full combined stdout+stderr to a stable
+  # path so the full run is inspectable after the terminal scrolls. Without
+  # the flag we leave nextest's default capturing behaviour in place.
   nextest_log="test-run-logs/nextest-${preset}.log"
+  mkdir -p "$(dirname "$nextest_log")"
 
   set +e
-  # `--color=never` is the canonical way (per nextest docs) to disable
-  # color output. We need plain text so the grep below matches reliably
-  # in CI, where `CARGO_TERM_COLOR=always` would otherwise wrap
-  # `PASS`/`FAIL` tokens in ANSI escape codes.
-  #
-  # `--save-logs` forwards `--no-capture` so tests' println! / `tracing`
-  # output stream live, and tees the full combined run into
-  # `$nextest_log`. Nextest's pass/fail summary lines still land on
-  # stderr, which we continue tee-ing to $nextest_stderr for the
-  # post-run parse.
-  nextest_extra_flags=()
   if $SAVE_LOGS; then
-    nextest_extra_flags+=(--no-capture)
     echo "  Saving combined run output to: $nextest_log"
-    # Truncate the log so each invocation starts fresh; the `tee` calls below
-    # append to it, so without this a re-run would concatenate onto the prior
-    # run's output and make log scraping ambiguous.
+    # Truncate so each invocation starts fresh.
     : > "$nextest_log"
     PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
       cargo nextest run \
         --color=never \
         --package integration-tests \
         --no-fail-fast \
-        ${nextest_extra_flags[@]+"${nextest_extra_flags[@]}"} \
+        --no-capture \
         -E "$filterset" \
         > >(tee -a "$nextest_log") \
-        2> >(tee -a "$nextest_log" "$nextest_stderr" >&2)
+        2> >(tee -a "$nextest_log" >&2)
   else
     PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" \
       cargo nextest run \
         --color=never \
         --package integration-tests \
         --no-fail-fast \
-        ${nextest_extra_flags[@]+"${nextest_extra_flags[@]}"} \
-        -E "$filterset" \
-        2> >(tee "$nextest_stderr" >&2)
+        -E "$filterset"
   fi
   nextest_exit=$?
   set -e
 
-  # Parse pass/fail per test binary. Scraping nextest's human output
-  # with regex is admittedly a bit overkill — the simpler alternative is
-  # to trust nextest's own exit code and treat the whole preset as one
-  # pass/fail. We do it this way because it keeps the per-test
-  # granularity (and the `failed_list` summary) that the script had
-  # before nextest, which is much more useful for diagnosing CI runs
-  # with many passing tests and a single failure.
-  #
-  # The pattern accounts for nextest's `(N/M)` progress counter between
-  # the timing block and the binary name; `[[:space:]]+` handles any
-  # inter-token whitespace. Sample lines that must match:
-  #
-  #   PASS [   0.234s] integration-tests::<binary> <test_fn>
-  #   PASS [  41.301s] (1/3) integration-tests::<binary> <test_fn>
-  #   FAIL [   1.234s] (2/3) integration-tests::<binary> <test_fn>
-  for test_name in "${selected_tests[@]}"; do
-    if grep -Eq "PASS[[:space:]]+\[[^]]*\][[:space:]]+(\([0-9]+/[0-9]+\)[[:space:]]+)?integration-tests::${test_name}[[:space:]]" "$nextest_stderr"; then
-      echo "  PASS: $test_name"
-      total_pass=$((total_pass + 1))
-    elif grep -Eq "FAIL[[:space:]]+\[[^]]*\][[:space:]]+(\([0-9]+/[0-9]+\)[[:space:]]+)?integration-tests::${test_name}[[:space:]]" "$nextest_stderr"; then
-      echo "  FAIL: $test_name"
-      total_fail=$((total_fail + 1))
-      failed_list="${failed_list}  - ${preset}/${test_name}"$'\n'
-    else
-      # Neither PASS nor FAIL observed — treat as failure (build error,
-      # nextest crash, filter mismatch, etc).
-      echo "  FAIL: $test_name (no nextest status — see $nextest_stderr)"
-      total_fail=$((total_fail + 1))
-      failed_list="${failed_list}  - ${preset}/${test_name}"$'\n'
-    fi
-  done
-
-  if [[ $nextest_exit -ne 0 ]]; then
-    echo "  (nextest exited with $nextest_exit)"
+  # Trust nextest's exit code for per-preset pass/fail. Which specific
+  # test failed is visible in the nextest output above (or $nextest_log
+  # with --save-logs) — simpler and more robust than scraping.
+  if [[ $nextest_exit -eq 0 ]]; then
+    echo "  PASS: $preset (${#selected_tests[@]} tests)"
+    presets_passed=$((presets_passed + 1))
+  else
+    echo "  FAIL: $preset (nextest exit $nextest_exit)"
+    presets_failed=$((presets_failed + 1))
+    failed_list="${failed_list}  - ${preset}"$'\n'
   fi
 done
 
@@ -304,10 +256,10 @@ done
 # ---------------------------------------------------------------------------
 echo ""
 echo "========================================"
-echo "Summary: $total_pass passed, $total_fail failed"
-if [[ $total_fail -gt 0 ]]; then
+echo "Summary: $presets_passed presets passed, $presets_failed presets failed"
+if [[ $presets_failed -gt 0 ]]; then
   echo "Failed:"
   echo -n "$failed_list"
 fi
 echo "========================================"
-[[ $total_fail -eq 0 ]]
+[[ $presets_failed -eq 0 ]]

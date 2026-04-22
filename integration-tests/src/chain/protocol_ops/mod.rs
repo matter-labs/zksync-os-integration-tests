@@ -12,7 +12,9 @@ use crate::utils::find_project_root;
 
 pub mod contracts_backend;
 
-pub use contracts_backend::{EraContractsBackend, SafeBundleEntry, SafeBundles};
+pub use contracts_backend::{
+    EraContractsBackend, SafeBundleEntry, SafeBundles, CONTAINER_L1_STATE_CACHE_MOUNT,
+};
 
 pub const ERA_CONTRACTS_PROTOCOL_IMAGE_REPO: &str = "ghcr.io/matter-labs/protocol-ops";
 

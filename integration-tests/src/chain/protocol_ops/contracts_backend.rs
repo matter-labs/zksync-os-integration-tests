@@ -120,6 +120,13 @@ pub enum EraContractsBackend {
 /// Container-side mount point for the stable `test-run-logs` directory.
 const CONTAINER_LOGS_MOUNT: &str = "/contracts/test-run-logs";
 
+/// Container-side mount point convention for a preset's `l1-state-cache/<key>`
+/// directory. Tests that need protocol_ops (running inside the container) to
+/// read files from the preset cache pass this as the target of an extra mount
+/// and use [`EraContractsBackend::path_under_mount`] to translate host paths
+/// into their container equivalents.
+pub const CONTAINER_L1_STATE_CACHE_MOUNT: &str = "/contracts/l1-state-cache";
+
 impl EraContractsBackend {
     /// Create an `EraContractsBackend` from a preset configuration.
     ///
@@ -246,6 +253,32 @@ impl EraContractsBackend {
                 era_path.join(relative).to_string_lossy().to_string()
             }
             EraContractsBackend::Docker { .. } => format!("/contracts/{}", relative),
+        }
+    }
+
+    /// For a file under a host directory that's been bind-mounted into the
+    /// container as an `extra_mount`, return the path visible inside the
+    /// backend.
+    ///
+    /// - Local: `host_root.join(relative)` as a host path string (the
+    ///   filesystem is directly visible; `container_root` is ignored).
+    /// - Docker: `"{container_root}/{relative}"`.
+    ///
+    /// `host_root` / `container_root` must match a mount pair passed as
+    /// `extra_mounts` to [`Self::from_preset`] / [`Self::docker`].
+    pub fn path_under_mount(
+        &self,
+        host_root: &Path,
+        container_root: &str,
+        relative: &str,
+    ) -> String {
+        match self {
+            EraContractsBackend::Local { .. } => {
+                host_root.join(relative).to_string_lossy().to_string()
+            }
+            EraContractsBackend::Docker { .. } => {
+                format!("{}/{}", container_root.trim_end_matches('/'), relative)
+            }
         }
     }
 
