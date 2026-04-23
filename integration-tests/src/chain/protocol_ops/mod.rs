@@ -250,7 +250,9 @@ const PROTOCOL_OPS_COMMANDS_LOG: &str = "protocol_ops_commands.log";
 
 fn protocol_ops_log_path() -> Option<PathBuf> {
     let run_name = get_run_id()?;
-    let logs_dir = crate::infra::server::preset_logs_root().ok()?.join(run_name);
+    let logs_dir = crate::infra::server::preset_logs_root()
+        .ok()?
+        .join(run_name);
     std::fs::create_dir_all(&logs_dir).ok()?;
     Some(logs_dir.join(PROTOCOL_OPS_COMMANDS_LOG))
 }

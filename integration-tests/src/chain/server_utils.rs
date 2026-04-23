@@ -8,7 +8,6 @@ use std::borrow::Cow;
 
 use anyhow::{Context, Result};
 
-
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_PURPLE: &str = "\x1b[35m";
 const ANSI_RED: &str = "\x1b[31m";
