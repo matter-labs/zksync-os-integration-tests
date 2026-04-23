@@ -362,49 +362,12 @@ struct VotePrepOutput {
 // Genesis generation
 // ---------------------------------------------------------------------------
 
-/// Resolve the path to a pre-built era-contracts Rust tool (local mode only,
-/// `None` for Docker).
-///
-/// The binary is produced by `integration-tests/build.rs` at cargo compile
-/// time; this helper never rebuilds it.
-fn build_contracts_tool(
-    contracts_backend: &EraContractsBackend,
-    tool_subdir: &str,
-) -> Result<Option<PathBuf>> {
-    let era_path = match contracts_backend.era_path() {
-        Some(p) => p,
-        None => return Ok(None), // Docker: pre-built in image
-    };
-    let tool_dir = era_path.join(tool_subdir);
-    let manifest = tool_dir.join("Cargo.toml");
-    anyhow::ensure!(
-        manifest.exists(),
-        "{} not found at {}",
-        tool_subdir,
-        manifest.display()
-    );
-    let bin_name = tool_dir.file_name().unwrap().to_string_lossy().to_string();
-    let binary = tool_dir
-        .join("target/release")
-        .join(&bin_name)
-        .with_extension(std::env::consts::EXE_EXTENSION);
-    anyhow::ensure!(
-        binary.exists(),
-        "{} binary not found at {}. \
-         Run `cargo build` in integration-tests — the binary is produced by \
-         integration-tests/build.rs.",
-        tool_subdir,
-        binary.display()
-    );
-    Ok(Some(binary))
-}
-
 /// Generate genesis.json into `work_dir/genesis.json`.
 fn run_genesis_gen(contracts_backend: &EraContractsBackend) -> Result<PathBuf> {
     println!("Generating genesis.json...");
     let filename = "genesis.json";
 
-    let local_binary = build_contracts_tool(contracts_backend, "tools/zksync-os-genesis-gen")?;
+    let local_binary = contracts_backend.tool_binary("zksync-os-genesis-gen")?;
     let cmd_name = local_binary
         .as_ref()
         .map(|b| b.to_string_lossy().to_string())
@@ -428,7 +391,7 @@ fn run_genesis_gen(contracts_backend: &EraContractsBackend) -> Result<PathBuf> {
 fn run_wallets_gen(contracts_backend: &EraContractsBackend, chains_arg: &str) -> Result<PathBuf> {
     let filename = "wallets.yaml";
 
-    let local_binary = build_contracts_tool(contracts_backend, "tools/wallets-gen")?;
+    let local_binary = contracts_backend.tool_binary("wallets-gen")?;
 
     let output_arg = contracts_backend.work_path(filename);
     let cmd_name = local_binary
@@ -553,7 +516,7 @@ async fn run_generation_flow(
     gw_ops: &ChainOperators,
     gw_settling_ops: &[ChainOperators],
     l1_settling_ops: &[ChainOperators],
-    output_path: &Path,
+    output_dir: &Path,
     preset: &integration_tests::presets::Preset,
     anvil_port: u16,
     genesis_path: &Path,
@@ -1356,7 +1319,14 @@ async fn run_generation_flow(
     // The server's unpack_ephemeral_state strips the first path component
     // (expects a wrapping directory like `node/`), so we wrap everything
     // under a `node/` prefix.
-    let gw_state_archive = output_path.with_extension("gateway-state.tar.gz");
+    //
+    // Write the archive directly to the persistent cache dir (`output_dir`),
+    // not to the transient work_dir: gateway.yaml embeds the archive path
+    // below, and `run-tests.sh` wipes work_dir contents between runs — if
+    // the archive lived in work_dir, a subsequent `--skip-generate` test run
+    // would find a dangling reference. `output_dir` is the same cache dir
+    // whose files survive across runs and back `resolve_ecosystem_dir`.
+    let gw_state_archive = output_dir.join("l1-state.gateway-state.tar.gz");
     println!(
         "Archiving gateway RocksDB -> {}",
         gw_state_archive.display()
@@ -1591,7 +1561,7 @@ async fn main() -> Result<()> {
         &gw_ops,
         &gw_settling_ops,
         &l1_settling_ops,
-        &output_path,
+        &output_dir,
         &preset,
         anvil_port,
         &genesis_path,

@@ -153,6 +153,7 @@ fn build_era(era: &Path) -> Result<()> {
         "protocol-ops",
         "tools/zksync-os-genesis-gen",
         "tools/wallets-gen",
+        "tools/upgrade-readiness-checker",
     ] {
         let dir = era.join(sub);
         if dir.join("Cargo.toml").exists() {

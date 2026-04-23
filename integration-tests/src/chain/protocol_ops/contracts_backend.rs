@@ -148,10 +148,18 @@ impl EraContractsBackend {
             RepoRef::Path(p) => Self::local(p, work_name),
             RepoRef::DockerTag { tag, .. } => {
                 let image = format!("{}:{}", ERA_CONTRACTS_PROTOCOL_IMAGE_REPO, tag);
-                let cache_dir = crate::l1_state::resolve_ecosystem_dir(preset).context(
-                    "resolve preset l1-state-cache dir for default Docker mount \
-                     (run `generate-l1-state` first if the cache is missing)",
-                )?;
+                // Prefer the resolved cache dir (honours the fallback scan
+                // when the remote tip has advanced past what we cached). If
+                // nothing is resolved yet — e.g. we're running inside
+                // `generate-l1-state` itself, which is about to populate the
+                // cache — fall back to the exact preset cache_dir path. The
+                // caller is responsible for having ensured the directory
+                // exists before `from_preset` runs.
+                let cache_dir = match crate::l1_state::resolve_ecosystem_dir(preset) {
+                    Ok(dir) => dir,
+                    Err(_) => crate::l1_state::cache_dir_for_preset(preset)
+                        .context("compute preset l1-state-cache dir for default Docker mount")?,
+                };
                 let mut mounts: Vec<(&Path, &str)> = extra_mounts.to_vec();
                 mounts.push((cache_dir.as_path(), CONTAINER_L1_STATE_CACHE_MOUNT));
                 Self::docker(&image, tag, &mounts)
@@ -400,6 +408,53 @@ impl EraContractsBackend {
             EraContractsBackend::Local { era_path, .. } => run_protocol_ops_local(era_path, args),
             EraContractsBackend::Docker { session, .. } => session.protocol_ops(args),
         }
+    }
+
+    /// Resolve the host path of a pre-built Rust tool under
+    /// `era-contracts/tools/<tool>/` in Local mode, or `None` in Docker mode
+    /// (the Dockerfile bakes these binaries into the image on `$PATH`, so the
+    /// tool name alone is enough to invoke them via [`Self::run`]).
+    ///
+    /// In Local mode the binary must already exist — `build-artifacts`
+    /// pre-builds every tool listed there. Errors if the manifest is missing
+    /// or the release binary hasn't been built yet.
+    ///
+    /// Typical usage:
+    /// ```ignore
+    /// let local_bin = backend.tool_binary("upgrade-readiness-checker")?;
+    /// let cmd_name = local_bin
+    ///     .as_ref()
+    ///     .map(|b| b.to_string_lossy().to_string())
+    ///     .unwrap_or_else(|| "upgrade-readiness-checker".to_string());
+    /// backend.run(&[&cmd_name, /* args */], None)?;
+    /// ```
+    pub fn tool_binary(&self, tool: &str) -> Result<Option<PathBuf>> {
+        let era_path = match self.era_path() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        let tool_dir = era_path.join("tools").join(tool);
+        let manifest = tool_dir.join("Cargo.toml");
+        anyhow::ensure!(
+            manifest.exists(),
+            "era-contracts tool {} not found at {}",
+            tool,
+            manifest.display()
+        );
+        let binary = tool_dir
+            .join("target/release")
+            .join(tool)
+            .with_extension(std::env::consts::EXE_EXTENSION);
+        anyhow::ensure!(
+            binary.exists(),
+            "{} binary not found at {}. \
+             `build-artifacts` normally pre-builds it; \
+             add `tools/{}` to its build list if missing.",
+            tool,
+            binary.display(),
+            tool,
+        );
+        Ok(Some(binary))
     }
 
     /// Run `forge script <args>` from the `l1-contracts` directory.

@@ -686,71 +686,38 @@ fn wait_for_server_to_process_upgrade(
 ) -> Result<()> {
     println!("\n  Waiting for server to process L2 upgrade tx (upgrade-readiness-checker)...");
 
-    let era_path = contracts_backend.era_path().ok_or_else(|| {
-        anyhow::anyhow!("upgrade-readiness-checker requires a local era-contracts checkout")
-    })?;
-    let tool_dir = era_path.join("tools").join("upgrade-readiness-checker");
-    let manifest = tool_dir.join("Cargo.toml");
-    anyhow::ensure!(
-        manifest.exists(),
-        "upgrade-readiness-checker not found at {}",
-        manifest.display()
-    );
+    let local_binary = contracts_backend.tool_binary("upgrade-readiness-checker")?;
+    let cmd_name = local_binary
+        .as_ref()
+        .map(|b| b.to_string_lossy().to_string())
+        .unwrap_or_else(|| "upgrade-readiness-checker".to_string());
 
     let chain_id_str = chain_id.to_string();
     let minor_str = target_minor.to_string();
     let patch_str = target_patch.to_string();
 
-    let mut child = std::process::Command::new("cargo")
-        .args([
-            "run",
-            "--release",
-            "--manifest-path",
-            manifest.to_str().unwrap(),
-            "--",
-            "--l2-rpc-url",
-            l2_rpc_url,
-            "--chain-id",
-            &chain_id_str,
-            "--settlement-rpc-url",
-            l1_rpc_url,
-            "--bridgehub-address",
-            &contracts.ecosystem_contracts.bridgehub_proxy_addr,
-            "--target-minor-version",
-            &minor_str,
-            "--target-patch-version",
-            &patch_str,
-            "--zksync-os",
-        ])
-        .spawn()
-        .context("failed to spawn upgrade-readiness-checker")?;
+    contracts_backend
+        .run(
+            &[
+                &cmd_name,
+                "--l2-rpc-url",
+                l2_rpc_url,
+                "--chain-id",
+                &chain_id_str,
+                "--settlement-rpc-url",
+                l1_rpc_url,
+                "--bridgehub-address",
+                &contracts.ecosystem_contracts.bridgehub_proxy_addr,
+                "--target-minor-version",
+                &minor_str,
+                "--target-patch-version",
+                &patch_str,
+                "--zksync-os",
+            ],
+            None,
+        )
+        .context("upgrade-readiness-checker failed")?;
 
-    // The tool retries forever on RPC errors. Cap the wall-clock here so a
-    // dead L2 server (connection refused) doesn't hang the test.
-    let timeout = Duration::from_secs(30);
-    let deadline = std::time::Instant::now() + timeout;
-    let status = loop {
-        match child
-            .try_wait()
-            .context("wait on upgrade-readiness-checker")?
-        {
-            Some(status) => break status,
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                anyhow::bail!(
-                    "upgrade-readiness-checker did not finish within {:?}",
-                    timeout
-                );
-            }
-            None => std::thread::sleep(Duration::from_millis(250)),
-        }
-    };
-
-    anyhow::ensure!(
-        status.success(),
-        "upgrade-readiness-checker exited with status {status}"
-    );
     println!("  ✓ Server has produced a receipt for the L2 upgrade tx");
     Ok(())
 }
@@ -770,21 +737,15 @@ fn run_stage3_token_migration(
 
     // Stage3 reads `l1-contracts/script-config/v31-bridged-tokens.toml` listing
     // legacy bridged tokens to register in the NTV. A fresh test chain has none,
-    // but the file must exist or `vm.readFile` reverts. Create an empty one.
-    if let Some(era_path) = contracts_backend.era_path() {
-        let bridged_tokens_toml =
-            era_path.join("l1-contracts/script-config/v31-bridged-tokens.toml");
-        if !bridged_tokens_toml.exists() {
-            fs::write(&bridged_tokens_toml, "[tokens]\nbridged_tokens = []\n").with_context(
-                || {
-                    format!(
-                        "Failed to write placeholder bridged-tokens toml at {}",
-                        bridged_tokens_toml.display()
-                    )
-                },
-            )?;
-        }
-    }
+    // but the file must exist or `vm.readFile` reverts. Write an empty one.
+    // `write_repo_file` works in both Local (host fs) and Docker (writes via
+    // the mounted work dir + `mv` inside the container) modes.
+    contracts_backend
+        .write_repo_file(
+            "l1-contracts/script-config/v31-bridged-tokens.toml",
+            "[tokens]\nbridged_tokens = []\n",
+        )
+        .context("write placeholder v31-bridged-tokens.toml")?;
 
     contracts_backend
         .forge_script(
