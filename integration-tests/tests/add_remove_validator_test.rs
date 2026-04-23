@@ -204,7 +204,7 @@ async fn run_add_remove_validator_test() -> Result<()> {
     );
 
     // Each phase writes its Safe bundle to a dedicated sub-dir under
-    // `test-run-logs/add_remove_validator/<subdir>/safe`. A per-invocation
+    // `test-run-logs/<preset>/add_remove_validator/<subdir>/safe`. A per-invocation
     // UUID keeps concurrent test runs isolated and prevents stale bundles
     // from a prior run leaking into the current `manifest.json`.
     let eco_path = contracts_backend.ecosystem_yaml_path(&preset)?;

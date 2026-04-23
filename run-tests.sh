@@ -18,7 +18,7 @@
 #   ./run-tests.sh --skip-generate               # skip l1-state generation, tests find cached state
 #   ./run-tests.sh --rebuild-cache               # delete cached l1-state before generating
 #   ./run-tests.sh --save-logs                   # stream nextest/test output live AND save the full
-#                                                #   combined run to test-run-logs/nextest-<preset>.log
+#                                                #   combined run to test-run-logs/<preset>/nextest.log
 #
 set -euo pipefail
 
@@ -140,20 +140,19 @@ for preset in $all_presets; do
   echo "Preset: $preset"
   echo "========================================"
 
-  # Clean stale test-run-logs (server logs, rocksdb) but keep contracts_artifacts/
-  # *directories* themselves — their contents are dropped, the dirs survive.
-  #
-  # Why keep the dirs: macOS Docker/VirtioFS has a bug where newly created
-  # host directories are invisible to the container VM, so the Docker session
-  # bind-mounts the stable parent (test-run-logs/) and creates sub-directories
-  # inside the container. Deleting contracts_artifacts/ would force a new
-  # mkdir that the running container cannot see.
-  # Why drop their contents: prior runs' Safe bundles / manifests accumulate
-  # and leak forward across runs, producing confusing stale results
-  # (e.g. `dev execute-safe` replays bundles from a previous run).
-  if [[ -d test-run-logs ]]; then
-    find test-run-logs -mindepth 2 -maxdepth 2 ! -name contracts_artifacts -exec rm -rf {} + 2>/dev/null || true
-    find test-run-logs -mindepth 3 -maxdepth 3 -path '*/contracts_artifacts/*' -exec rm -rf {} + 2>/dev/null || true
+  # Clean stale `test-run-logs/<preset>/` contents before this preset's run.
+  # Server logs, rocksdb, safe-bundle manifests, etc. from prior runs of the
+  # SAME preset accumulate here otherwise and leak forward (e.g. `dev
+  # execute-safe` replays stale bundles). Keep `contracts_artifacts/` dirs
+  # themselves — macOS Docker/VirtioFS has a bug where newly created
+  # bind-mounted host dirs are invisible to the container VM, so the Docker
+  # session bind-mounts the stable top-level `test-run-logs/` and creates
+  # sub-directories inside the container; deleting `contracts_artifacts/`
+  # would force a new mkdir the running container cannot see.
+  preset_logs_root="test-run-logs/${preset}"
+  if [[ -d "$preset_logs_root" ]]; then
+    find "$preset_logs_root" -mindepth 2 -maxdepth 2 ! -name contracts_artifacts -exec rm -rf {} + 2>/dev/null || true
+    find "$preset_logs_root" -mindepth 3 -maxdepth 3 -path '*/contracts_artifacts/*' -exec rm -rf {} + 2>/dev/null || true
   fi
 
   # Rebuild all local contracts + Rust binaries this preset depends on.
@@ -174,7 +173,7 @@ for preset in $all_presets; do
       rm -rf l1-state-cache
     fi
     echo "--- [$preset] Generating ecosystem ---"
-    if ! PRESETS_FILE="$PRESETS_FILE" cargo run --release -p generate-l1-state -- "$preset"; then
+    if ! PRESET_NAME="$preset" PRESETS_FILE="$PRESETS_FILE" cargo run --release -p generate-l1-state -- "$preset"; then
       echo "ERROR: generate-l1-state failed for preset '$preset'"
       exit 1
     fi
@@ -210,7 +209,7 @@ for preset in $all_presets; do
   # With `--save-logs`, capture the full combined stdout+stderr to a stable
   # path so the full run is inspectable after the terminal scrolls. Without
   # the flag we leave nextest's default capturing behaviour in place.
-  nextest_log="test-run-logs/nextest-${preset}.log"
+  nextest_log="${preset_logs_root}/nextest.log"
   mkdir -p "$(dirname "$nextest_log")"
 
   set +e

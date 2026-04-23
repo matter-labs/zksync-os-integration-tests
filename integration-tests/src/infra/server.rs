@@ -50,6 +50,35 @@ pub(crate) fn get_run_id() -> Option<&'static str> {
     TEST_RUN_ID.get().map(|s| s.as_str())
 }
 
+/// Read `PRESET_NAME` (set by `run-tests.sh` and `generate-l1-state`). All
+/// callers that want to construct a `test-run-logs/<preset>/...` path go
+/// through this so the layout stays consistent across presets.
+pub(crate) fn current_preset_name() -> anyhow::Result<String> {
+    let name = std::env::var("PRESET_NAME").map_err(|_| {
+        anyhow::anyhow!(
+            "PRESET_NAME env var not set. `run-tests.sh` sets it per-preset; \
+             when invoking a test binary directly, export \
+             PRESET_NAME=<preset-name-from-presets.yaml>."
+        )
+    })?;
+    anyhow::ensure!(!name.is_empty(), "PRESET_NAME env var is empty");
+    Ok(name)
+}
+
+/// `{project_root}/test-run-logs/{preset_name}` — the per-preset root under
+/// which every test and generator keeps its ephemeral outputs. Created on
+/// access. See [`current_preset_name`] for how the preset name is resolved.
+pub fn preset_logs_root() -> anyhow::Result<std::path::PathBuf> {
+    let project_root = crate::infra::utils::find_project_root()
+        .map_err(|e| anyhow::anyhow!("find project root: {e}"))?;
+    let dir = project_root
+        .join("test-run-logs")
+        .join(current_preset_name()?);
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("create preset logs root {}", dir.display()))?;
+    Ok(dir)
+}
+
 /// Read the Rust toolchain channel from a repo's rust-toolchain.toml or rust-toolchain file,
 /// so we can set RUSTUP_TOOLCHAIN when building that repo (and avoid using the integration-tests toolchain).
 pub fn read_toolchain_from_dir(dir: &Path) -> Option<String> {
@@ -150,9 +179,9 @@ pub struct ServerBuilder {
     host_port: Option<u16>,
     /// Override config path (used instead of preset-derived path when set)
     config_path_override: Option<PathBuf>,
-    /// Override RocksDB directory for local server (default: under test-run-logs/{run_id}/)
+    /// Override RocksDB directory for local server (default: under test-run-logs/{preset_name}/{run_id}/)
     rocks_db_path_override: Option<PathBuf>,
-    /// Override the logs directory (default: test-run-logs/{run_id}/)
+    /// Override the logs directory (default: test-run-logs/{preset_name}/{run_id}/)
     logs_dir_override: Option<PathBuf>,
     /// Override gateway RPC URL (set via env var at runtime, overrides config YAML value)
     gateway_rpc_url: Option<String>,
@@ -226,7 +255,7 @@ impl ServerBuilder {
     }
 
     /// Override the directory where server logs are stored.
-    /// Default: `test-run-logs/{run_id}/`.
+    /// Default: `test-run-logs/{preset_name}/{run_id}/`.
     pub fn logs_dir(mut self, path: impl Into<PathBuf>) -> Self {
         self.logs_dir_override = Some(path.into());
         self
@@ -390,9 +419,10 @@ impl Server {
         // Find project root and resolve paths relative to it
         let project_root = find_project_root()?;
 
-        // Group all server logs in this test run under test-run-logs/{run_id}.
-        // The run ID must be set before any server is spawned — call
-        // `get_or_create_run_id("test_name")` at the top of the test.
+        // Group all server logs in this test run under
+        // test-run-logs/{preset_name}/{run_id}. The run ID must be set before
+        // any server is spawned — call `get_or_create_run_id("test_name")` at
+        // the top of the test. `PRESET_NAME` is set by `run-tests.sh`.
         let run_id = get_run_id().unwrap_or_else(|| {
             panic!(
                 "No run ID set. Call `integration_tests::server::get_or_create_run_id(\"test_name\")` \
@@ -402,7 +432,11 @@ impl Server {
         let logs_dir = if let Some(override_dir) = builder.logs_dir.as_ref() {
             override_dir.clone()
         } else {
-            project_root.join("test-run-logs").join(run_id)
+            preset_logs_root()
+                .map_err(|e| {
+                    DockerError::CommandFailed(format!("resolve preset logs root: {e:#}"))
+                })?
+                .join(run_id)
         };
         fs::create_dir_all(&logs_dir).map_err(|e| {
             DockerError::CommandFailed(format!(

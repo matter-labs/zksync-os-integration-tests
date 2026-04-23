@@ -423,7 +423,7 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
     // notices the settlement-layer flip (it keeps trying to commit to L1
     // even though batches now need to go to gateway). Kill it, then spawn
     // a fresh chain server — same chain_name so it reuses the RocksDB at
-    // `test-run-logs/<run_id>/db_<chain_name>/` — this time with
+    // `test-run-logs/<preset>/<run_id>/db_<chain_name>/` — this time with
     // `gateway_rpc_url` set so its committer targets the gateway.
     println!("\n=== Restarting chain server with gateway settlement ===");
     let _ = chain_server.kill();

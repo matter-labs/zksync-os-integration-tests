@@ -168,8 +168,10 @@ impl EraContractsBackend {
     }
 
     /// Create a local backend. Work directory lives under
-    /// `test-run-logs/{run_id}/contracts_artifacts/` (same location as Docker
-    /// mode). A run ID must be set via `get_or_create_run_id` before calling.
+    /// `test-run-logs/{preset_name}/{run_id}/contracts_artifacts/` (same
+    /// location as Docker mode). A run ID must be set via
+    /// `get_or_create_run_id` before calling; the preset name comes from
+    /// `PRESET_NAME` (set by `run-tests.sh`).
     pub fn local(era_contracts_path: &Path, _work_name: &str) -> Result<Self> {
         let era_path = fs::canonicalize(era_contracts_path).with_context(|| {
             format!(
@@ -183,10 +185,7 @@ impl EraContractsBackend {
                  before creating an EraContractsBackend."
             )
         })?;
-        let project_root =
-            crate::infra::utils::find_project_root().map_err(|e| anyhow::anyhow!("{e}"))?;
-        let work_dir = project_root
-            .join("test-run-logs")
+        let work_dir = crate::infra::server::preset_logs_root()?
             .join(run_id)
             .join("contracts_artifacts");
         fs::create_dir_all(&work_dir)?;
@@ -212,9 +211,14 @@ impl EraContractsBackend {
                  before creating an EraContractsBackend."
             )
         })?;
+        // The Docker session bind-mounts the *stable* top-level `test-run-logs/`
+        // directory (workaround for a macOS Docker/VirtioFS bug where newly
+        // created bind-mounted host dirs are invisible to the container), even
+        // though work_dir sits under a per-preset sub-directory of it.
         let logs_root = project_root.join("test-run-logs");
         fs::create_dir_all(&logs_root)?;
-        let work_dir = logs_root.join(run_id).join("contracts_artifacts");
+        let preset_logs_root = crate::infra::server::preset_logs_root()?;
+        let work_dir = preset_logs_root.join(run_id).join("contracts_artifacts");
         fs::create_dir_all(&work_dir)?;
         let work_dir = fs::canonicalize(&work_dir)?;
         // container_work_dir is a sub-path under the logs mount.

@@ -8,7 +8,6 @@ use std::borrow::Cow;
 
 use anyhow::{Context, Result};
 
-use crate::utils::find_project_root;
 
 const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_PURPLE: &str = "\x1b[35m";
@@ -331,11 +330,13 @@ pub(crate) fn get_l2_finalized_block_number(l2_rpc_url: &str) -> Result<u64> {
 }
 
 fn find_latest_server_log_path() -> Result<Option<std::path::PathBuf>> {
-    let project_root = find_project_root()?;
-    let logs_root = project_root.join("test-run-logs");
-    if !logs_root.exists() {
-        return Ok(None);
-    }
+    // Scan the per-preset logs root (`test-run-logs/<preset>/`). If
+    // `PRESET_NAME` isn't set or the dir doesn't exist yet, there's nothing to
+    // scan — return `None` so callers fall through cleanly.
+    let logs_root = match crate::server::preset_logs_root() {
+        Ok(p) if p.exists() => p,
+        _ => return Ok(None),
+    };
 
     let mut best: Option<(u32, std::path::PathBuf)> = None;
     for entry in fs::read_dir(&logs_root)

@@ -1377,6 +1377,13 @@ async fn run_generation_flow(
 async fn main() -> Result<()> {
     let args = Args::parse();
 
+    // Publish the preset name so downstream helpers (server/backend path
+    // construction, log scanning) route under
+    // `test-run-logs/{preset}/{run_id}/…` without needing to thread the
+    // name through every call site. `run-tests.sh` sets this when invoking
+    // us, but re-set it unconditionally for direct invocations too.
+    std::env::set_var("PRESET_NAME", &args.preset);
+
     let preset = load_preset(&args)?;
     integration_tests::server::get_or_create_run_id("generate_l1_state");
 
