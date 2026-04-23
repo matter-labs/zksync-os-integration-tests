@@ -59,25 +59,6 @@ Each `era_contracts` / `zksync_os_server` value goes through this resolution cha
 2. **Git ref to Docker image** -- resolve the branch/tag/SHA against the GitHub repo, then look up a published Docker image for that commit (`ghcr.io/matter-labs/protocol-ops:{sha}` or `ghcr.io/matter-labs/zksync-os-server:{sha}`).
 3. **Fallback** -- if the tip commit has no image yet, walk back up to 10 ancestor commits and use the most recent one that does.
 
-### Extra keys
-
-Besides the required `era_contracts`, `zksync_os_server`, and `tests` fields, presets support an optional `extra_keys` map for arbitrary parameters. These are passed through to tests and can be read via `preset.extra_str("key")`. This is useful for parameterizing tests without creating separate test files:
-
-```yaml
-custom_base_token_test:
-  era_contracts: main
-  zksync_os_server: main
-  tests:
-    - l1_settling_test
-  extra_keys:
-    base_token_address: "0x1234..."
-    custom_flag: "true"
-```
-
-### Adding a new preset
-
-Add an entry to `presets.yaml` (or a separate YAML file passed via `--presets`). Each preset must have `era_contracts`, `zksync_os_server`, and a `tests` list.
-
 ## Local development
 
 To test against local checkouts of `era-contracts` or `zksync-os-server`, point the preset values to their paths on disk:
@@ -100,21 +81,7 @@ When `era_contracts` points to a local path, the generation step will build cont
 
 ## Ecosystem generation
 
-Before tests run, `generate-l1-state` builds the full L1+L2 ecosystem:
-
-1. Start Anvil with `--dump-state`
-2. Deploy L1 contracts via `protocol_ops ecosystem init`
-3. Register the **gateway chain** (chain ID `506`)
-4. Register **gateway-settling chains** (chain IDs `6566`, `6567`) with `--pause-deposits --skip-priority-txs`
-5. Register **L1-settling chains** (chain ID `6565`)
-6. Fund all operator accounts on L1
-7. Generate `genesis.json`, per-chain configs, and `wallets.yaml`
-8. Start the gateway server, fund L2 accounts, wait for executed batches
-9. Convert gateway chain, migrate gateway-settling chains
-10. Submit L1 deposits for L1-settling chains
-11. Stop servers, dump Anvil state, archive gateway RocksDB
-
-The result is cached in `l1-state-cache/` keyed by the resolved Docker image SHAs. Subsequent runs with the same preset skip generation automatically.
+Before tests run, `generate-l1-state` builds the full L1+L2 ecosystem (L1 Anvil + gateway + gateway-settling chains + L1-settling chains, with contracts deployed, chains registered, operators funded, and a gateway-server run that produces a gateway-state archive). Output is cached in `l1-state-cache/<preset-key>/` keyed by the resolved image SHAs; subsequent runs for the same preset reuse it automatically. See `tools/generate-l1-state/src/main.rs` for the full step list.
 
 ### Generated artifacts
 
@@ -140,22 +107,11 @@ L1 (Anvil)
  +-- l1_settling (chain 6565)                -- settles directly to L1 via blobs
 ```
 
-## Tests
+## Writing tests
 
-Tests are Rust integration tests in `integration-tests/tests/`:
+Tests are Rust integration tests in `integration-tests/tests/`, one `#[tokio::test]` per file. Each test reads the active preset via `PRESET_NAME` (set per-preset by `run-tests.sh`), loads the cached L1 state, and orchestrates its own servers.
 
-| Test | What it covers |
-|------|----------------|
-| `l1_settling_test` | L1-settling chain: boots server, seals batches, verifies L1 settlement via blobs |
-| `gateway_settling_test` | Gateway-settling chains: boots servers, seals batches, verifies settlement through gateway |
-| `interop_test` | Cross-chain interoperability and L2 messaging between chains |
-| `upgrade_v30_to_v31` | Protocol upgrade from v30 to v31 (uses pre-built state from `local-chains/`) |
-
-Each test receives the preset name via `PRESET_NAME` env var, loads the matching cached L1 state, and orchestrates its own servers via Docker.
-
-## Writing tests with `EraContractsBackend`
-
-`EraContractsBackend` is the main abstraction for interacting with era-contracts tooling (`protocol_ops`, `forge`, `cast`) from tests. It transparently handles both local and Docker modes -- tests don't need to know which one is active.
+`EraContractsBackend` is the main abstraction for interacting with era-contracts tooling (`protocol_ops`, `forge`, `cast`). It transparently handles both local and Docker modes — tests don't need to know which one is active.
 
 ### Creating a backend
 
@@ -167,7 +123,7 @@ let preset = load_current_preset()?;
 let backend = EraContractsBackend::from_preset(&preset, "my_test_name", &[])?;
 ```
 
-The `run_name` (second argument) is used for log directory naming. The third argument is optional extra Docker volume mounts.
+The second argument (`work_name`) is vestigial — the work-directory name is derived from the run ID registered via `integration_tests::server::get_or_create_run_id("…")` (called at the top of every test). The third argument is an optional list of extra Docker volume mounts; `from_preset` already bind-mounts the preset's `l1-state-cache/…` directory by default, so most callers pass `&[]`.
 
 ### Available methods
 
@@ -206,40 +162,28 @@ backend.protocol_ops(&[
 let output = backend.read_protocol_ops_output("my_output.json")?;
 ```
 
-### `ProtocolOps` wrapper
-
-For commands that always need an L1 RPC URL, use the `ProtocolOps` wrapper:
-
-```rust
-use integration_tests::protocol_ops::ProtocolOps;
-
-let protocol_ops = ProtocolOps::new(&l1_rpc_url, &backend);
-protocol_ops.chain_set_upgrade_timestamp()
-    .chain_id(chain_id)
-    .diamond_proxy(&diamond_proxy)
-    // ...
-    .run()?;
-```
-
 ## Run logs
 
-All test run artifacts are saved under `test-run-logs/` (gitignored). Each test run creates a subdirectory named `{run_name}_{uuid_prefix}/` containing:
+All test run artifacts are saved under `test-run-logs/` (gitignored), grouped per preset. Each test run within a preset is keyed by the run ID set via `get_or_create_run_id("…")`:
 
 ```
 test-run-logs/
-└── gateway_settling_643bbb39/
-    ├── gateway_settling_a_run_0.json   # Server stdout/stderr for chain, run 0
-    ├── gateway_settling_b_run_0.json   # Server stdout/stderr for chain, run 0
-    ├── protocol_ops_commands.log       # All protocol-ops commands and their output
-    ├── contracts_artifacts/            # protocol-ops Docker working directory (wallets, genesis, chain init outputs)
-    └── db_gateway_settling_a/          # RocksDB directory (local server mode only)
+└── v31_draft_with_main_server/                        # {preset_name}
+    ├── resolved-refs.json                             # resolved image SHAs for this preset
+    ├── nextest.log                                    # combined nextest output (--save-logs only)
+    └── gateway_settling/                              # {run_id} (from get_or_create_run_id)
+        ├── gateway_settling_a_run_0.json              # Server stdout/stderr for chain, run 0
+        ├── gateway_settling_b_run_0.json              # Server stdout/stderr for chain, run 0
+        ├── protocol_ops_commands.log                  # All protocol-ops commands and their output
+        ├── contracts_artifacts/                       # protocol-ops Docker working directory
+        └── db_gateway_settling_a/                     # RocksDB directory (local server mode only)
 ```
 
 - **`{chain_name}_run_{N}.json`** -- server logs for each chain. The run index `N` increments when a server is stopped and restarted within the same test (e.g. upgrade tests that restart after a protocol change).
 - **`protocol_ops_commands.log`** -- appended log of every `protocol_ops` CLI invocation with full stdout/stderr. Useful for debugging contract deployment or chain registration failures.
 - **`contracts_artifacts/`** -- the Docker-mounted working directory used by `protocol-ops`. Contains `wallets.yaml`, `genesis.json`, per-chain init outputs, and gateway RocksDB snapshots.
 
-The `run-tests.sh` orchestrator cleans stale logs between presets (except `contracts_artifacts/` which is preserved due to a macOS Docker/VirtioFS bind-mount limitation).
+The `run-tests.sh` orchestrator clears `test-run-logs/{preset}/` at the top of each preset iteration (`contracts_artifacts/` directories themselves are preserved due to a macOS Docker/VirtioFS bind-mount limitation — only their contents are dropped).
 
 ## Troubleshooting
 
@@ -252,10 +196,10 @@ Symptom: first `./run-tests.sh` passes cleanly; the next one fails with the serv
 
 ### "No image found for SHA …" or preset resolution walks back many commits
 
-Preset resolution falls back up to 10 ancestor commits if the tip of the branch has no published Docker image. When this happens you'll see a warning in the run output (`⚠ era_contracts: tip of 'main' is <sha> but no image was published; using ancestor <sha> instead`). The exact SHAs actually used land in `test-run-logs/resolved-refs.json`:
+Preset resolution falls back up to 10 ancestor commits if the tip of the branch has no published Docker image. When this happens you'll see a warning in the run output (`⚠ era_contracts: tip of 'main' is <sha> but no image was published; using ancestor <sha> instead`). The exact SHAs actually used land in `test-run-logs/{preset}/resolved-refs.json`:
 
 ```bash
-cat test-run-logs/resolved-refs.json
+cat test-run-logs/<preset>/resolved-refs.json
 ```
 
 If a CI run disagrees with your local run, compare these two files — the most common cause of "works for me" is that the branch tip advanced between the two runs.
