@@ -108,6 +108,11 @@ impl Anvil {
                 .arg("--load-state")
                 .arg(&state_str)
                 .arg("--disable-block-gas-limit")
+                .arg("--block-time")
+                .arg("0.25")
+                .arg("--mixed-mining")
+                .arg("--slots-in-an-epoch")
+                .arg("10")
             // Instamine — anvil's default. Every tx mines its own block,
             // so commit/prove/execute bundles from the server's L1 sender
             // land instantly and the L1 watcher sees them on its next 100ms

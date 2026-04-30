@@ -206,6 +206,11 @@ impl DumpStateAnvil {
                 dump_state_path.to_str().unwrap(),
                 "--port",
                 &port.to_string(),
+                "--block-time",
+                "0.25",
+                "--mixed-mining",
+                "--slots-in-an-epoch",
+                "10",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
