@@ -309,9 +309,13 @@ fn resolve_git_ref_with_image(
     // Resolve ref → tip SHA.
     let tip_sha = resolve_git_ref(repo_url, git_ref)?;
     let tip_image = format!("{}:{}", image_repo, tip_sha);
+    let tag_image = format!("{}:{}", image_repo, git_ref);
 
     if docker_image_exists(&tip_image) {
         return Some((tip_sha.clone(), tip_sha, false));
+    }
+    if docker_image_exists(&tag_image) {
+        return Some((git_ref.to_string(), tip_sha, false));
     }
 
     // Tip image not available yet — walk back through ancestors.
