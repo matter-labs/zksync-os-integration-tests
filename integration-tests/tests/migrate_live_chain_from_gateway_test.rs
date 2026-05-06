@@ -51,6 +51,8 @@ sol! {
     #[sol(rpc)]
     interface IZKChain {
         function getDAValidatorPair() external view returns (address, uint8);
+        function getTotalBatchesCommitted() external view returns (uint256);
+        function getTotalBatchesExecuted() external view returns (uint256);
     }
 }
 
@@ -386,6 +388,49 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
             let _ = gw_server
                 .wait_for_traffic_tx_executed_on_l1()
                 .context("drive gateway while waiting for pause propagation")?;
+        }
+    }
+
+    // After pause-deposits propagates, the chain may still have batches that
+    // were committed before the pause but haven't executed yet. The gateway's
+    // `Migrator.forwardedBridgeBurn` reverts with `NotAllBatchesExecuted` if
+    // `totalBatchesCommitted != totalBatchesExecuted` on the chain's
+    // gateway-side diamond, so wait for the chain to drain its execute queue
+    // before submitting the migration. With block_time=250ms and
+    // batch_timeout=1s, even an idle chain seals empty batches every ~1s, so
+    // commit and execute can briefly diverge here.
+    {
+        let gw_side_chain = IZKChain::new(gw_side_chain_diamond, &gw_l2_provider);
+        let start = std::time::Instant::now();
+        let deadline = Duration::from_secs(60);
+        loop {
+            let committed = gw_side_chain
+                .getTotalBatchesCommitted()
+                .call()
+                .await
+                .context("getTotalBatchesCommitted on gateway-side chain diamond")?
+                ._0;
+            let executed = gw_side_chain
+                .getTotalBatchesExecuted()
+                .call()
+                .await
+                .context("getTotalBatchesExecuted on gateway-side chain diamond")?
+                ._0;
+            if committed == executed {
+                println!("  Chain has drained execute queue (committed = executed = {committed})");
+                break;
+            }
+            if start.elapsed() >= deadline {
+                anyhow::bail!(
+                    "chain {chain_id} still has committed > executed (committed={committed}, executed={executed}) \
+                     after {:.1}s — gateway-side execute queue did not drain in time",
+                    start.elapsed().as_secs_f64(),
+                );
+            }
+            // Drive the gateway one batch so its execute pipeline advances.
+            let _ = gw_server
+                .wait_for_traffic_tx_executed_on_l1()
+                .context("drive gateway while waiting for execute queue to drain")?;
         }
     }
 
