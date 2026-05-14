@@ -4,39 +4,12 @@ use integration_tests::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
 use integration_tests::anvil_utils::{
     fund_account, impersonate_account, stop_impersonating_account, RICH_ACCOUNT_PRIVATE_KEY,
 };
-use integration_tests::l1_state::EcosystemConfig;
 use integration_tests::protocol_ops::EraContractsBackend;
 use integration_tests::server::{L1DepositBaseToken, ServerBuilder};
 use integration_tests::server_utils::address_from_private_key;
 use integration_tests::upgrade_config::{Contracts, WalletsFile};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-/// Script output from `protocol_ops ecosystem upgrade-prepare`, read from
-/// the per-command metadata block in `manifest.json`.
-#[derive(Clone)]
-struct UpgradePrepareOutput {
-    core: serde_json::Value,
-}
-
-fn parse_upgrade_prepare_manifest(manifest_path: &Path) -> Result<UpgradePrepareOutput> {
-    let content = fs::read_to_string(manifest_path)
-        .with_context(|| format!("Failed to read manifest: {}", manifest_path.display()))?;
-    let root: serde_json::Value =
-        serde_json::from_str(&content).context("Failed to parse upgrade-prepare manifest.json")?;
-    let output = root
-        .get("metadata")
-        .and_then(|m| m.as_array())
-        .and_then(|arr| arr.first())
-        .and_then(|entry| entry.get("output"))
-        .ok_or_else(|| anyhow::anyhow!("Missing metadata[0].output in manifest"))?;
-    let core = output
-        .get("core")
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("Missing output.core in manifest metadata"))?;
-    Ok(UpgradePrepareOutput { core })
-}
 
 fn get_default_preset() -> integration_tests::presets::Preset {
     integration_tests::presets::load_current_preset().expect("Failed to load preset")
@@ -57,36 +30,6 @@ fn get_default_version_dir() -> PathBuf {
         .parent()
         .expect("chain_dir has no parent")
         .to_path_buf()
-}
-
-/// Write a minimal `ecosystem.yaml` synthesized from `contracts.yaml` so
-/// that protocol-ops commands (which take `--ecosystem <path>`) can run
-/// against the v30.2 fixture. Placed next to `wallets.yaml` so downstream
-/// helpers that expect both alongside can find them.
-fn write_synthetic_ecosystem_yaml(
-    contracts: &Contracts,
-    chain_id: u64,
-    deployer_addr: &str,
-    out_path: &Path,
-) -> Result<()> {
-    let eco = EcosystemConfig {
-        bridgehub: contracts.ecosystem_contracts.bridgehub_proxy_addr.clone(),
-        deployer: Some(deployer_addr.to_string()),
-        chains: {
-            let mut chains = std::collections::BTreeMap::new();
-            chains.insert(
-                integration_tests::l1_state::GATEWAY_CHAIN_NAME.to_string(),
-                0,
-            );
-            chains.insert("default".to_string(), chain_id);
-            chains
-        },
-    };
-    let yaml = serde_yaml::to_string(&eco).context("serialize synthetic ecosystem.yaml")?;
-    fs::write(out_path, yaml)
-        .with_context(|| format!("write synthetic ecosystem.yaml to {}", out_path.display()))?;
-    println!("  Synthetic ecosystem.yaml -> {}", out_path.display());
-    Ok(())
 }
 
 /// Build the v30.2 default-chain `config.yaml` from the ecosystem contracts +
@@ -130,17 +73,25 @@ fn write_upgrade_server_config(
     Ok(config_path)
 }
 
-/// Extract a string value from JSON by dotted path (e.g. "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr").
-fn extract_json_value(obj: &serde_json::Value, path: &str) -> Result<String> {
-    let mut v = obj;
-    for key in path.split('.') {
-        v = v
-            .get(key)
-            .ok_or_else(|| anyhow::anyhow!("Missing key {:?} in JSON", key))?;
-    }
-    v.as_str()
-        .map(str::to_string)
-        .ok_or_else(|| anyhow::anyhow!("Key {:?} is not a string", path))
+#[derive(serde::Deserialize)]
+struct UpgradePrepareToml {
+    core: UpgradePrepareCore,
+}
+
+#[derive(serde::Deserialize)]
+struct UpgradePrepareCore {
+    upgrade_addresses: CoreUpgradeAddresses,
+}
+
+#[derive(serde::Deserialize)]
+struct CoreUpgradeAddresses {
+    native_token_vault_addr: String,
+    bridgehub: BridgehubUpgradeAddresses,
+}
+
+#[derive(serde::Deserialize)]
+struct BridgehubUpgradeAddresses {
+    chain_asset_handler_proxy_addr: String,
 }
 
 /// Fund the governor and deployer wallets with ETH so they can pay for
@@ -236,17 +187,15 @@ async fn transfer_governance_ownership_to_governor(
     Ok(())
 }
 
-/// Transfer ownership of a contract from current owner to ecosystem governance
-async fn transfer_contract_ownership(
+async fn transfer_ownable_to_governance(
     contracts_backend: &EraContractsBackend,
-    contract_name: &str,
+    label: &str,
     contract_address: &str,
     ecosystem_governance: &str,
     l1_rpc_url: &str,
 ) -> Result<()> {
-    println!("    {} ({})", contract_name, contract_address);
+    println!("    {} ({})", label, contract_address);
 
-    // Read current owner
     let current_owner = contracts_backend
         .cast(&[
             "call",
@@ -255,17 +204,15 @@ async fn transfer_contract_ownership(
             "--rpc-url",
             l1_rpc_url,
         ])
-        .context("Failed to read owner")?;
+        .with_context(|| format!("read {label} owner"))?;
     let current_owner = current_owner.trim().to_string();
     println!("      Current owner: {}", current_owner);
 
-    // Check if already owned by ecosystem governance
-    if current_owner.to_lowercase() == ecosystem_governance.to_lowercase() {
+    if current_owner.eq_ignore_ascii_case(ecosystem_governance) {
         println!("      Already owned by ecosystem governance, skipping");
         return Ok(());
     }
 
-    // Impersonate current owner and transfer
     impersonate_account(&current_owner, l1_rpc_url).await?;
     fund_account(
         &current_owner,
@@ -286,11 +233,10 @@ async fn transfer_contract_ownership(
             l1_rpc_url,
             "--unlocked",
         ])
-        .context(format!("Failed to transfer {} ownership", contract_name))?;
+        .with_context(|| format!("transfer {label} ownership"))?;
 
     stop_impersonating_account(&current_owner, l1_rpc_url).await;
 
-    // Accept ownership as ecosystem governance
     impersonate_account(ecosystem_governance, l1_rpc_url).await?;
     fund_account(
         ecosystem_governance,
@@ -310,121 +256,112 @@ async fn transfer_contract_ownership(
             l1_rpc_url,
             "--unlocked",
         ])
-        .context(format!("Failed to accept {} ownership", contract_name))?;
+        .with_context(|| format!("accept {label} ownership"))?;
 
     stop_impersonating_account(ecosystem_governance, l1_rpc_url).await;
 
-    println!("      ✓ Ownership transferred to ecosystem governance");
+    println!("      Ownership transferred to ecosystem governance");
     Ok(())
 }
 
-/// Transfer ownership of newly deployed contracts to ecosystem governance.
-/// This is called AFTER no-governance-prepare since contracts are deployed
-/// with the deployer as owner, but governance stages need ecosystem
-/// governance to be the owner.
-///
-/// FIXME(#7, Stanislav): this is only correct if no-governance-prepare
-/// actually deploys a fresh NTV in v31 (the key lives under
-/// `upgrade_addresses.native_token_vault_addr`, but NTV predates v31).
-/// Verify that the address here is a newly deployed contract and not a
-/// pre-existing one whose ownership we shouldn't be touching.
-///
-/// FIXME(#7, Stanislav, follow-up PR by Kalman): on mainnet we can't
-/// `acceptOwnership()` via a raw PK, and `transferOwnership` should be
-/// produced as part of no-governance-prepare rather than executed here.
-/// After no-gov-prepare runs we should be fully equipped to conduct the
-/// upgrade without further owner-keyed actions.
-async fn transfer_new_contracts_ownership(
+async fn transfer_prepared_core_contracts_to_governance(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
     contracts: &Contracts,
-    core: &serde_json::Value,
+    ecosystem_toml_path: &Path,
 ) -> Result<()> {
-    println!("\n  Transferring contract ownership to ecosystem governance...");
-    std::io::Write::flush(&mut std::io::stdout()).ok();
+    println!("\n  Transferring prepared core contracts to ecosystem governance...");
 
-    let ecosystem_governance = &contracts.ecosystem_contracts.governance;
-    println!("    Ecosystem governance: {}", ecosystem_governance);
+    let ecosystem_toml = fs::read_to_string(ecosystem_toml_path)
+        .with_context(|| format!("read {}", ecosystem_toml_path.display()))?;
+    let prepared: UpgradePrepareToml =
+        toml::from_str(&ecosystem_toml).context("parse upgrade-prepare ecosystem.toml")?;
+    let ecosystem_governance = contracts.ecosystem_contracts.governance.as_str();
 
-    let chain_asset_handler = extract_json_value(
-        core,
-        "upgrade_addresses.bridgehub.chain_asset_handler_proxy_addr",
-    )?;
-    transfer_contract_ownership(
+    // TODO(protocol-ops): v30 fixtures need these anvil-only handoffs because
+    // the freshly prepared contracts are deployer-owned while governance
+    // stage0/stage1 calls execute from the Governance contract.
+    transfer_ownable_to_governance(
         contracts_backend,
         "ChainAssetHandler",
-        &chain_asset_handler,
+        &prepared
+            .core
+            .upgrade_addresses
+            .bridgehub
+            .chain_asset_handler_proxy_addr,
         ecosystem_governance,
         l1_rpc_url,
     )
     .await?;
-
-    let native_token_vault = extract_json_value(core, "upgrade_addresses.native_token_vault_addr")?;
-    transfer_contract_ownership(
+    transfer_ownable_to_governance(
         contracts_backend,
         "NativeTokenVault",
-        &native_token_vault,
+        &prepared.core.upgrade_addresses.native_token_vault_addr,
         ecosystem_governance,
         l1_rpc_url,
     )
     .await?;
 
-    println!("  ✓ All ownership transfers complete");
     Ok(())
 }
 
 /// Run ecosystem upgrade stages via direct protocol-ops invocations.
 ///
-/// Phase 1: `ecosystem upgrade-prepare` (deployer) — deploys new contracts.
-/// Phase 2: ownership transfers (test-specific impersonation hacks).
-/// Phase 3: `ecosystem upgrade-governance` (governor) — runs governance
+/// Phase 1: `ecosystem upgrade-prepare-all` (deployer) deploys core + CTM
+/// contracts and emits the merged ecosystem TOML consumed by governance.
+/// Phase 2: anvil-only fixture ownership handoffs needed before governance.
+/// Phase 3: transfer legacy Governance.owner() to the persisted governor key.
+/// Phase 4: `ecosystem upgrade-governance` (governor) — runs governance
 ///          stages 0+1+2 on a single anvil fork, emits one Safe bundle.
-///
-/// Returns the parsed upgrade-prepare output (for use by downstream code).
 async fn run_ecosystem_upgrades(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
-) -> Result<UpgradePrepareOutput> {
+) -> Result<()> {
     println!("\n=== Running Ecosystem Upgrades (direct protocol-ops) ===");
 
     fund_governance_accounts(l1_rpc_url, wallets)?;
 
-    let eco_path_str = contracts_backend.work_path("ecosystem.yaml");
     let deployer_key = wallets.ecosystem.deployer.private_key.as_str();
     let governor_key = wallets.ecosystem.governor.private_key.as_str();
     let deployer_addr = wallets.ecosystem.deployer.address.as_str();
+    let bridgehub = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
+    let ctm_proxy = contracts
+        .ecosystem_contracts
+        .state_transition_proxy_addr
+        .as_str();
 
     // Per-run UUID suffix in the work dir: `contracts_artifacts/` survives
-    // across test invocations, so without a unique suffix the prepare stage
-    // would append to an existing manifest and `dev execute-safe` would
-    // replay stale bundles.
+    // across test invocations, so without a unique suffix protocol-ops would
+    // append to an existing manifest and `dev execute-safe` would replay
+    // stale bundles.
     let run_tag = uuid::Uuid::new_v4();
 
-    // ── Phase 1: upgrade-prepare (deployer) ───────────────────────────────
+    // ── Phase 1: upgrade-prepare-all (deployer) ───────────────────────────
     //
     // TODO(v30-removal): the three pre-v31 override flags below are only
     // needed because the v30 CTMs in this fixture don't expose
     // L1_BYTECODES_SUPPLIER(), isZKsyncOS(), or getRollupDAManager().
     // On v31+ ecosystems protocol-ops auto-resolves them from L1.
     let prepare_dir = format!("upgrade_prepare_{run_tag}");
-    let governance_toml_rel = format!("{prepare_dir}/governance.toml");
-    let manifest_rel = format!("{prepare_dir}/manifest.json");
+    let governance_toml_rel = format!("{prepare_dir}/ecosystem.toml");
     let governance_toml_abs = contracts_backend.work_path(&governance_toml_rel);
     let prepare_out_abs = contracts_backend.work_path(&prepare_dir);
 
-    println!("\n  Running ecosystem upgrade-prepare ...");
+    println!("\n  Running ecosystem upgrade-prepare-all ...");
     contracts_backend
         .protocol_ops(&[
             "ecosystem",
-            "upgrade-prepare",
+            "upgrade-prepare-all",
             "--l1-rpc-url",
             l1_rpc_url,
-            "--ecosystem",
-            &eco_path_str,
+            "--bridgehub",
+            bridgehub,
             "--deployer-address",
             deployer_addr,
+            "--ctm-proxy",
+            ctm_proxy,
             "--bytecodes-supplier-address",
             contracts
                 .ecosystem_contracts
@@ -434,46 +371,42 @@ async fn run_ecosystem_upgrades(
             contracts.ecosystem_contracts.l1_rollup_da_manager.as_str(),
             "--is-zk-sync-os",
             "true",
-            "--governance-toml-out",
-            &governance_toml_abs,
             "--out",
             &prepare_out_abs,
         ])
-        .context("ecosystem upgrade-prepare failed")?;
+        .context("ecosystem upgrade-prepare-all failed")?;
 
     println!("  Applying prepare Safe bundles (deployer) ...");
     contracts_backend
         .parse_safe_bundles(&prepare_dir, l1_rpc_url)?
-        .apply(&[deployer_key])
-        .context("apply ecosystem-upgrade-prepare Safe bundles")?;
-
-    // Read deployed-address metadata from the manifest's `metadata[0].output`
-    // (consumed by the ownership-transfer hacks below).
-    let manifest_host = contracts_backend.work_dir().join(&manifest_rel);
-    let script_output = parse_upgrade_prepare_manifest(&manifest_host)
-        .context("Failed to read upgrade-prepare metadata from manifest.json")?;
-
-    std::thread::sleep(Duration::from_secs(1));
-
-    // ── Phase 2: ownership transfers (test-specific hacks) ───────────────
-    transfer_new_contracts_ownership(
-        contracts_backend,
-        l1_rpc_url,
-        contracts,
-        &script_output.core,
-    )
-    .await?;
-    transfer_governance_ownership_to_governor(contracts_backend, l1_rpc_url, contracts, wallets)
-        .await?;
+        .apply(&[deployer_key, governor_key])
+        .context("apply ecosystem-upgrade-prepare-all Safe bundles")?;
 
     let governance_toml_host = contracts_backend.work_dir().join(&governance_toml_rel);
     anyhow::ensure!(
         governance_toml_host.exists(),
-        "governance.toml not found at {} — did prepare stage write --governance-toml-out?",
+        "ecosystem.toml not found at {}",
         governance_toml_host.display(),
     );
 
-    // ── Phase 3: governance stages 0+1 on one fork (governor) ────────────
+    // ── Phase 2: prepared-contract ownership handoffs (test fixture hack) ─
+    transfer_prepared_core_contracts_to_governance(
+        contracts_backend,
+        l1_rpc_url,
+        contracts,
+        &governance_toml_host,
+    )
+    .await?;
+
+    // ── Phase 3: legacy governance ownership transfer (test fixture hack) ─
+    //
+    // The v30.2 fixture's original Governance.owner() private key was not
+    // persisted. Move ownership to the governor key before the governance
+    // replay so `dev execute-safe` can apply the generated bundle honestly.
+    transfer_governance_ownership_to_governor(contracts_backend, l1_rpc_url, contracts, wallets)
+        .await?;
+
+    // ── Phase 4: governance stages 0+1+2 on one fork (governor) ──────────
     //
     // Direct `ecosystem upgrade-governance` — one protocol-ops invocation
     // runs stages 0+1+2 against a single anvil fork, emitting one Safe
@@ -488,8 +421,8 @@ async fn run_ecosystem_upgrades(
             "upgrade-governance",
             "--l1-rpc-url",
             l1_rpc_url,
-            "--ecosystem",
-            &eco_path_str,
+            "--bridgehub",
+            bridgehub,
             "--governance-toml",
             &governance_toml_abs,
             "--out",
@@ -505,7 +438,7 @@ async fn run_ecosystem_upgrades(
 
     println!("  Ecosystem upgrade stages 0-1-2 completed");
 
-    Ok(script_output)
+    Ok(())
 }
 
 /// Verify that the chain's protocol version matches the expected v31 version
@@ -563,35 +496,9 @@ fn verify_protocol_version(
     Ok(())
 }
 
-/// Return the one `.safe.json` file protocol-ops emitted into `dir`. Bails if
-/// the count isn't exactly one — that would mean the protocol-ops command grew
-/// to emit multiple bundles and the caller needs updating to iterate them.
-fn single_safe_bundle(dir: &Path) -> Result<PathBuf> {
-    let mut matches: Vec<PathBuf> = fs::read_dir(dir)
-        .with_context(|| format!("read_dir {}", dir.display()))?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|s| s.to_str())
-                .map(|s| s.ends_with(".safe.json"))
-                .unwrap_or(false)
-        })
-        .collect();
-    matches.sort();
-    anyhow::ensure!(
-        matches.len() == 1,
-        "expected exactly one .safe.json in {}, found {}: {:?}",
-        dir.display(),
-        matches.len(),
-        matches
-    );
-    Ok(matches.into_iter().next().unwrap())
-}
-
 /// Reset `dir` so a fresh prepare run can't stumble into stale `.safe.json`
-/// files from earlier invocations (which would make `single_safe_bundle`
-/// fail). Deletes the directory entirely if it exists and recreates it empty.
+/// files from earlier invocations. Deletes the directory entirely if it exists
+/// and recreates it empty.
 fn reset_safe_bundle_dir(dir: &Path) -> Result<()> {
     if dir.exists() {
         fs::remove_dir_all(dir).with_context(|| format!("remove_dir_all {}", dir.display()))?;
@@ -612,13 +519,13 @@ fn run_chain_upgrade(
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
-    chain_name: &str,
+    chain_id: u64,
 ) -> Result<()> {
-    let _ = contracts; // kept for signature parity with other upgrade helpers
     println!("\n  Preparing chain upgrade Safe bundle (protocol_ops --simulate)...");
     let governor_key = wallets.ecosystem.governor.private_key.as_str();
     let access_control_restriction = contracts.l1.access_control_restriction_addr.as_str();
-    let eco_path_str = contracts_backend.work_path("ecosystem.yaml");
+    let bridgehub = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
+    let chain_id = chain_id.to_string();
 
     let out_rel = "chain_upgrade";
     let out_host = contracts_backend.work_dir().join(out_rel);
@@ -633,36 +540,20 @@ fn run_chain_upgrade(
             l1_rpc_url,
             "--out",
             &out_arg,
-            "--ecosystem",
-            &eco_path_str,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            bridgehub,
+            "--chain-id",
+            &chain_id,
             "--access-control-restriction",
             access_control_restriction,
         ])
         .context("chain upgrade --simulate failed")?;
 
-    let bundle_host = single_safe_bundle(&out_host)?;
-    let bundle_name = bundle_host
-        .file_name()
-        .and_then(|n| n.to_str())
-        .context("safe bundle filename not valid UTF-8")?;
-    let bundle_arg = contracts_backend.work_path(&format!("{out_rel}/{bundle_name}"));
-    println!("  chain upgrade Safe bundle: {}", bundle_host.display());
-
-    println!("  Applying chain upgrade bundle via `dev execute-safe`...");
+    println!("  Applying chain upgrade Safe bundle(s)...");
     contracts_backend
-        .protocol_ops(&[
-            "dev",
-            "execute-safe",
-            "--safe-file",
-            &bundle_arg,
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--private-key",
-            governor_key,
-        ])
-        .context("dev execute-safe for chain upgrade failed")?;
+        .parse_safe_bundles(out_rel, l1_rpc_url)?
+        .apply(&[governor_key])
+        .context("apply chain upgrade Safe bundles")?;
 
     Ok(())
 }
@@ -722,9 +613,10 @@ fn wait_for_server_to_process_upgrade(
     Ok(())
 }
 
-/// Run v31 ecosystem upgrade Stage 3: register bridged tokens in the NTV and
-/// migrate per-chain token balances from NTV into the L1AssetTracker. This is
-/// post-governance bookkeeping and can be broadcast by any funded key.
+/// Run v31 ecosystem stage3: register bridged tokens in the NTV and migrate
+/// per-chain token balances from NTV into the L1AssetTracker. Newer
+/// protocol-ops prepares this as a Safe bundle and it must run before the
+/// per-chain upgrade.
 fn run_stage3_token_migration(
     contracts_backend: &EraContractsBackend,
     l1_rpc_url: &str,
@@ -733,6 +625,7 @@ fn run_stage3_token_migration(
 ) -> Result<()> {
     println!("\n  Running ecosystem upgrade stage3 (token migration)...");
     let deployer_key = wallets.ecosystem.deployer.private_key.as_str();
+    let deployer_addr = wallets.ecosystem.deployer.address.as_str();
     let bridgehub = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
 
     // Stage3 reads `l1-contracts/script-config/v31-bridged-tokens.toml` listing
@@ -747,24 +640,31 @@ fn run_stage3_token_migration(
         )
         .context("write placeholder v31-bridged-tokens.toml")?;
 
+    let out_rel = "stage3";
+    let out_host = contracts_backend.work_dir().join(out_rel);
+    reset_safe_bundle_dir(&out_host)?;
+    let out_arg = contracts_backend.work_path(out_rel);
+
     contracts_backend
-        .forge_script(
-            &[
-                "deploy-scripts/upgrade/v31/EcosystemUpgrade_v31.s.sol:EcosystemUpgrade_v31",
-                "--sig",
-                "stage3(address)",
-                bridgehub,
-                "--rpc-url",
-                l1_rpc_url,
-                "--broadcast",
-                "--private-key",
-                deployer_key,
-                "--legacy",
-                "--slow",
-            ],
-            &[],
-        )
-        .context("stage3 token migration failed")?;
+        .protocol_ops(&[
+            "ecosystem",
+            "stage3",
+            "--l1-rpc-url",
+            l1_rpc_url,
+            "--bridgehub",
+            bridgehub,
+            "--sender",
+            deployer_addr,
+            "--out",
+            &out_arg,
+        ])
+        .context("ecosystem stage3 failed")?;
+
+    println!("  Applying stage3 Safe bundle(s)...");
+    contracts_backend
+        .parse_safe_bundles(out_rel, l1_rpc_url)?
+        .apply(&[deployer_key])
+        .context("apply ecosystem stage3 Safe bundles")?;
     Ok(())
 }
 
@@ -807,6 +707,7 @@ fn schedule_upgrade_timestamp(
     l1_rpc_url: &str,
     contracts: &Contracts,
     wallets: &WalletsFile,
+    chain_id: u64,
 ) -> Result<()> {
     let raw = contracts_backend
         .cast(&[
@@ -843,31 +744,42 @@ fn schedule_upgrade_timestamp(
 
     let new_protocol_version = target_protocol_version.to_string();
     let upgrade_timestamp_str = upgrade_timestamp.to_string();
+    let bridgehub = contracts.ecosystem_contracts.bridgehub_proxy_addr.as_str();
+    let access_control_restriction = contracts.l1.access_control_restriction_addr.as_str();
+    let chain_id_str = chain_id.to_string();
 
-    // Call ChainAdmin.setUpgradeTimestamp directly rather than through
-    // `protocol_ops chain set-upgrade-timestamp`. The v31 protocol_ops script
-    // (AdminFunctions.adminScheduleUpgrade) routes the call through
-    // ChainAdmin.multicall, which requires setUpgradeTimestamp to be
-    // `onlySelf` — that's the v31 shape. In the v30.2 fixture state this
-    // repo loads, setUpgradeTimestamp is `onlyOwner`, so the multicall path
-    // reverts inside with "Ownable: caller is not the owner" (msg.sender
-    // inside the inner call is the ChainAdmin itself, not its owner). The
-    // owner (= ecosystem governor) can call setUpgradeTimestamp directly
-    // on either version, so we do that and skip the shim entirely.
-    println!("\n  Calling ChainAdmin.setUpgradeTimestamp directly as governor...");
+    let out_rel = "set_upgrade_timestamp";
+    let out_host = contracts_backend.work_dir().join(out_rel);
+    reset_safe_bundle_dir(&out_host)?;
+    let out_arg = contracts_backend.work_path(out_rel);
+
+    println!("\n  Preparing ChainAdmin/ServerNotifier upgrade timestamp Safe bundle...");
     contracts_backend
-        .cast(&[
-            "send",
-            &contracts.l1.chain_admin_addr,
-            "setUpgradeTimestamp(uint256,uint256)",
-            &new_protocol_version,
-            &upgrade_timestamp_str,
-            "--private-key",
-            &wallets.ecosystem.governor.private_key,
-            "--rpc-url",
+        .protocol_ops(&[
+            "chain",
+            "set-upgrade-timestamp",
+            "--l1-rpc-url",
             l1_rpc_url,
+            "--bridgehub",
+            bridgehub,
+            "--chain-id",
+            &chain_id_str,
+            "--new-protocol-version",
+            &new_protocol_version,
+            "--upgrade-timestamp",
+            &upgrade_timestamp_str,
+            "--access-control-restriction",
+            access_control_restriction,
+            "--out",
+            &out_arg,
         ])
-        .context("ChainAdmin.setUpgradeTimestamp failed")?;
+        .context("chain set-upgrade-timestamp failed")?;
+
+    println!("  Applying set-upgrade-timestamp Safe bundle(s)...");
+    contracts_backend
+        .parse_safe_bundles(out_rel, l1_rpc_url)?
+        .apply(&[wallets.ecosystem.governor.private_key.as_str()])
+        .context("apply set-upgrade-timestamp Safe bundles")?;
 
     let scheduled_timestamp = read_u64_from_cast_call_with_args(
         contracts_backend,
@@ -957,28 +869,15 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
             )
         })?;
 
-    // Synthesize a minimal ecosystem.yaml from contracts.yaml for
-    // protocol-ops (which takes --ecosystem <path>). Write it into the
-    // backend's work_dir so it's visible inside the Docker container
-    // (only work_dir is mounted).
-    let eco_yaml_path = contracts_backend.work_dir().join("ecosystem.yaml");
-    write_synthetic_ecosystem_yaml(
-        &contracts,
-        6565,
-        &wallets.ecosystem.deployer.address,
-        &eco_yaml_path,
-    )?;
-
     // Run ecosystem upgrade stages via direct protocol-ops.
-    let _script_output =
-        run_ecosystem_upgrades(&contracts_backend, l1_rpc_url, &contracts, &wallets).await?;
+    run_ecosystem_upgrades(&contracts_backend, l1_rpc_url, &contracts, &wallets).await?;
 
     // Notify server about the upcoming upgrade. The `wait_for_server_to_process_upgrade`
     // call below (via upgrade-readiness-checker) enforces the stronger invariant we
     // actually need before `run_chain_upgrade` bumps L1's `protocolVersion()`: the L2
     // upgrade tx has a receipt and every pre-upgrade batch is finalized on the
     // settlement layer.
-    schedule_upgrade_timestamp(&contracts_backend, l1_rpc_url, &contracts, &wallets)?;
+    schedule_upgrade_timestamp(&contracts_backend, l1_rpc_url, &contracts, &wallets, 6565)?;
 
     // The server's `L1UpgradeTxWatcher` waits until the scheduled timestamp
     // (instant, set above) before it queues the L2 upgrade tx into the
@@ -1013,21 +912,15 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
 
     println!("Keeping zksync-os-server running during chain upgrade...");
 
-    // Run chain upgrade
-    run_chain_upgrade(
-        &contracts_backend,
-        l1_rpc_url,
-        &contracts,
-        &wallets,
-        "default",
-    )?;
+    // Stage3 registers legacy tokens before the per-chain upgrade so token
+    // withdrawals unblock as soon as the chain diamond upgrade lands.
+    run_stage3_token_migration(&contracts_backend, l1_rpc_url, &contracts, &wallets)?;
+
+    // Run chain upgrade.
+    run_chain_upgrade(&contracts_backend, l1_rpc_url, &contracts, &wallets, 6565)?;
 
     // Verify the protocol version was upgraded to v31
     verify_protocol_version(&contracts_backend, l1_rpc_url, &contracts)?;
-
-    // Stage 3: NTV → AssetTracker token migration. Broadcasts via deployer key
-    // (any funded account works).
-    run_stage3_token_migration(&contracts_backend, l1_rpc_url, &contracts, &wallets)?;
 
     // Wait for new batches produced under v31.
     server
