@@ -47,6 +47,8 @@ struct ServerConfig {
     genesis: GenesisSection,
     l1_watcher: L1WatcherSection,
     l1_sender: L1SenderSection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    gateway_sender: Option<OperatorKeysSection>,
     batcher: BatcherSection,
     prover_input_generator: ProverInputGeneratorSection,
     prover_api: ProverApiSection,
@@ -97,6 +99,12 @@ struct L1WatcherSection {
 struct L1SenderSection {
     pubdata_mode: String,
     poll_interval: String,
+    #[serde(flatten)]
+    operator_keys: OperatorKeysSection,
+}
+
+#[derive(Clone, Serialize)]
+struct OperatorKeysSection {
     operator_commit_sk: String,
     operator_prove_sk: String,
     operator_execute_sk: String,
@@ -249,6 +257,12 @@ impl ServerConfigBuilder {
     }
 
     pub fn build(&self) -> String {
+        let operator_keys = OperatorKeysSection {
+            operator_commit_sk: self.commit_sk.clone(),
+            operator_prove_sk: self.prove_sk.clone(),
+            operator_execute_sk: self.execute_sk.clone(),
+        };
+
         let general = Some(GeneralSection {
             ephemeral: if self.ephemeral { Some(true) } else { None },
             ephemeral_state: self.ephemeral_state.clone(),
@@ -285,10 +299,11 @@ impl ServerConfigBuilder {
                     PubdataMode::RelayedL2Calldata => "RelayedL2Calldata".to_string(),
                 },
                 poll_interval: "100ms".to_string(),
-                operator_commit_sk: self.commit_sk.clone(),
-                operator_prove_sk: self.prove_sk.clone(),
-                operator_execute_sk: self.execute_sk.clone(),
+                operator_keys: operator_keys.clone(),
             },
+            // Gateway-settling chains submit batches to the gateway, so newer
+            // servers require the same operator keys under `gateway_sender`.
+            gateway_sender: self.gateway_rpc_url.as_ref().map(|_| operator_keys),
             batcher: BatcherSection {
                 batch_timeout: "1s".to_string(),
             },
