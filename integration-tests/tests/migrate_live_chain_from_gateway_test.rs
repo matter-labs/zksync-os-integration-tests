@@ -511,77 +511,45 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
         eco.gateway_chain_id(),
     );
 
-    // TODO: end-to-end post-migration restart is disabled. The idea: kill
-    // the pre-migration chain server (whose L1 committer was targeting the
-    // gateway), respawn it reusing the same RocksDB so new batches commit
-    // to L1, then wait for `wait_for_traffic_tx_executed_on_l1`.
-    //
-    // Already in place for when we re-enable:
-    //   - zksync-os-server's `PubdataMode::Blobs + gateway_rpc_url.is_some()`
-    //     startup check is relaxed; `L1CommitWatcher` / `L1PersistBatchWatcher`
-    //     fall back to the current SL tip when `find_l1_commit_block_by_batch_number`
-    //     misses (pre-migration commits live on the former SL).
-    //   - `CommittedBatchProvider` cascades through the gateway diamond too,
-    //     so pre-migration commit metadata is resolvable without the
-    //     previous run's local RocksDB.
-    //   - `InteropRootsSubpool::on_canonical_state_change` downgrades its
-    //     envelope-vs-tx assert to a warn (rebuilt envelope diverges across
-    //     a migration boundary).
-    //   - `generate-l1-state` writes `l1-state.gateway-state.tar.gz` into
-    //     the persistent cache dir so `--skip-generate` reruns still find
-    //     it; the commented-out block below funds the chain's L1-sender
-    //     operators via `anvil_utils::fund_account` before restart.
-    //
-    // Blocker: after respawn the sequencer produces a few blocks but the
-    // cast-sent traffic tx never confirms within cast's timeout — the block
-    // pipeline stalls. Likely further issues: the `interop_fee_updater` loop
-    // failing on `gatewaySettlementFee()` against the gateway asset tracker,
-    // other subpools (`interop_fee`, `sl_chain_id`, `l1`) hitting the same
-    // envelope-rebuild divergence as `interop_roots` did, and block replay
-    // against the new SL context.
-    //
-    // For now, clean up the still-running pre-migration chain server and
-    // stop here so the migration-from-gateway flow itself is exercised.
+    // Kill the pre-migration chain server (whose L1 committer was targeting the gateway), respawn
+    // it reusing the same RocksDB so new batches commit to L1, then wait for
+    // `wait_for_traffic_tx_executed_on_l1`.
+    let _ = chain_server.kill();
+
+    println!("\n=== Restarting chain server with L1 settlement ===");
+    tokio::time::sleep(Duration::from_secs(5)).await;
+
+    println!("\n=== Funding migrated chain's L1-sender operators on L1 ===");
+    for (label, op) in [
+        ("commit", &chain_wallets.commit_operator),
+        ("prove", &chain_wallets.prove_operator),
+        ("execute", &chain_wallets.execute_operator),
+    ] {
+        println!("  funding {label} operator {} on L1", op.address);
+        integration_tests::anvil_utils::fund_account(
+            &op.address,
+            "5ether",
+            &l1_rpc_url,
+            &deployer_pk,
+        )
+        .with_context(|| format!("fund L1 balance for {label} operator"))?;
+    }
+
+    let chain_server = ServerBuilder::new(preset.clone(), chain_name)
+        .gateway_rpc_url(&gw_l2_rpc)
+        .config_path(&chain_config)
+        .env("l1_sender_pubdata_mode", "Blobs")
+        .spawn(&anvil)
+        .map_err(|e| anyhow::anyhow!("Failed to restart chain server on L1: {:?}", e))?;
+    println!("=== Driving traffic until migrated chain commits to L1 ===");
+    chain_server
+        .wait_for_traffic_tx_executed_on_l1()
+        .context("post-migration batches executed on L1")?;
+
     let _ = chain_server.kill();
     let _ = gw_server.kill();
     tokio::time::sleep(Duration::from_millis(200)).await;
     let _ = anvil.kill();
-
-    // println!("\n=== Restarting chain server with L1 settlement ===");
-    // tokio::time::sleep(Duration::from_secs(5)).await;
-    //
-    // println!("\n=== Funding migrated chain's L1-sender operators on L1 ===");
-    // for (label, op) in [
-    //     ("commit", &chain_wallets.commit_operator),
-    //     ("prove", &chain_wallets.prove_operator),
-    //     ("execute", &chain_wallets.execute_operator),
-    // ] {
-    //     println!("  funding {label} operator {} on L1", op.address);
-    //     integration_tests::anvil_utils::fund_account(
-    //         &op.address,
-    //         "5ether",
-    //         &l1_rpc_url,
-    //         &deployer_pk,
-    //     )
-    //     .with_context(|| format!("fund L1 balance for {label} operator"))?;
-    // }
-    //
-    // let chain_server = ServerBuilder::new(preset.clone(), chain_name)
-    //     .gateway_rpc_url(&gw_l2_rpc)
-    //     .config_path(&chain_config)
-    //     .env("l1_sender_pubdata_mode", "Blobs")
-    //     .spawn(&anvil)
-    //     .map_err(|e| anyhow::anyhow!("Failed to restart chain server on L1: {:?}", e))?;
-    //
-    // println!("=== Driving traffic until migrated chain commits to L1 ===");
-    // chain_server
-    //     .wait_for_traffic_tx_executed_on_l1()
-    //     .context("post-migration batches executed on L1")?;
-    //
-    // let _ = chain_server.kill();
-    // let _ = gw_server.kill();
-    // tokio::time::sleep(Duration::from_millis(200)).await;
-    // let _ = anvil.kill();
 
     println!("\nTest passed!");
     Ok(())
