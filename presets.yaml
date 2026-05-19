@@ -15,7 +15,7 @@ migrate_live_chain_gateway:
     - migrate_live_chain_to_gateway_test
 
 v30_to_v31_upgrade:
-  era_contracts: ed47f16163a8f03d0b8f0d2060cd80ab4e3eae94
-  zksync_os_server: main
+  era_contracts: 7dc7d458ad5fc0e865ac05cbfc8328d201ed9b3e
+  zksync_os_server: refs/pull/1289/head
   tests:
     - upgrade_v30_to_v31
