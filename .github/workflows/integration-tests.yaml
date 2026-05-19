@@ -42,9 +42,15 @@ jobs:
             curl
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
+        env:
+          # To fix rate limiting issues with GitHub API
+          GITHUB_TOKEN: ${{ github.token }}
         with:
-          toolchain: nightly-2026-02-20
+          inherit-toolchain: true
+          components: 'rustfmt,clippy'
+          bins: 'cargo-nextest'
+          cache: false
 
       - name: Install Foundry
         run: |
@@ -56,11 +62,6 @@ jobs:
 
       - name: Build all crates
         run: cargo build --release --workspace
-
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
 
       - name: Run integration tests
         run: ./run-tests.sh
