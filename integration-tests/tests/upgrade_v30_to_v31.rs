@@ -736,10 +736,27 @@ fn schedule_upgrade_timestamp(
         "protocolVersion()(uint256)",
     )
     .context("Failed to read target protocol version from CTM")?;
+    let current_chain_protocol_version = read_u64_from_cast_call(
+        contracts_backend,
+        l1_rpc_url,
+        &contracts.l1.diamond_proxy_addr,
+        "getProtocolVersion()(uint256)",
+    )
+    .context("Failed to read current protocol version from chain diamond")?;
+    let server_notifier = contracts_backend
+        .cast(&[
+            "call",
+            &contracts.ecosystem_contracts.state_transition_proxy_addr,
+            "serverNotifierAddress()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("Failed to read ServerNotifier address from CTM")?;
+    let server_notifier = server_notifier.trim().to_string();
 
     println!(
-        "Scheduling upgrade timestamp {} for target protocol version {}",
-        upgrade_timestamp, target_protocol_version
+        "Scheduling upgrade timestamp {} for current protocol version {} (target {})",
+        upgrade_timestamp, current_chain_protocol_version, target_protocol_version
     );
 
     let new_protocol_version = target_protocol_version.to_string();
@@ -784,11 +801,14 @@ fn schedule_upgrade_timestamp(
     let scheduled_timestamp = read_u64_from_cast_call_with_args(
         contracts_backend,
         l1_rpc_url,
-        &contracts.l1.chain_admin_addr,
-        "protocolVersionToUpgradeTimestamp(uint256)(uint256)",
-        &[&target_protocol_version.to_string()],
+        &server_notifier,
+        "protocolVersionToUpgradeTimestamp(uint256,uint256)(uint256)",
+        &[
+            &chain_id.to_string(),
+            &current_chain_protocol_version.to_string(),
+        ],
     )
-    .context("Failed to read protocolVersionToUpgradeTimestamp after scheduling")?;
+    .context("Failed to read ServerNotifier protocolVersionToUpgradeTimestamp after scheduling")?;
     anyhow::ensure!(
         scheduled_timestamp == upgrade_timestamp,
         "Upgrade timestamp mismatch after scheduling: expected {}, got {}",
@@ -796,8 +816,8 @@ fn schedule_upgrade_timestamp(
         scheduled_timestamp
     );
     println!(
-        "✓ Upgrade timestamp confirmed on-chain: protocolVersionToUpgradeTimestamp({}) = {}",
-        target_protocol_version, scheduled_timestamp
+        "✓ Upgrade timestamp confirmed on-chain: protocolVersionToUpgradeTimestamp({}, {}) = {}",
+        chain_id, current_chain_protocol_version, scheduled_timestamp
     );
     Ok(())
 }
