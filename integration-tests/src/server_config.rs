@@ -47,8 +47,8 @@ struct ServerConfig {
     genesis: GenesisSection,
     l1_watcher: L1WatcherSection,
     l1_sender: L1SenderSection,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    gateway_sender: Option<OperatorKeysSection>,
+    gateway_sender: GatewaySenderSection,
+    gateway_provider: GatewayProviderConfigSection,
     batcher: BatcherSection,
     prover_input_generator: ProverInputGeneratorSection,
     prover_api: ProverApiSection,
@@ -68,17 +68,7 @@ struct GeneralSection {
     #[serde(skip_serializing_if = "Option::is_none")]
     ephemeral_state: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    gateway_rpc_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     gateway_chain_id: Option<u64>,
-    /// Default is 7s — the main contributor to commit→prove→execute pipeline
-    /// latency in tests. Each pipeline stage waits one full poll cycle for
-    /// the L1 watcher to observe the prior stage's tx, so 7s × 3 ≈ 21s of
-    /// pure polling.
-    l1_rpc_poll_interval: String,
-    /// Same idea as [`Self::l1_rpc_poll_interval`] for gateway-settling
-    /// chains (the server polls the gateway instead of L1).
-    gateway_rpc_poll_interval: String,
 }
 
 #[derive(Serialize)]
@@ -108,6 +98,21 @@ struct OperatorKeysSection {
     operator_commit_sk: String,
     operator_prove_sk: String,
     operator_execute_sk: String,
+}
+
+#[derive(Serialize)]
+struct GatewaySenderSection {
+    poll_interval: String,
+    operator_commit_sk: String,
+    operator_prove_sk: String,
+    operator_execute_sk: String,
+}
+
+#[derive(Serialize)]
+struct GatewayProviderConfigSection {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    rpc_url: Option<String>,
+    poll_interval: String,
 }
 
 #[derive(Serialize)]
@@ -266,10 +271,7 @@ impl ServerConfigBuilder {
         let general = Some(GeneralSection {
             ephemeral: if self.ephemeral { Some(true) } else { None },
             ephemeral_state: self.ephemeral_state.clone(),
-            gateway_rpc_url: self.gateway_rpc_url.clone(),
             gateway_chain_id: self.gateway_chain_id,
-            l1_rpc_poll_interval: "100ms".to_string(),
-            gateway_rpc_poll_interval: "100ms".to_string(),
         });
 
         let mut forced_prices = BTreeMap::new();
@@ -301,9 +303,16 @@ impl ServerConfigBuilder {
                 poll_interval: "100ms".to_string(),
                 operator_keys: operator_keys.clone(),
             },
-            // Gateway-settling chains submit batches to the gateway, so newer
-            // servers require the same operator keys under `gateway_sender`.
-            gateway_sender: self.gateway_rpc_url.as_ref().map(|_| operator_keys),
+            gateway_sender: GatewaySenderSection {
+                poll_interval: "100ms".to_string(),
+                operator_commit_sk: self.commit_sk.clone(),
+                operator_prove_sk: self.prove_sk.clone(),
+                operator_execute_sk: self.execute_sk.clone(),
+            },
+            gateway_provider: GatewayProviderConfigSection {
+                rpc_url: self.gateway_rpc_url.clone(),
+                poll_interval: "100ms".to_string(),
+            },
             batcher: BatcherSection {
                 batch_timeout: "1s".to_string(),
             },
