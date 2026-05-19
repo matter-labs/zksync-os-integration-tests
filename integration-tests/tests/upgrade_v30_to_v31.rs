@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use integration_tests::anvil::Anvil;
 use integration_tests::anvil::DEFAULT_ANVIL_PRIVATE_KEY;
 use integration_tests::anvil_utils::{
-    fund_account, impersonate_account, stop_impersonating_account, RICH_ACCOUNT_PRIVATE_KEY,
+    fund_account, impersonate_account, stop_impersonating_account, EIP1967_PROXY_ADMIN_SLOT,
+    RICH_ACCOUNT_PRIVATE_KEY,
 };
 use integration_tests::protocol_ops::EraContractsBackend;
 use integration_tests::server::{L1DepositBaseToken, ServerBuilder};
@@ -187,6 +188,125 @@ async fn transfer_governance_ownership_to_governor(
     Ok(())
 }
 
+/// Transfer the v30.2 ServerNotifier ProxyAdmin owner contract to the governor
+/// wallet. `upgrade-prepare-all` emits the ServerNotifier ProxyAdmin upgrade
+/// bundle from this nested owner, so it must be controlled by a persisted key
+/// before protocol-ops generates the prepare manifest.
+async fn transfer_server_notifier_admin_owner_to_governor(
+    contracts_backend: &EraContractsBackend,
+    l1_rpc_url: &str,
+    contracts: &Contracts,
+    wallets: &WalletsFile,
+) -> Result<()> {
+    println!("\n  Transferring ServerNotifier admin owner to governor wallet...");
+
+    let server_notifier = contracts_backend
+        .cast(&[
+            "call",
+            contracts
+                .ecosystem_contracts
+                .state_transition_proxy_addr
+                .as_str(),
+            "serverNotifierAddress()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("Failed to read ServerNotifier address from CTM")?;
+    let server_notifier = server_notifier.trim().to_string();
+
+    let proxy_admin_word = contracts_backend
+        .cast(&[
+            "storage",
+            &server_notifier,
+            EIP1967_PROXY_ADMIN_SLOT,
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("Failed to read ServerNotifier proxy admin slot")?;
+    let proxy_admin = address_from_storage_word(&proxy_admin_word, "ServerNotifier proxy admin")?;
+
+    let admin_owner_contract = contracts_backend
+        .cast(&[
+            "call",
+            &proxy_admin,
+            "owner()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("Failed to read ServerNotifier ProxyAdmin owner")?;
+    let admin_owner_contract = admin_owner_contract.trim().to_string();
+
+    let governor_address = wallets.ecosystem.governor.address.as_str();
+    let current_owner = contracts_backend
+        .cast(&[
+            "call",
+            &admin_owner_contract,
+            "owner()(address)",
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("Failed to read ServerNotifier admin owner contract owner")?;
+    let current_owner = current_owner.trim().to_string();
+
+    println!("    ServerNotifier: {}", server_notifier);
+    println!("    ProxyAdmin: {}", proxy_admin);
+    println!("    Admin owner contract: {}", admin_owner_contract);
+    println!("    Current owner: {}", current_owner);
+
+    if current_owner.eq_ignore_ascii_case(governor_address) {
+        println!("    Already owned by governor, skipping");
+        return Ok(());
+    }
+
+    impersonate_account(&current_owner, l1_rpc_url).await?;
+    fund_account(
+        &current_owner,
+        "1ether",
+        l1_rpc_url,
+        RICH_ACCOUNT_PRIVATE_KEY,
+    )?;
+
+    contracts_backend
+        .cast(&[
+            "send",
+            &admin_owner_contract,
+            "transferOwnership(address)",
+            governor_address,
+            "--from",
+            &current_owner,
+            "--rpc-url",
+            l1_rpc_url,
+            "--unlocked",
+        ])
+        .context("Failed to transfer ServerNotifier admin owner")?;
+
+    stop_impersonating_account(&current_owner, l1_rpc_url).await;
+
+    contracts_backend
+        .cast(&[
+            "send",
+            &admin_owner_contract,
+            "acceptOwnership()",
+            "--private-key",
+            wallets.ecosystem.governor.private_key.as_str(),
+            "--rpc-url",
+            l1_rpc_url,
+        ])
+        .context("Failed to accept ServerNotifier admin ownership")?;
+
+    println!("    ✓ ServerNotifier admin owner transferred to governor");
+    Ok(())
+}
+
+fn address_from_storage_word(word: &str, label: &str) -> Result<String> {
+    let hex = word.trim().strip_prefix("0x").unwrap_or(word.trim());
+    anyhow::ensure!(
+        hex.len() == 64,
+        "{label} storage word is not 32 bytes: {word:?}"
+    );
+    Ok(format!("0x{}", &hex[24..]))
+}
+
 async fn transfer_ownable_to_governance(
     contracts_backend: &EraContractsBackend,
     label: &str,
@@ -322,6 +442,14 @@ async fn run_ecosystem_upgrades(
     println!("\n=== Running Ecosystem Upgrades (direct protocol-ops) ===");
 
     fund_governance_accounts(l1_rpc_url, wallets)?;
+
+    transfer_server_notifier_admin_owner_to_governor(
+        contracts_backend,
+        l1_rpc_url,
+        contracts,
+        wallets,
+    )
+    .await?;
 
     let deployer_key = wallets.ecosystem.deployer.private_key.as_str();
     let governor_key = wallets.ecosystem.governor.private_key.as_str();

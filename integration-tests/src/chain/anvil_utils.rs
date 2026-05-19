@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use std::process::Command;
 
+pub const EIP1967_PROXY_ADMIN_SLOT: &str =
+    "0xb53127684a568b3173ae13b9f8a6016e243e63b6e8ee1178d6a717850b5d6103";
+
 /// Default private key for the rich account used to fund impersonated accounts.
 pub const RICH_ACCOUNT_PRIVATE_KEY: &str =
     "0x7726827caac94a7f9e1b160f7ea819f172f7b6f9d2a97f992c38edeab82d4110";
