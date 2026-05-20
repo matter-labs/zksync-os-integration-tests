@@ -1,5 +1,5 @@
 v31_draft_with_main_server:
-  era_contracts: e9b7702b6bbf252f432856c4e43fd9e7d280641f
+  era_contracts: b4ff81d100bbdb4d5044edee68cff72694d34147
   zksync_os_server: main
   tests:
     - l1_settling_test
@@ -8,7 +8,7 @@ v31_draft_with_main_server:
     - add_remove_validator_test
 
 migrate_live_chain_gateway:
-  era_contracts: e9b7702b6bbf252f432856c4e43fd9e7d280641f
+  era_contracts: b4ff81d100bbdb4d5044edee68cff72694d34147
   zksync_os_server: main
   tests:
     - migrate_live_chain_from_gateway_test
