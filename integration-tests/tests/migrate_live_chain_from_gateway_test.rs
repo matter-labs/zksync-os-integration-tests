@@ -273,8 +273,8 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
         .context("read diamond_cut_data.hex — regenerate l1-state cache")?;
     let l1_diamond_cut_data = l1_diamond_cut_data.trim().to_string();
 
-    let eco_path = contracts_backend.ecosystem_yaml_path(&preset)?;
     let signers: &[&str] = &[&chain_owner_pk, &deployer_pk];
+    let chain_id_str = chain_id.to_string();
 
     // Per-run UUID suffix in the work dir: `contracts_artifacts/` survives
     // across test invocations (macOS Docker/VirtioFS bind-mount quirk), so
@@ -300,10 +300,10 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
             "phase-0-pause-deposits",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--out",
             &phase0_safe_abs,
         ])
@@ -405,10 +405,10 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
             "phase-1-submit",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--l1-gas-price",
             "1000000000",
             "--l1-diamond-cut-data",
@@ -445,10 +445,10 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
             "phase-2-finalize",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--deployer-address",
             &deployer_addr,
             "--gateway-rpc-url",
@@ -475,10 +475,10 @@ async fn run_migrate_live_chain_from_gateway_test() -> Result<()> {
             "phase-3-set-da-validator-pair",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--l1-da-validator",
             l1_da_validator.as_str(),
             "--l2-da-commitment-scheme",
