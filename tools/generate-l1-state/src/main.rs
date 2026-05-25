@@ -300,6 +300,31 @@ fn extract_json_value(obj: &serde_json::Value, path: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("Key {:?} is not a string", path))
 }
 
+fn protocol_ops_uses_bridgehub_topology(contracts_backend: &EraContractsBackend) -> Result<bool> {
+    let help = contracts_backend
+        .protocol_ops(&["chain", "gateway", "convert", "--help"])
+        .context("detect protocol_ops topology flags")?;
+    Ok(help.contains("--chain-id"))
+}
+
+fn add_chain_topology_args<'a>(
+    args: &mut Vec<&'a str>,
+    use_bridgehub_topology: bool,
+    bridgehub: &'a str,
+    chain_id: &'a str,
+    ecosystem_path: &'a str,
+    chain_name: &'a str,
+) {
+    // TODO(protocol-ops): once all presets use the new topology, remove the
+    // legacy `--ecosystem/--chain` branch and pass `--bridgehub/--chain-id`
+    // everywhere.
+    if use_bridgehub_topology {
+        args.extend(["--bridgehub", bridgehub, "--chain-id", chain_id]);
+    } else {
+        args.extend(["--ecosystem", ecosystem_path, "--chain", chain_name]);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Chain operator context
 // ---------------------------------------------------------------------------
@@ -704,8 +729,8 @@ async fn run_generation_flow(
     // equivalent). The current interop test only verifies L2→L1 message
     // inclusion, so cross-chain base-token transfers would need this added.
     // ----------------------------------------------------------------
-    // Write ecosystem.yaml early — downstream `chain init` / `chain gateway *`
-    // invocations consume it via `--ecosystem <path>`.
+    // Write ecosystem.yaml early. Cached tests consume it directly, and older
+    // protocol-ops images still use it for `chain gateway *` topology.
     let eco_yaml_path = contracts_backend.work_dir().join("ecosystem.yaml");
     let eco_config = integration_tests::l1_state::EcosystemConfig {
         bridgehub: bridgehub.clone(),
@@ -730,6 +755,7 @@ async fn run_generation_flow(
     println!("  ecosystem.yaml -> {}", eco_yaml_path.display());
 
     let eco_path = contracts_backend.work_path("ecosystem.yaml");
+    let use_bridgehub_topology = protocol_ops_uses_bridgehub_topology(contracts_backend)?;
 
     // Helper to resolve a chain's diamond proxy from the bridgehub.
     let resolve_diamond = |chain_id: u64| -> Result<String> {
@@ -1030,16 +1056,16 @@ async fn run_generation_flow(
         let convert_rel = format!("generate_l1_state/gateway_convert_{}", GATEWAY.id);
         let convert_safe_rel = format!("{convert_rel}/safe");
         let convert_safe_abs = contracts_backend.work_path(&convert_safe_rel);
-        contracts_backend.protocol_ops(&[
-            "chain",
-            "gateway",
-            "convert",
-            "--l1-rpc-url",
-            l1_rpc_url,
-            "--ecosystem",
+        let mut args = vec!["chain", "gateway", "convert", "--l1-rpc-url", l1_rpc_url];
+        add_chain_topology_args(
+            &mut args,
+            use_bridgehub_topology,
+            &bridgehub,
+            &gateway_id_str,
             &eco_path,
-            "--chain",
             "gateway",
+        );
+        args.extend([
             "--gateway-deployer",
             &keys.deployer_addr,
             "--ctm-representative-chain-id",
@@ -1048,7 +1074,8 @@ async fn run_generation_flow(
             &vote_output_path_rel,
             "--out",
             &convert_safe_abs,
-        ])?;
+        ]);
+        contracts_backend.protocol_ops(&args)?;
         contracts_backend
             .parse_safe_bundles(&convert_safe_rel, l1_rpc_url)?
             .apply(&[
@@ -1117,28 +1144,38 @@ async fn run_generation_flow(
         // emitted directly by `chain gateway migrate-to phase-1-submit`.
         let phase1_safe_rel = format!("{migrate_dir}/phase1/safe");
         let phase1_safe_abs = contracts_backend.work_path(&phase1_safe_rel);
-        contracts_backend.protocol_ops(&[
+        let chain_id_str = chain_id.to_string();
+        let mut args = vec![
             "chain",
             "gateway",
             "migrate-to",
             "phase-1-submit",
             "--l1-rpc-url",
             l1_rpc_url,
-            "--ecosystem",
+        ];
+        add_chain_topology_args(
+            &mut args,
+            use_bridgehub_topology,
+            &bridgehub,
+            &chain_id_str,
             &eco_path,
-            "--chain",
             &ops.dir_name,
-            "--gateway-chain-id",
-            &gateway_chain_id_str,
+        );
+        args.extend(["--gateway-chain-id", &gateway_chain_id_str]);
+        if use_bridgehub_topology {
+            args.extend(["--gateway-rpc-url", &gw_l2_rpc]);
+        } else {
+            args.extend(["--vote-preparation-toml", &vote_output_path_rel]);
+        }
+        args.extend([
             "--l1-gas-price",
             &l1_gas_price_str,
-            "--vote-preparation-toml",
-            &vote_output_path_rel,
             "--refund-recipient",
             &keys.deployer_addr,
             "--out",
             &phase1_safe_abs,
-        ])?;
+        ]);
+        contracts_backend.protocol_ops(&args)?;
         contracts_backend
             .parse_safe_bundles(&phase1_safe_rel, l1_rpc_url)?
             .apply(signers)
@@ -1147,26 +1184,33 @@ async fn run_generation_flow(
         // Phase 2: finalize (deployer) — forks real L1 post-phase-1.
         let phase2_safe_rel = format!("{migrate_dir}/phase2/safe");
         let phase2_safe_abs = contracts_backend.work_path(&phase2_safe_rel);
-        contracts_backend.protocol_ops(&[
+        let mut args = vec![
             "chain",
             "gateway",
             "migrate-to",
             "phase-2-finalize",
             "--l1-rpc-url",
             l1_rpc_url,
-            "--ecosystem",
+        ];
+        add_chain_topology_args(
+            &mut args,
+            use_bridgehub_topology,
+            &bridgehub,
+            &chain_id_str,
             &eco_path,
-            "--chain",
             &ops.dir_name,
+        );
+        args.extend([
             "--deployer-address",
             &keys.deployer_addr,
             "--gateway-rpc-url",
             &gw_l2_rpc,
-            "--vote-preparation-toml",
-            &vote_output_path_rel,
-            "--out",
-            &phase2_safe_abs,
-        ])?;
+        ]);
+        if !use_bridgehub_topology {
+            args.extend(["--vote-preparation-toml", &vote_output_path_rel]);
+        }
+        args.extend(["--out", &phase2_safe_abs]);
+        contracts_backend.protocol_ops(&args)?;
         contracts_backend
             .parse_safe_bundles(&phase2_safe_rel, l1_rpc_url)?
             .apply(signers)
@@ -1192,17 +1236,24 @@ async fn run_generation_flow(
 
         let phase3_safe_rel = format!("{migrate_dir}/phase3/safe");
         let phase3_safe_abs = contracts_backend.work_path(&phase3_safe_rel);
-        contracts_backend.protocol_ops(&[
+        let chain_id_str = chain_id.to_string();
+        let mut args = vec![
             "chain",
             "gateway",
             "migrate-to",
             "phase-3-validators",
             "--l1-rpc-url",
             l1_rpc_url,
-            "--ecosystem",
+        ];
+        add_chain_topology_args(
+            &mut args,
+            use_bridgehub_topology,
+            &bridgehub,
+            &chain_id_str,
             &eco_path,
-            "--chain",
             &ops.dir_name,
+        );
+        args.extend([
             "--gateway-rpc-url",
             &gw_l2_rpc,
             "--commit-operator",
@@ -1219,7 +1270,8 @@ async fn run_generation_flow(
             &l1_gas_price_str,
             "--out",
             &phase3_safe_abs,
-        ])?;
+        ]);
+        contracts_backend.protocol_ops(&args)?;
         contracts_backend
             .parse_safe_bundles(&phase3_safe_rel, l1_rpc_url)?
             .apply(&[&ops.owner_pk, &keys.deployer_pk])

@@ -89,6 +89,12 @@ struct L1WatcherSection {
 struct L1SenderSection {
     pubdata_mode: String,
     poll_interval: String,
+    #[serde(flatten)]
+    operator_keys: OperatorKeysSection,
+}
+
+#[derive(Clone, Serialize)]
+struct OperatorKeysSection {
     operator_commit_sk: String,
     operator_prove_sk: String,
     operator_execute_sk: String,
@@ -256,6 +262,12 @@ impl ServerConfigBuilder {
     }
 
     pub fn build(&self) -> String {
+        let operator_keys = OperatorKeysSection {
+            operator_commit_sk: self.commit_sk.clone(),
+            operator_prove_sk: self.prove_sk.clone(),
+            operator_execute_sk: self.execute_sk.clone(),
+        };
+
         let general = Some(GeneralSection {
             ephemeral: if self.ephemeral { Some(true) } else { None },
             ephemeral_state: self.ephemeral_state.clone(),
@@ -289,9 +301,7 @@ impl ServerConfigBuilder {
                     PubdataMode::RelayedL2Calldata => "RelayedL2Calldata".to_string(),
                 },
                 poll_interval: "100ms".to_string(),
-                operator_commit_sk: self.commit_sk.clone(),
-                operator_prove_sk: self.prove_sk.clone(),
-                operator_execute_sk: self.execute_sk.clone(),
+                operator_keys: operator_keys.clone(),
             },
             gateway_sender: GatewaySenderSection {
                 poll_interval: "100ms".to_string(),

@@ -155,23 +155,11 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
 
     let contracts_backend = EraContractsBackend::from_preset(&preset, "migrate_to_gateway", &[])?;
 
-    // Stage the cached vote-prep TOML into the era-contracts script-out
-    // directory so phase commands can read it at the forge-canonical path
-    // (/script-out/gateway_vote_prep_out.toml). Docker backends see the
-    // same file via the mounted script-out symlink.
+    // Reuse the cached vote-prep output to keep the test's DA validator input
+    // aligned with the generated ecosystem.
     let vote_prep_toml = load_vote_prep_toml(&preset, &contracts_backend)?;
     let relayed_sl_da_validator = extract_relayed_sl_da_validator(&vote_prep_toml)?;
     println!("  Gateway relayed SL DA validator: {relayed_sl_da_validator}");
-    contracts_backend
-        .write_repo_file(
-            "l1-contracts/script-out/gateway_vote_prep_out.toml",
-            &vote_prep_toml,
-        )
-        .context("stage gateway_vote_prep_out.toml into era-contracts script-out")?;
-    let vote_prep_path_rel = "/script-out/gateway_vote_prep_out.toml".to_string();
-
-    let eco_path = contracts_backend.ecosystem_yaml_path(&preset)?;
-
     let signers: &[&str] = &[&chain_owner_pk, &deployer_pk];
     let l1_gas_price = "1000000000".to_string();
     // Per-run UUID suffix in the work dir: `contracts_artifacts/` survives
@@ -199,6 +187,7 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
         .context("bridgehub.getZKChain")?
         ._0;
     let chain_diamond_proxy_hex = format!("{:#x}", chain_diamond_proxy);
+    let chain_id_str = chain_id.to_string();
 
     // ── Phase 0: pause-deposits + notify-server (chain admin) ────────────
     // The Migrator requires deposits to be paused and the chain's L1 state
@@ -217,10 +206,10 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
             "phase-0-pause-deposits",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--out",
             &phase0_safe_abs,
         ])
@@ -261,16 +250,16 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
             "phase-1-submit",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--gateway-chain-id",
             &gateway_chain_id_str,
+            "--gateway-rpc-url",
+            gw_l2_rpc.as_str(),
             "--l1-gas-price",
             l1_gas_price.as_str(),
-            "--vote-preparation-toml",
-            vote_prep_path_rel.as_str(),
             "--refund-recipient",
             &deployer_addr,
             "--out",
@@ -300,16 +289,14 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
             "phase-2-finalize",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--deployer-address",
             &deployer_addr,
             "--gateway-rpc-url",
             gw_l2_rpc.as_str(),
-            "--vote-preparation-toml",
-            vote_prep_path_rel.as_str(),
             "--out",
             &phase2_safe_abs,
         ])
@@ -330,10 +317,10 @@ async fn run_migrate_live_chain_to_gateway_test() -> Result<()> {
             "phase-3-validators",
             "--l1-rpc-url",
             &l1_rpc_url,
-            "--ecosystem",
-            &eco_path,
-            "--chain",
-            chain_name,
+            "--bridgehub",
+            &eco.bridgehub,
+            "--chain-id",
+            &chain_id_str,
             "--gateway-rpc-url",
             gw_l2_rpc.as_str(),
             "--commit-operator",
