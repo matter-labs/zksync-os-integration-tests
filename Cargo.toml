@@ -1,3 +1,10 @@
 [workspace]
 resolver = "2"
-members = ["integration-tests", "tools/build-artifacts", "tools/generate-l1-state"]
+members = [
+    "integration-tests",
+    "deprecated/build-artifacts",
+    "deprecated/generate-l1-state",
+    "bin/zk-deployer",
+    "lib/anvil",
+    "lib/server",
+]

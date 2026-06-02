@@ -1,0 +1,28 @@
+[package]
+name = "lib-server"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+embedded-server = [
+    "dep:zksync_os_server",
+    "dep:zksync_os_state_full_diffs",
+    "dep:reth-tasks",
+    "dep:smart-config",
+    "dep:flate2",
+    "dep:tar",
+]
+
+[dependencies]
+anyhow = "1.0"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+serde_json = "1.0"
+
+zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main", optional = true }
+zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main", optional = true }
+reth-tasks = { git = "https://github.com/itegulov/reth.git", rev = "ff8afdc5dbc253019df5b68f4b231f55daeb2e00", optional = true }
+smart-config = { version = "0.4.0-pre.4", optional = true }
+flate2 = { version = "1.0", optional = true }
+tar = { version = "0.4", optional = true }

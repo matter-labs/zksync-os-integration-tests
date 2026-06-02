@@ -8,7 +8,7 @@ build = "build.rs"
 serde_yaml = "0.9"
 
 [dependencies]
-alloy = { version = "0.3", default-features = false, features = [
+alloy = { version = "2.0.1", default-features = false, features = [
     "provider-anvil-node",
     "json-rpc",
     "signer-local",
@@ -25,8 +25,9 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 serde_json = "1.0"
 toml = "0.8"
-scopeguard = "1.2"
 thiserror = "1.0"
-tokio = { version = "1.0", features = ["net", "time", "macros", "rt", "rt-multi-thread", "test-util"] }
+tokio = { version = "1.45", features = ["net", "time", "macros", "rt", "rt-multi-thread", "test-util"] }
 uuid = { version = "1.0", features = ["v4"] }
 sha2 = "0.10"
+
+zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }

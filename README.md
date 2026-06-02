@@ -81,7 +81,7 @@ When `era_contracts` points to a local path, the generation step will build cont
 
 ## Ecosystem generation
 
-Before tests run, `generate-l1-state` builds the full L1+L2 ecosystem (L1 Anvil + gateway + gateway-settling chains + L1-settling chains, with contracts deployed, chains registered, operators funded, and a gateway-server run that produces a gateway-state archive). Output is cached in `l1-state-cache/<preset-key>/` keyed by the resolved image SHAs; subsequent runs for the same preset reuse it automatically. See `tools/generate-l1-state/src/main.rs` for the full step list.
+Before tests run, `generate-l1-state` builds the full L1+L2 ecosystem (L1 Anvil + gateway + gateway-settling chains + L1-settling chains, with contracts deployed, chains registered, operators funded, and a gateway-server run that produces a gateway-state archive). Output is cached in `l1-state-cache/<preset-key>/` keyed by the resolved image SHAs; subsequent runs for the same preset reuse it automatically. See `deprecated/generate-l1-state/src/main.rs` for the full step list.
 
 ### Generated artifacts
 
@@ -239,7 +239,9 @@ rm -rf test-run-logs l1-state-cache
 │   │   ├── infra/                # Anvil, Docker, port allocation, git utils
 │   │   └── chain/                # Chain interaction utilities
 │   └── tests/                    # Integration test files
-├── tools/generate-l1-state/      # Ecosystem generation binary
+├── deprecated/                   # Superseded tools (kept for reference)
+│   ├── build-artifacts/          # Replaced by zk-deployer build-contracts
+│   └── generate-l1-state/        # Replaced by zk-deployer bootstrap + apply
 ├── l1-state-cache/               # Generated L1 state (gitignored)
 ├── local-chains/                 # Pre-built v30 chain configs for upgrade tests (static, committed)
 └── test-run-logs/                # Server logs from test runs

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/integration-tests/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/integration-tests/tests" isTestSource="$ZKSYNC_USE_CUDA_STUBS$" />
+      <sourceFolder url="file://$MODULE_DIR$/tools/build-artifacts/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tools/generate-l1-state/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/deprecated/build-artifacts/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/deprecated/generate-l1-state/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tools/zk-deployer/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bin/zk-deployer/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/lib/anvil/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/lib/anvil/tests" isTestSource="$ZKSYNC_USE_CUDA_STUBS$" />
+      <sourceFolder url="file://$MODULE_DIR$/lib/server/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+      <excludeFolder url="file://$MODULE_DIR$/tools/zk-deployer/target" />
+      <excludeFolder url="file://$MODULE_DIR$/bin/zk-deployer/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

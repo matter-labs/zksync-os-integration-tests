@@ -99,7 +99,7 @@ impl Anvil {
         let port = locked_port.port;
         let rpc_url = format!("http://127.0.0.1:{}", port);
 
-        let provider = ProviderBuilder::new().on_anvil_with_wallet_and_config(|anvil| {
+        let provider = ProviderBuilder::new().connect_anvil_with_wallet_and_config(|anvil| {
             anvil
                 .port(port)
                 .chain_id(L1_CHAIN_ID)

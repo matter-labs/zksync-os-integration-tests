@@ -1,0 +1,34 @@
+[package]
+name = "zk-deployer"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "zk_deployer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "zk-deployer"
+path = "src/main.rs"
+
+[dependencies]
+lib-anvil = { path = "../../lib/anvil" }
+lib-server = { path = "../../lib/server", features = ["embedded-server"] }
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "aba-protocol-ops-refactor" }
+
+alloy = { version = "2.0.5", features = [
+    "providers",
+    "network",
+    "transport-http",
+] }
+anyhow = "1.0"
+hex = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4.5", features = ["derive", "wrap_help", "string"] }
+human-panic = "2.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+thiserror = "2.0"
+tokio = { version = "1", features = ["full"] }
+toml = "1.1.2"

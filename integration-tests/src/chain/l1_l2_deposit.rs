@@ -7,7 +7,7 @@ use std::time::Instant;
 
 use alloy::network::{EthereumWallet, TxSigner};
 use alloy::primitives::{Address, FixedBytes, U256};
-use alloy::providers::utils::Eip1559Estimation;
+use alloy::providers::utils::{Eip1559Estimation, Eip1559Estimator};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::LocalSigner;
 use anyhow::{Context, Result};
@@ -129,9 +129,8 @@ pub async fn submit_l1_to_l2_deposit_ex(
         LocalSigner::from_str(private_key).context("invalid private key for deposit")?,
     );
     let l1_provider = ProviderBuilder::new()
-        .with_recommended_fillers()
         .wallet(l1_wallet.clone())
-        .on_builtin(l1_rpc_url)
+        .connect(l1_rpc_url)
         .await
         .with_context(|| format!("connect L1 JSON-RPC at {l1_rpc_url}"))?;
 
@@ -141,7 +140,7 @@ pub async fn submit_l1_to_l2_deposit_ex(
         .await
         .map_err(|e| anyhow::anyhow!("eth_maxPriorityFeePerGas: {e}"))?;
     let base_l1_fees_data = l1_provider
-        .estimate_eip1559_fees(Some(deposit_eip1559_estimator))
+        .estimate_eip1559_fees_with(Eip1559Estimator::new(deposit_eip1559_estimator))
         .await
         .map_err(|e| anyhow::anyhow!("estimate_eip1559_fees: {e}"))?;
     let max_fee_per_gas = base_l1_fees_data.max_fee_per_gas + max_priority_fee_per_gas;
@@ -154,8 +153,7 @@ pub async fn submit_l1_to_l2_deposit_ex(
         )
         .call()
         .await
-        .map_err(|e| anyhow::anyhow!("Bridgehub.l2TransactionBaseCost: {e}"))?
-        ._0;
+        .map_err(|e| anyhow::anyhow!("Bridgehub.l2TransactionBaseCost: {e}"))?;
 
     let sender = l1_wallet.default_signer().address();
     let recipient: Address = match l2_recipient {
@@ -207,7 +205,6 @@ pub async fn submit_l1_to_l2_deposit_ex(
     );
 
     let l1_to_l2_tx_log = l1_deposit_receipt
-        .inner
         .logs()
         .iter()
         .filter_map(|log| log.log_decode::<IMailbox::NewPriorityRequest>().ok())
