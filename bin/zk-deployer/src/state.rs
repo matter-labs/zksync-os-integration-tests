@@ -2,11 +2,9 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::Path;
 
-/// Bump this when a new version adds non-backwards-compatible state fields.
-/// `State::migrate()` handles upgrades from older versions.
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
-use alloy::primitives::{Address, B256};
+use alloy::primitives::Address;
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -14,8 +12,7 @@ use serde::{Deserialize, Serialize};
 /// Typed identifiers for every resumable step in the bootstrap / apply pipeline.
 ///
 /// Serialises to the dotted-string form expected by `state.json`
-/// (e.g. `StepKey::ChainInit("era".into())` → `"chain.init.era"`),
-/// so existing state files remain compatible.
+/// (e.g. `StepKey::ChainInitPrepared(270)` → `"chain.init.270.prepared"`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepKey {
     WalletsGenerate,
@@ -23,16 +20,12 @@ pub enum StepKey {
     EcosystemInit,
     EcosystemBundlesApply,
     EcosystemTokenDeploy,
-    /// `chain.init.<name>`
-    ChainInit(String),
-    /// `chain.gateway.convert`
-    GatewayConvert,
-    /// `chain.migrate.<name>.phase1`
-    GatewayMigratePhase1(String),
-    /// `chain.migrate.<name>.phase2`
-    GatewayMigratePhase2(String),
-    /// `chain.migrate.<name>.phase3`
-    GatewayMigratePhase3(String),
+    /// `chain.init.<chain_id>.prepared` — forge script ran, manifest slice recorded
+    ChainInitPrepared(u64),
+    /// `chain.init.<chain_id>.applied` — manifest bundles broadcast successfully
+    ChainInitApplied(u64),
+    /// `chain.fund_l2.<chain_id>` — default dev wallets funded via L1→L2 deposits
+    ChainL2Funded(u64),
 }
 
 impl fmt::Display for StepKey {
@@ -43,25 +36,11 @@ impl fmt::Display for StepKey {
             Self::EcosystemInit => write!(f, "ecosystem.init"),
             Self::EcosystemBundlesApply => write!(f, "ecosystem.bundles.apply"),
             Self::EcosystemTokenDeploy => write!(f, "ecosystem.token_deploy"),
-            Self::ChainInit(name) => write!(f, "chain.init.{name}"),
-            Self::GatewayConvert => write!(f, "chain.gateway.convert"),
-            Self::GatewayMigratePhase1(name) => write!(f, "chain.migrate.{name}.phase1"),
-            Self::GatewayMigratePhase2(name) => write!(f, "chain.migrate.{name}.phase2"),
-            Self::GatewayMigratePhase3(name) => write!(f, "chain.migrate.{name}.phase3"),
+            Self::ChainInitPrepared(id) => write!(f, "chain.init.{id}.prepared"),
+            Self::ChainInitApplied(id) => write!(f, "chain.init.{id}.applied"),
+            Self::ChainL2Funded(id) => write!(f, "chain.fund_l2.{id}"),
         }
     }
-}
-
-/// Tracks which phase of gateway migration a chain has completed.
-///
-/// Phases must execute in order; this enum encodes the dependency so callers
-/// can enforce ordering without re-querying multiple StepKeys manually.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum GatewayMigrationPhase {
-    NotStarted,
-    Phase1Done,
-    Phase2Done,
-    Complete,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -113,27 +92,11 @@ impl State {
         state.migrate()
     }
 
-    /// Upgrade `self` from an older schema version to `CURRENT_SCHEMA_VERSION`.
-    ///
-    /// Each migration branch must be additive: existing StepRecord data is
-    /// preserved. New optional fields on typed outputs already use
-    /// `#[serde(default)]`, so they deserialize to `None`/default on old files.
-    fn migrate(mut self) -> anyhow::Result<Self> {
-        if self.schema_version == 0 {
-            // Version 0: schema_version field missing (defaulted to 0 by serde).
-            // No structural changes — all output structs use Option for new fields
-            // so deserialization of v0 state files is already correct.
-            self.schema_version = 1;
-        }
-        // Add future migrations here:
-        // if self.schema_version == 1 {
-        //     // ... migrate fields ...
-        //     self.schema_version = 2;
-        // }
+    fn migrate(self) -> anyhow::Result<Self> {
         anyhow::ensure!(
             self.schema_version == CURRENT_SCHEMA_VERSION,
             "state schema version {} is unknown (current is {}); \
-             this binary may be too old to read this state file",
+             delete state.json to start fresh",
             self.schema_version,
             CURRENT_SCHEMA_VERSION
         );
@@ -194,46 +157,7 @@ impl State {
         serde_json::from_value(record.output.clone())
             .map_err(|source| StateError::OutputTypeMismatch { key, source })
     }
-
-    /// Return the highest completed gateway migration phase for `chain_name`.
-    pub fn gateway_migration_phase(&self, chain_name: &str) -> GatewayMigrationPhase {
-        if self.is_done(StepKey::GatewayMigratePhase3(chain_name.into())) {
-            GatewayMigrationPhase::Complete
-        } else if self.is_done(StepKey::GatewayMigratePhase2(chain_name.into())) {
-            GatewayMigrationPhase::Phase2Done
-        } else if self.is_done(StepKey::GatewayMigratePhase1(chain_name.into())) {
-            GatewayMigrationPhase::Phase1Done
-        } else {
-            GatewayMigrationPhase::NotStarted
-        }
-    }
-
-    /// Assert that `chain_name` is ready to run `target_phase` (1, 2, or 3).
-    /// Returns `Err` with a clear message if the prerequisite phase is missing.
-    pub fn assert_gateway_phase_ready(
-        &self,
-        chain_name: &str,
-        target_phase: u8,
-    ) -> anyhow::Result<()> {
-        let current = self.gateway_migration_phase(chain_name);
-        let required = match target_phase {
-            1 => GatewayMigrationPhase::NotStarted,
-            2 => GatewayMigrationPhase::Phase1Done,
-            3 => GatewayMigrationPhase::Phase2Done,
-            _ => anyhow::bail!("invalid target phase {target_phase}"),
-        };
-        anyhow::ensure!(
-            current == required,
-            "chain '{chain_name}' is in phase {current:?} but phase {target_phase} requires \
-             {required:?} — check gateway migration step order"
-        );
-        Ok(())
-    }
 }
-
-// ---------------------------------------------------------------------------
-// Typed step outputs
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GenesisGeneratedOutput {
@@ -265,39 +189,11 @@ pub struct TokenDeployedOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChainInitOutput {
+pub struct ChainInitPreparedOutput {
     pub diamond_proxy: Address,
     pub chain_admin: Address,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayConvertOutput {
-    pub gateway_chain_id: u64,
-    pub ctm_representative_chain_id: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayMigratePhase1Output {
-    pub chain_id: u64,
-    pub gateway_chain_id: u64,
-    /// Priority op hash on the gateway L2, captured right after the phase-1
-    /// broadcast. `None` in dry-run mode or if the capture failed. When set,
-    /// phase 2 uses it directly and skips the 216k-block L1 event scan.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub priority_op_hash: Option<B256>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayMigratePhase2Output {
-    pub chain_id: u64,
-    pub gateway_chain_id: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GatewayMigratePhase3Output {
-    pub chain_id: u64,
-    /// Address of the RelayedSLDAValidator used for the DA validator pair on the gateway.
-    pub relayed_sl_da_validator: Address,
+    pub manifest_start: usize,
+    pub manifest_end: usize,
 }
 
 #[cfg(test)]
@@ -325,96 +221,5 @@ mod tests {
             .unwrap();
         let out: Out = state.get_output(StepKey::WalletsGenerate).unwrap();
         assert_eq!(out, Out { val: 7 });
-    }
-
-    #[test]
-    fn gateway_phase_not_started() {
-        let state = State::new();
-        assert_eq!(
-            state.gateway_migration_phase("era"),
-            GatewayMigrationPhase::NotStarted
-        );
-    }
-
-    #[test]
-    fn gateway_phase_advances() {
-        let mut state = State::new();
-        #[derive(serde::Serialize)]
-        struct Empty {}
-
-        state
-            .mark_done(&StepKey::GatewayMigratePhase1("era".into()), &Empty {})
-            .unwrap();
-        assert_eq!(
-            state.gateway_migration_phase("era"),
-            GatewayMigrationPhase::Phase1Done
-        );
-
-        state
-            .mark_done(&StepKey::GatewayMigratePhase2("era".into()), &Empty {})
-            .unwrap();
-        assert_eq!(
-            state.gateway_migration_phase("era"),
-            GatewayMigrationPhase::Phase2Done
-        );
-
-        state
-            .mark_done(&StepKey::GatewayMigratePhase3("era".into()), &Empty {})
-            .unwrap();
-        assert_eq!(
-            state.gateway_migration_phase("era"),
-            GatewayMigrationPhase::Complete
-        );
-    }
-
-    #[test]
-    fn assert_gateway_phase_ready_enforces_order() {
-        let state = State::new();
-        // Can start phase 1 from NotStarted
-        assert!(state.assert_gateway_phase_ready("era", 1).is_ok());
-        // Cannot skip to phase 2 from NotStarted
-        assert!(state.assert_gateway_phase_ready("era", 2).is_err());
-    }
-
-    #[test]
-    fn state_v0_migrates_to_current() {
-        // A state file written before schema_version was introduced deserializes
-        // with schema_version == 0 (the serde default). migrate() should bump it.
-        let raw = r#"{"steps":{}}"#;
-        let state: State = serde_json::from_str(raw).unwrap();
-        assert_eq!(
-            state.schema_version, 0,
-            "serde default is 0 for missing field"
-        );
-        let migrated = state.migrate().unwrap();
-        assert_eq!(migrated.schema_version, CURRENT_SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn gateway_phase2_output_roundtrip() {
-        let mut state = State::new();
-        let out = GatewayMigratePhase2Output {
-            chain_id: 42,
-            gateway_chain_id: 100,
-        };
-        state
-            .mark_done(&StepKey::GatewayMigratePhase2("era".into()), &out)
-            .unwrap();
-        let got: GatewayMigratePhase2Output = state
-            .get_output(StepKey::GatewayMigratePhase2("era".into()))
-            .unwrap();
-        assert_eq!(got.chain_id, 42);
-        assert_eq!(got.gateway_chain_id, 100);
-    }
-
-    #[test]
-    fn state_current_version_loads_without_migration() {
-        let raw = format!(
-            r#"{{"schema_version":{},"steps":{{}}}}"#,
-            CURRENT_SCHEMA_VERSION
-        );
-        let state: State = serde_json::from_str(&raw).unwrap();
-        let migrated = state.migrate().unwrap();
-        assert_eq!(migrated.schema_version, CURRENT_SCHEMA_VERSION);
     }
 }

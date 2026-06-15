@@ -2,75 +2,68 @@ name: ZKsync OS Integration Tests
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
   push:
     branches: ['main']
   workflow_dispatch:
 
+# Cancel new runs for PRs only
+concurrency:
+  group: integration-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  TEST_RESULTS_XML: 'test-results.xml'
+
 permissions:
   contents: read
-
-concurrency:
-  group: integration-tests-${{ github.ref }}
-  cancel-in-progress: true
+  pull-requests: write
+  checks: write
 
 jobs:
   integration-tests:
     runs-on: matterlabs-ci-runner-high-performance
-    timeout-minutes: 120
-    env:
-      DEBIAN_FRONTEND: noninteractive
-      WORKSPACE: ${{ github.workspace }}
-
+    timeout-minutes: 90
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Setup runner
+        uses: ./.github/actions/runner-setup
         with:
-          submodules: recursive
-          fetch-depth: 0
+          enable_cache: 'true'
+          # Only main-branch runs refresh the shared Rust build cache.
+          save_cache: ${{ github.event_name == 'push' && 'true' || 'false' }}
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            build-essential \
-            libclang-dev \
-            libssl-dev \
-            pkg-config \
-            jq \
-            wget \
-            curl
-
-      - name: Install Rust toolchain
-        uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
-        env:
-          # To fix rate limiting issues with GitHub API
-          GITHUB_TOKEN: ${{ github.token }}
+      # Deployment snapshots (.zkos-test-cache) are content-addressed
+      # internally — stale entries restored here are simply never matched,
+      # so a fuzzy actions/cache key is safe. Entries are produced by the
+      # daily workflow (full cold runs) and by main-branch pushes.
+      - name: Restore deployment snapshot cache
+        uses: actions/cache/restore@v4
         with:
-          inherit-toolchain: true
-          components: 'rustfmt,clippy'
-          bins: 'cargo-nextest'
-          cache: false
-
-      - name: Install Foundry
-        run: |
-          mkdir -p foundry
-          curl -LO https://github.com/foundry-rs/foundry/releases/download/v1.5.1/foundry_v1.5.1_linux_amd64.tar.gz
-          tar zxf foundry_v1.5.1_linux_amd64.tar.gz -C ./foundry
-          chmod +x ./foundry/*
-          echo "${PWD}/foundry" >> "${GITHUB_PATH}"
-
-      - name: Build all crates
-        run: cargo build --release --workspace
+          path: .zkos-test-cache
+          key: zkos-deployments-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            zkos-deployments-${{ hashFiles('Cargo.lock') }}-
+            zkos-deployments-
 
       - name: Run integration tests
-        run: ./run-tests.sh
+        run: cargo nextest run -p tests --release
 
-      - name: Upload logs
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Save deployment snapshot cache
+        if: github.event_name == 'push'
+        uses: actions/cache/save@v4
         with:
-          name: integration-test-logs
-          path: |
-            test-run-logs/
-            l1-state-cache/
+          path: .zkos-test-cache
+          key: zkos-deployments-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+
+      - name: Publish test results
+        if: always() && !cancelled()
+        uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
+        with:
+          check_name: 'Integration test results'
+          files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
+          action_fail_on_inconclusive: true
+          compare_to_earlier_commit: false

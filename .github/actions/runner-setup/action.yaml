@@ -1,0 +1,77 @@
+name: 'Setup runner'
+
+description: 'Install everything the integration tests need: system packages, Node + yarn (forge FFI scripts), Rust toolchain (from rust-toolchain.toml) with cargo-nextest, and Foundry.'
+
+inputs:
+  foundry_version:
+    type: string
+    description: 'Version of foundry to use.'
+    required: false
+    # Pinned to a specific stable version to avoid breaking changes.
+    default: 'v1.5.1'
+  enable_cache:
+    type: string
+    description: 'Whether to restore the Rust build cache.'
+    required: false
+    default: 'false'
+  save_cache:
+    type: string
+    description: 'Whether to save the Rust build cache.'
+    required: false
+    default: 'false'
+  cache_shared_key:
+    type: string
+    description: 'Shared key for the Rust build cache.'
+    required: false
+    default: 'integration-tests'
+
+runs:
+  using: composite
+  steps:
+    - name: Install linux packages
+      shell: 'bash -ex {0}'
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      if: ${{ runner.os == 'Linux' }}
+      run: |
+        if command -v sudo >/dev/null 2>&1; then
+          SUDO=sudo
+        fi
+        ${SUDO} apt update
+        ${SUDO} apt install -y build-essential libclang-dev libssl-dev pkg-config jq wget curl
+
+    # Forge deployment scripts invoke node helpers via FFI (blake2s256.js),
+    # installed with `yarn install` on first contracts build.
+    - name: Install Node.js
+      uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+      with:
+        node-version: '22'
+
+    - name: Install yarn
+      shell: 'bash -ex {0}'
+      run: npm install -g yarn
+
+    - name: Install Rust toolchain
+      uses: moonrepo/setup-rust@ede6de059f8046a5e236c94046823e2af11ca670 # v1.2.2
+      env:
+        # To fix rate limiting issues with GitHub API
+        GITHUB_TOKEN: ${{ github.token }}
+      with:
+        # Resolves the pinned nightly from rust-toolchain.toml.
+        inherit-toolchain: true
+        components: 'rustfmt,clippy'
+        bins: 'cargo-nextest'
+        cache: false
+
+    - name: Rust cache
+      if: inputs.enable_cache == 'true'
+      uses: Swatinem/rust-cache@98c8021b550208e191a6a3145459bfc9fb29c4c0 # v2.8.0
+      with:
+        shared-key: "${{ inputs.cache_shared_key }}"
+        cache-all-crates: true
+        save-if: ${{ inputs.save_cache == 'true' }}
+
+    - name: Install Foundry
+      uses: foundry-rs/foundry-toolchain@82dee4ba654bd2146511f85f0d013af94670c4de # v1.4.0
+      with:
+        version: ${{ inputs.foundry_version }}

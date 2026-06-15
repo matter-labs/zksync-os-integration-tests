@@ -21,3 +21,12 @@ l1-state-cache/
 
 # Local preset overrides
 local_presets.yaml
+tests/db/
+db/
+local-patches/
+tests/debug-settling.yaml
+
+.idea/
+.zkos-test-cache/
+.claude/
+.test-runs/

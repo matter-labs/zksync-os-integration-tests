@@ -1,2 +1,7 @@
 [build]
 rustflags = ["--cfg", "tokio_unstable"]
+
+[env]
+# Proof generation has deep call stacks; 16 MiB avoids stack overflows when
+# running the server in-process (matches zksync-os-server's own config).
+RUST_MIN_STACK = { value = "16777216", force = false }

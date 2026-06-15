@@ -1,0 +1,14 @@
+[profile.default]
+# Ecosystem tests are long by nature (deploy + servers + batch settlement).
+# The upgrade test always builds contracts on startup; l1 fixture tests build
+# them only on a deployment cache miss (yarn install + forge build, ~5-10 min
+# cold). Mark as slow after 5 minutes, terminate after 15 periods (30 minutes).
+slow-timeout = { period = "5m", terminate-after = 15 }
+# Global timeout for the entire test run.
+global-timeout = "1h"
+# Do not stop the test run on the first failure; run everything.
+fail-fast = false
+
+[profile.default.junit]
+# Saved under target/nextest/<profile>/.
+path = "test-results.xml"

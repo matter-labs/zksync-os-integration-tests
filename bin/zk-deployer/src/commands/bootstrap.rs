@@ -3,16 +3,16 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use crate::intent::{IntentConfig, VmType};
+use crate::commands::execute_manifest::apply_manifest;
+use crate::commands::genesis::{self, GenesisCommands, GenesisGenerateArgs};
+use crate::commands::token::deploy::{deploy as token_deploy, TokenDeployArgs};
+use crate::commands::wallets::generate::generate_wallets_yaml;
+use crate::intent::IntentConfig;
 use crate::state::{
     EcosystemInitOutput, GenesisGeneratedOutput, State, StepKey, TokenDeployedOutput,
     WalletsGeneratedOutput,
 };
-use protocol_ops::commands::dev::execute_manifest::apply_manifest;
 use protocol_ops::commands::ecosystem::init::{ecosystem_init, EcosystemInitInput};
-use protocol_ops::commands::genesis::{self, GenesisCommands, GenesisGenerateArgs};
-use protocol_ops::commands::token::deploy::{deploy as token_deploy, TokenDeployArgs};
-use protocol_ops::commands::wallets::generate::generate_wallets_yaml;
 use protocol_ops::common::output::write_output_if_requested;
 use protocol_ops::common::{
     args::SharedRunArgs,
@@ -38,8 +38,12 @@ pub struct BootstrapArgs {
     #[arg(long, default_value = "out")]
     pub out: PathBuf,
 
-    /// Private key of the deployer (hex, with or without 0x prefix)
-    #[arg(long)]
+    /// Private key of the deployer (hex, with or without 0x prefix).
+    /// Defaults to Anvil account #0 for local dev.
+    #[arg(
+        long,
+        default_value = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+    )]
     pub private_key: PrivateKey,
 
     /// Path to write generated wallets.yaml
@@ -56,13 +60,29 @@ pub struct BootstrapArgs {
     /// to skip the manual `dev execute-manifest` step.
     #[arg(long, default_value = "false")]
     pub broadcast: bool,
+
+    /// Path to persist/restore Anvil L1 state between commands.
+    /// Only used when `l1_rpc_url` is absent from intent.yaml (auto-Anvil mode).
+    #[arg(long, default_value = "l1-state.json")]
+    pub l1_state: PathBuf,
+
+    /// Optional subdirectory for all per-run forge script IO inside the
+    /// contracts checkout (`script-config/<subdir>/` etc.), so concurrent
+    /// runs don't collide. Default: the conventional fixed paths.
+    #[arg(long)]
+    pub subdir: Option<String>,
 }
 
 pub async fn run(args: BootstrapArgs) -> Result<()> {
     let intent = IntentConfig::load(&args.intent)
         .with_context(|| format!("loading intent file {}", args.intent.display()))?;
 
-    preflight::check_l1_connectivity(&intent.l1_rpc_url)?;
+    let (l1_rpc_url, _anvil) =
+        crate::anvil::resolve_l1(intent.l1_rpc_url.as_deref(), &args.l1_state).await?;
+
+    if _anvil.is_none() {
+        preflight::check_l1_connectivity(&l1_rpc_url)?;
+    }
     preflight::check_required_artifacts()?;
 
     let mut state = State::load_or_new(&args.state)?;
@@ -71,29 +91,45 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
     logger::info(format!("Deployer: {deployer_address:#x}"));
 
     // --- Step 1: Generate wallets ----------------------------------------
-    if intent.wallets.generate {
-        if state.is_done(StepKey::WalletsGenerate) {
-            logger::info("Skipping wallets.generate (already done)");
-        } else {
-            logger::step("Generating wallets...");
-            let chain_names: Vec<String> = intent.chains.iter().map(|c| c.name.clone()).collect();
-            let seed = intent
-                .wallets
-                .ecosystem_seed
-                .as_deref()
-                .unwrap_or("ecosystem");
-            let yaml = generate_wallets_yaml(&chain_names, seed)?;
-            write_file(&args.wallets_out, yaml.as_bytes())?;
-            let path_str = args.wallets_out.display().to_string();
-            logger::info(format!("  wallets written to: {path_str}"));
-            state.mark_done(
-                StepKey::WalletsGenerate,
-                &WalletsGeneratedOutput {
-                    output_path: path_str,
-                },
-            )?;
-            state.save(&args.state)?;
+    if let Some(ref src) = intent.wallets.path {
+        // User supplied an existing wallets file. Copy it to wallets_out so
+        // subsequent steps (apply, server-config) find it at the expected path.
+        if src != &args.wallets_out {
+            if let Some(parent) = args.wallets_out.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)?;
+                }
+            }
+            std::fs::copy(src, &args.wallets_out).with_context(|| {
+                format!(
+                    "copying wallets from {} to {}",
+                    src.display(),
+                    args.wallets_out.display()
+                )
+            })?;
+            logger::info(format!("  wallets copied from: {}", src.display()));
         }
+    } else if state.is_done(StepKey::WalletsGenerate) {
+        logger::info("Skipping wallets.generate (already done)");
+    } else {
+        logger::step("Generating wallets...");
+        let chain_ids: Vec<u64> = intent.chains.iter().map(|c| c.chain_id).collect();
+        let seed = intent
+            .wallets
+            .ecosystem_seed
+            .as_deref()
+            .unwrap_or("ecosystem");
+        let yaml = generate_wallets_yaml(&chain_ids, seed)?;
+        write_file(&args.wallets_out, yaml.as_bytes())?;
+        let path_str = args.wallets_out.display().to_string();
+        logger::info(format!("  wallets written to: {path_str}"));
+        state.mark_done(
+            StepKey::WalletsGenerate,
+            &WalletsGeneratedOutput {
+                output_path: path_str,
+            },
+        )?;
+        state.save(&args.state)?;
     }
 
     // --- Step 2: Generate genesis -----------------------------------------
@@ -102,6 +138,10 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
     } else {
         logger::step("Generating genesis...");
         genesis::run(GenesisCommands::Generate(GenesisGenerateArgs {
+            genesis_config: protocol_ops::common::paths::path_from_root(
+                "configs/genesis/zksync-os/latest.json",
+            ),
+            l1_contracts_out: protocol_ops::common::paths::resolve_l1_contracts_path()?.join("out"),
             output: args.genesis_out.clone(),
         }))
         .await?;
@@ -120,13 +160,10 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         logger::info("Skipping ecosystem.init (already done)");
     } else {
         logger::step("Initializing ecosystem...");
-        let vm_type = match intent.ecosystem.vm_type {
-            VmType::Zksyncos => VMOption::ZKSyncOsVM,
-            VmType::Eravm => VMOption::EraVM,
-        };
         let shared = SharedRunArgs {
-            l1_rpc_url: intent.l1_rpc_url.clone(),
+            l1_rpc_url: l1_rpc_url.clone(),
             out: Some(args.out.clone()),
+            subdir: args.subdir.clone(),
             forge_args: ForgeScriptArgs::default(),
         };
         let mut runner = ForgeRunner::new(&shared)?;
@@ -136,10 +173,10 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         let eco_input = EcosystemInitInput {
             sender: sender.address,
             owner: owner.address,
-            era_chain_id: intent.ecosystem.era_chain_id,
-            vm_type,
-            with_testnet_verifier: intent.ecosystem.with_testnet_verifier,
-            with_legacy_bridge: intent.ecosystem.with_legacy_bridge,
+            era_chain_id: intent.main_chain_id()?,
+            vm_type: VMOption::ZKSyncOsVM,
+            with_testnet_verifier: true,
+            with_legacy_bridge: false,
             zk_token_asset_id: None,
             create2_factory_salt: None,
         };
@@ -188,12 +225,12 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
     } else if args.broadcast && args.out.join("manifest.json").exists() {
         logger::step("Broadcasting ecosystem Safe bundles to L1...");
         let manifest_path = args.out.join("manifest.json");
-        let fund = preflight::is_local_rpc(&intent.l1_rpc_url);
+        let fund = preflight::is_local_rpc(&l1_rpc_url);
         apply_manifest(
             &manifest_path,
             &[args.private_key.expose().to_string()],
             None,
-            &intent.l1_rpc_url,
+            &l1_rpc_url,
             fund,
         )
         .await?;
@@ -201,26 +238,46 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         state.save(&args.state)?;
     }
 
-    // --- Step 5: Deploy ecosystem token (optional) -----------------------
-    if let Some(token_intent) = &intent.ecosystem_token {
-        if !token_intent.deploy {
-            // Nothing to do
-        } else if state.is_done(StepKey::EcosystemTokenDeploy) {
+    // --- Step 5: Deploy custom base token (if any chain needs one) --------
+    // Collect all chains that need a token deployed (base_token present, no address).
+    // At most one distinct token may be deployed per ecosystem; if two chains declare
+    // different symbols with no address, fail early rather than silently using the
+    // wrong address for the second chain.
+    let tokens_needing_deploy: Vec<_> = intent
+        .chains
+        .iter()
+        .filter_map(|c| c.base_token.as_ref())
+        .filter(|t| t.address.is_none())
+        .collect();
+    if let Some(second) = tokens_needing_deploy
+        .iter()
+        .skip(1)
+        .find(|t| t.symbol != tokens_needing_deploy[0].symbol)
+    {
+        anyhow::bail!(
+            "multiple chains declare different custom base tokens with no address \
+             ('{}' and '{}'). Only one token can be deployed per ecosystem; \
+             supply an explicit `address` for all but one.",
+            tokens_needing_deploy[0].symbol,
+            second.symbol,
+        );
+    }
+    let deploy_token = tokens_needing_deploy.into_iter().next();
+    if let Some(token) = deploy_token {
+        if state.is_done(StepKey::EcosystemTokenDeploy) {
             logger::info("Skipping ecosystem.token_deploy (already done)");
         } else {
             logger::step("Deploying ecosystem token...");
             let eco_out: EcosystemInitOutput = state.get_output(StepKey::EcosystemInit)?;
 
-            let symbol = token_intent
-                .symbol
-                .as_deref()
-                .unwrap_or("TOKEN")
-                .to_string();
+            let symbol = token.symbol.clone();
             let name = format!("{symbol} Token");
 
             let token_address = token_deploy(TokenDeployArgs {
-                l1_rpc_url: intent.l1_rpc_url.clone(),
+                l1_rpc_url: l1_rpc_url.clone(),
                 private_key: args.private_key.clone(),
+                l1_contracts_out: protocol_ops::common::paths::resolve_l1_contracts_path()?
+                    .join("out"),
                 bridgehub: eco_out.bridgehub_proxy,
                 symbol,
                 name,
@@ -237,6 +294,11 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             )?;
             state.save(&args.state)?;
         }
+    }
+
+    if let Some(ref anvil) = _anvil {
+        crate::anvil::save_state(anvil, &args.l1_state).await?;
+        logger::info(format!("L1 state saved to: {}", args.l1_state.display()));
     }
 
     logger::success("Bootstrap complete.");

@@ -11,12 +11,10 @@ use crate::state::{EcosystemInitOutput, State, StepKey};
 pub struct ResolvedEcosystem {
     pub bridgehub: Address,
     pub ctm_proxy: Address,
-    pub governance: Address,
     pub rollup_l1_da_validator: Address,
     pub no_da_l1_validator: Address,
     pub avail_l1_da_validator: Address,
     pub blobs_zksync_os_l1_da_validator: Option<Address>,
-    pub bytecodes_supplier: Option<Address>,
 }
 
 impl ResolvedEcosystem {
@@ -27,12 +25,10 @@ impl ResolvedEcosystem {
         Ok(Self {
             bridgehub: eco.bridgehub_proxy,
             ctm_proxy: eco.ctm_proxy,
-            governance: eco.governance,
             rollup_l1_da_validator: eco.rollup_l1_da_validator,
             no_da_l1_validator: eco.no_da_l1_validator,
             avail_l1_da_validator: eco.avail_l1_da_validator,
             blobs_zksync_os_l1_da_validator: eco.blobs_zksync_os_l1_da_validator,
-            bytecodes_supplier: eco.bytecodes_supplier,
         })
     }
 }
