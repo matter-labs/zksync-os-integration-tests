@@ -21,7 +21,7 @@ futures = "0.3"
 hex = "0.4"
 hex-literal = "1.1"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "aba/port-2210-alloy2-lib" }
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 rstest = "0.26.1"
 serde = "1.0"
@@ -55,3 +55,7 @@ zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-s
 # [patch."https://github.com/matter-labs/zksync-os"]
 # zksync_os_api = { path = "../zksync-os/<path-to-crate>" }
 # basic_system  = { path = "../zksync-os/<path-to-crate>" }
+
+[profile.release]
+# This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
+overflow-checks = true

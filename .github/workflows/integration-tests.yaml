@@ -50,7 +50,7 @@ jobs:
             zkos-deployments-
 
       - name: Run integration tests
-        run: cargo nextest run -p tests --release
+        run: cargo test --release
 
       - name: Save deployment snapshot cache
         if: github.event_name == 'push'
@@ -58,12 +58,3 @@ jobs:
         with:
           path: .zkos-test-cache
           key: zkos-deployments-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
-
-      - name: Publish test results
-        if: always() && !cancelled()
-        uses: EnricoMi/publish-unit-test-result-action@3a74b2957438d0b6e2e61d67b05318aa25c9e6c6 # v2.20.0
-        with:
-          check_name: 'Integration test results'
-          files: target/nextest/default/${{ env.TEST_RESULTS_XML }}
-          action_fail_on_inconclusive: true
-          compare_to_earlier_commit: false
