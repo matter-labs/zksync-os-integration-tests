@@ -46,5 +46,7 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@76cd80eb775d7bbbd2d80292136d74d39e1b4918 # v2.0.14
         with:
           manifest-path: "./Cargo.toml"
+          rust-version: "none"
           command: check
-          command-arguments: "--allow unmaintained --hide-inclusion-graph --ignore RUSTSEC-2025-0055"
+          # advisories are handled by the cargo-audit job above
+          command-arguments: "--hide-inclusion-graph bans licenses sources"
