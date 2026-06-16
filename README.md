@@ -1,4 +1,6 @@
-# zksync-os-integration-tests
+# ZKsync OS Integration Tests
+
+[![Logo](.github/assets/zksync-os-logo.png)](https://zksync.io/)
 
 Integration tests for ZKsync OS. Spins up a full ecosystem — Anvil L1, deployed
 contracts, in-process `zksync-os-server` per chain — and runs end-to-end tests
@@ -108,3 +110,36 @@ Multi-chain topologies are declared at the call site:
 
 Full API reference: `tests/README.md`, including environment variables for debugging
 (`ZKOS_TEST_DIR`, `ZKOS_CACHE`, `RUST_LOG`).
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for contribution guidelines.
+
+## Security
+
+See [SECURITY.md](./SECURITY.md) for security policy details.
+
+## Policies
+
+- [Security policy](SECURITY.md)
+- [Contribution policy](CONTRIBUTING.md)
+
+## License
+
+ZKsync OS repositories are distributed under the terms of either
+
+- Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <https://opensource.org/blog/license/mit/>)
+
+at your option.
+
+## Official Links
+
+- [Website](https://zksync.io/)
+- [GitHub](https://github.com/matter-labs)
+- [ZK Credo](https://github.com/zksync/credo)
+- [Twitter](https://twitter.com/zksync)
+- [Twitter for Developers](https://twitter.com/zkSyncDevs)
+- [Discord](https://join.zksync.dev/)
+- [Mirror](https://zksync.mirror.xyz/)
+- [Youtube](https://www.youtube.com/@zksync-io)
