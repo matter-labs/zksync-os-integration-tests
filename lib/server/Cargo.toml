@@ -16,6 +16,7 @@ embedded-server = [
 alloy = { workspace = true, features = ["provider-http", "reqwest", "eips"] }
 anyhow = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
+tracing = { workspace = true }
 
 zksync_os_server = { workspace = true, optional = true }
 zksync_os_state_full_diffs = { workspace = true, optional = true }

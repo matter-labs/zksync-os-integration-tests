@@ -9,12 +9,12 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::anvil::{default_builder, spawn_from_file};
 use crate::ecosystem::{ChainSpec, Ecosystem};
 use crate::server_runtime::ChainRuntime;
 use crate::workdir::WorkDir;
 use alloy::primitives::Address;
 use anyhow::{Context, Result};
+use zk_deployer::anvil::{default_builder, spawn_from_file};
 
 #[derive(serde::Deserialize)]
 struct ConfigIdentity {
@@ -45,7 +45,7 @@ fn parse_server_config_identity(yaml: &str) -> Result<(u64, Address)> {
 /// Each server config is the source of truth and is self-describing (its
 /// `genesis:` block carries `chain_id` + `bridgehub_address`).
 pub async fn restore(dir: &Path) -> Result<Ecosystem> {
-    super::init_logging().await;
+    super::init_logging();
 
     let workdir = Arc::new(WorkDir::new().context("create workdir")?);
     let ecosystem_dir = workdir.path().join("ecosystem");

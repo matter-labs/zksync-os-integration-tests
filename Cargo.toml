@@ -34,6 +34,7 @@ tempfile = "3"
 thiserror = "2.0"
 tokio = "1"
 toml = "1.1.2"
+tracing = "0.1"
 tracing-subscriber = "0.3"
 zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.14" }
 zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.14" }

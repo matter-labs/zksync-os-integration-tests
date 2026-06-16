@@ -6,11 +6,11 @@ use zk_deployer::commands::bootstrap::BootstrapArgs;
 use zk_deployer::deployed::DeployedEcosystem;
 use zk_deployer::intent::{ChainIntent, DaMode, IntentConfig, WalletsIntent};
 
-use crate::anvil::{default_builder, save_state, spawn, spawn_from_file};
 use crate::chain::WALLET_KEYS;
 use crate::ecosystem::{ChainSpec, Ecosystem};
 use crate::server_runtime::ChainRuntime;
 use crate::workdir::WorkDir;
+use zk_deployer::anvil::{default_builder, save_state, spawn, spawn_from_file};
 
 use super::cache;
 
@@ -23,7 +23,7 @@ use super::cache;
 /// inputs and the `ZKOS_CACHE` knob. Servers always start fresh.
 pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
     assert!(!chain_ids.is_empty(), "need at least one chain");
-    super::init_logging().await;
+    super::init_logging();
 
     let workdir = Arc::new(WorkDir::new().expect("create workdir"));
     let ecosystem_dir = workdir.path().join("ecosystem");

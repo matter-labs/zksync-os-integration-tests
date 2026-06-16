@@ -18,20 +18,15 @@ use tokio::sync::OnceCell;
 use tracing_subscriber::EnvFilter;
 
 static BUILD_CONTRACTS_ONCE: OnceCell<()> = OnceCell::const_new();
-static LOGGING_ONCE: OnceCell<()> = OnceCell::const_new();
 
-pub async fn init_logging() {
-    LOGGING_ONCE
-        .get_or_init(|| async {
-            tracing_subscriber::fmt()
-                .with_env_filter(
-                    EnvFilter::try_from_default_env()
-                        .unwrap_or_else(|_| EnvFilter::new("warn,zksync_os=info")),
-                )
-                .with_test_writer()
-                .init();
-        })
-        .await;
+pub fn init_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("warn,zksync_os=info")),
+        )
+        .with_test_writer()
+        .try_init();
 }
 
 pub async fn ensure_contracts_built() {

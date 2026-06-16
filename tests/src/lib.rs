@@ -17,7 +17,6 @@
 //!
 //! See `tests/README.md` for the full API reference.
 
-pub mod anvil;
 pub mod chain;
 pub mod ecosystem;
 pub mod eth;

@@ -7517,6 +7517,7 @@ dependencies = [
  "reth-tasks",
  "smart-config",
  "tokio",
+ "tracing",
  "zksync_os_server",
  "zksync_os_state_full_diffs",
 ]
