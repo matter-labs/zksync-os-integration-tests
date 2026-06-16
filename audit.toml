@@ -1,0 +1,5 @@
+[advisories]
+# tracing-subscriber 0.2.25 is pulled in by ark-relations, which is a
+# transitive dependency of zksync-os. We do not depend on it directly
+# and cannot upgrade it until the upstream git dependency is updated.
+ignore = ["RUSTSEC-2025-0055"]

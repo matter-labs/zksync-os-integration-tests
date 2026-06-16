@@ -44,4 +44,4 @@ jobs:
         with:
           manifest-path: "./Cargo.toml"
           command: check
-          command-arguments: "--allow unmaintained --hide-inclusion-graph"
+          command-arguments: "--allow unmaintained --hide-inclusion-graph --ignore RUSTSEC-2025-0055"
