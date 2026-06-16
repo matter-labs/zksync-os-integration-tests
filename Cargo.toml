@@ -6,6 +6,9 @@ members = [
     "tests",
 ]
 
+[workspace.package]
+license = "MIT OR Apache-2.0"
+
 [workspace.dependencies]
 lib-server = { path = "lib/server" }
 zk-deployer = { path = "bin/zk-deployer" }
