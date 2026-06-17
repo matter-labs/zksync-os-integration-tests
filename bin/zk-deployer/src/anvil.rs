@@ -12,7 +12,6 @@ pub fn default_builder() -> Anvil {
         .block_time_f64(0.25)
         .arg("--mixed-mining")
         .args(["--slots-in-an-epoch", "2"])
-        .arg("--disable-block-gas-limit")
 }
 
 pub async fn spawn(builder: Anvil) -> Result<AnvilInstance> {
