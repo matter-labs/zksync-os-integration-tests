@@ -17,16 +17,15 @@ zk-deployer = { path = "bin/zk-deployer" }
 
 alloy = { version = "2.0.5", default-features = false }
 anyhow = "1.0"
-blake2 = "0.10"
 chrono = "0.4"
 clap = "4.5"
 flate2 = "1.0"
 fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
-hex-literal = "1.1"
 human-panic = "2.0"
 protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 rstest = "0.26.1"
 serde = "1.0"
@@ -41,8 +40,6 @@ tokio = "1"
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-zk_os_api = { package = "zksync_os_api", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.14" }
-zk_os_basic_system = { package = "basic_system", git = "https://github.com/matter-labs/zksync-os", tag = "v0.2.9-interface-v0.0.14" }
 zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
 zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
 
@@ -52,15 +49,12 @@ zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-s
 # keys on file content rather than the git rev (see README.md § Local development).
 #
 # [patch."https://github.com/matter-labs/era-contracts"]
-# protocol_ops = { path = "../era-contracts/protocol-ops" }
+# protocol_ops          = { path = "../era-contracts/protocol-ops" }
+# zksync-os-genesis-gen = { path = "../era-contracts/tools/zksync-os-genesis-gen" }
 #
 # [patch."https://github.com/matter-labs/zksync-os-server"]
 # zksync_os_server           = { path = "../zksync-os-server" }
 # zksync_os_state_full_diffs = { path = "../zksync-os-server" }
-#
-# [patch."https://github.com/matter-labs/zksync-os"]
-# zksync_os_api = { path = "../zksync-os/<path-to-crate>" }
-# basic_system  = { path = "../zksync-os/<path-to-crate>" }
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

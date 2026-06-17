@@ -2,12 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use zksync_os_genesis_gen::{build_genesis_root_hash, Genesis, InitialGenesisInput};
 
-mod compute;
-mod consts;
-mod types;
-
-pub use types::Genesis;
+pub use zksync_os_genesis_gen::Genesis as GenesisOutput;
 
 #[derive(Subcommand, Debug)]
 pub enum GenesisCommands {
@@ -44,9 +41,9 @@ async fn generate(args: GenesisGenerateArgs) -> Result<()> {
         .map_err(|e| anyhow::anyhow!("failed to parse genesis: {e}"))?;
 
     let additional_storage_raw = genesis.initial_genesis.additional_storage_raw.clone();
-    genesis.initial_genesis = compute::build_initial_genesis_input(&args.l1_contracts_out)?;
+    genesis.initial_genesis = InitialGenesisInput::from_forge_artifacts(&args.l1_contracts_out)?;
     genesis.initial_genesis.additional_storage_raw = additional_storage_raw;
-    genesis.genesis_root = compute::build_genesis_root_hash(&genesis.initial_genesis)?;
+    genesis.genesis_root = build_genesis_root_hash(&genesis.initial_genesis)?;
 
     let json = serde_json::to_string_pretty(&genesis)?;
     std::fs::write(&args.genesis_config, &json)?;
