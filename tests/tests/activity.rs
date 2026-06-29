@@ -1,121 +1,53 @@
+use std::time::Duration;
+
 use anyhow::Result;
 use rstest::rstest;
 use tests::fixtures::ecosystem;
-use tests::{ActivityConfig, Ecosystem};
+use tests::{ActivityConfig, Ecosystem, FlowConfig};
 
-/// Manual handle: start transfer-only noise, confirm it ran and stays healthy,
-/// then stop cleanly.
+/// Feature demonstration: on a fresh ecosystem, run several short-lived activity
+/// configurations one after another and confirm each reaches a passing verdict —
+/// `await_done()` returns `Ok` only when every submitted transaction finalized
+/// on L1. The double-start guard clears after each verdict, so the runs are
+/// sequential on the same chain.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn manual_handle_runs_and_stops(#[future] ecosystem: Ecosystem) -> Result<()> {
+async fn short_activities_all_succeed(#[future] ecosystem: Ecosystem) -> Result<()> {
     let eco = ecosystem.await;
-    let handle = eco
-        .chain()
-        .start_background_activity(ActivityConfig::transfers_only());
+    let chain = eco.chain();
 
-    // Wait until at least a few transfers have been submitted.
-    let start = std::time::Instant::now();
-    while handle.stats().txs_sent < 3 {
-        anyhow::ensure!(
-            start.elapsed() < std::time::Duration::from_secs(30),
-            "background transfers did not reach 3 within 30s (sent={})",
-            handle.stats().txs_sent
-        );
-        anyhow::ensure!(!handle.stats().failed, "activity task died early");
-        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-    }
+    // 1. A fixed count of L2 transfers.
+    chain.start_activity(ActivityConfig {
+        l2_transfers: Some(FlowConfig::count(Duration::from_millis(300), 5)),
+        l1_deposits: None,
+    });
+    let report = chain.finish_activity().await?;
+    assert_eq!(report.transfers_submitted, 5);
+    assert_eq!(report.transfers_finalized, 5);
 
-    assert!(!handle.stats().failed, "activity should still be healthy");
-    handle.stop().await;
+    // 2. A fixed count of L1→L2 deposits.
+    chain.start_activity(ActivityConfig {
+        l2_transfers: None,
+        l1_deposits: Some(FlowConfig::count(Duration::from_secs(1), 2)),
+    });
+    let report = chain.finish_activity().await?;
+    assert_eq!(report.deposits_submitted, 2);
+
+    // 3. Both flows together, time-bounded.
+    chain.start_activity(ActivityConfig {
+        l2_transfers: Some(FlowConfig::for_duration(
+            Duration::from_millis(300),
+            Duration::from_secs(2),
+        )),
+        l1_deposits: Some(FlowConfig::for_duration(
+            Duration::from_secs(1),
+            Duration::from_secs(2),
+        )),
+    });
+    let report = chain.finish_activity().await?;
+    assert!(report.transfers_submitted >= 1, "expected some transfers");
+    assert_eq!(report.transfers_finalized, report.transfers_submitted);
+    assert!(report.deposits_submitted >= 1, "expected some deposits");
+
     Ok(())
-}
-
-/// After stop().await the guard is cleared, so activity can be started again.
-#[rstest]
-#[tokio::test(flavor = "multi_thread")]
-async fn restart_after_stop(#[future] ecosystem: Ecosystem) -> Result<()> {
-    let eco = ecosystem.await;
-    let h1 = eco
-        .chain()
-        .start_background_activity(ActivityConfig::transfers_only());
-    h1.stop().await;
-    // Should not panic — guard was cleared by stop().
-    let h2 = eco
-        .chain()
-        .start_background_activity(ActivityConfig::transfers_only());
-    h2.stop().await;
-    Ok(())
-}
-
-/// pause()/resume() halts new submissions while paused.
-#[rstest]
-#[tokio::test(flavor = "multi_thread")]
-async fn pause_halts_submissions(#[future] ecosystem: Ecosystem) -> Result<()> {
-    let eco = ecosystem.await;
-    let handle = eco
-        .chain()
-        .start_background_activity(ActivityConfig::transfers_only());
-
-    // Let some traffic flow.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    handle.pause();
-
-    // Synchronize on observed quiescence rather than assuming a fixed grace
-    // window: pause() only stops *future* iterations, so a send in flight when
-    // we paused can still complete — and on a loaded box it may outlast any
-    // fixed sleep. Wait until two reads 1s apart agree (the in-flight send has
-    // drained), then treat that as the quiesced count.
-    let quiesce_deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    let quiesced = loop {
-        let a = handle.stats().txs_sent;
-        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-        let b = handle.stats().txs_sent;
-        if a == b {
-            break b;
-        }
-        anyhow::ensure!(
-            std::time::Instant::now() < quiesce_deadline,
-            "transfers did not quiesce within 20s after pause()"
-        );
-    };
-
-    // Once quiesced, no further submissions should occur while paused.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-    assert_eq!(
-        quiesced,
-        handle.stats().txs_sent,
-        "no new transfers should be submitted while paused"
-    );
-    handle.stop().await;
-    Ok(())
-}
-
-/// Fixture parameter auto-starts activity; the chain is moving when the test
-/// body runs. A plain ping still finalizes despite the background noise.
-#[rstest]
-#[tokio::test(flavor = "multi_thread")]
-async fn fixture_param_autostarts(
-    #[future]
-    #[with(vec![6565], Some(ActivityConfig::default()))]
-    ecosystem: Ecosystem,
-) -> Result<()> {
-    let eco = ecosystem.await;
-    let hash = eco.chain().ping().await?;
-    eco.chain().wait_for_tx_finalized(hash).await?;
-    Ok(())
-}
-
-/// Starting activity twice on the same chain panics (the double-start guard).
-#[rstest]
-#[tokio::test(flavor = "multi_thread")]
-#[should_panic(expected = "already running")]
-async fn double_start_panics(#[future] ecosystem: Ecosystem) {
-    let eco = ecosystem.await;
-    let _h1 = eco
-        .chain()
-        .start_background_activity(ActivityConfig::transfers_only());
-    // Second start without stopping the first must panic.
-    let _h2 = eco
-        .chain()
-        .start_background_activity(ActivityConfig::transfers_only());
 }

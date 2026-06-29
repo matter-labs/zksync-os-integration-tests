@@ -6,12 +6,14 @@ use zk_deployer::commands::bootstrap::BootstrapArgs;
 use zk_deployer::deployed::DeployedEcosystem;
 use zk_deployer::intent::{ChainIntent, DaMode, IntentConfig, WalletsIntent};
 
-use crate::activity::{ActivityConfig, ACTIVITY_WALLET_KEYS, ACTIVITY_WALLET_L2_FUND_ETH};
+use crate::activity::{
+    transfer_wallet_index, ActivityConfig, ACTIVITY_WALLET_KEYS, ACTIVITY_WALLET_L2_FUND_ETH,
+};
 use crate::chain::WALLET_KEYS;
 use crate::ecosystem::{ChainSpec, Ecosystem};
 use crate::server_runtime::ChainRuntime;
 use crate::workdir::WorkDir;
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use alloy::signers::local::PrivateKeySigner;
 use zk_deployer::anvil::{default_builder, save_state, spawn, spawn_from_file};
 use zk_deployer::l1_l2_deposit::{deposit_eth, DEFAULT_L1_TO_L2_GAS_PRICE};
@@ -128,35 +130,30 @@ pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
         // [`WALLET_KEYS`] wallet on each chain (priority txs, mined into batch 1
         // once each server starts below).
 
-        // Fund the activity-wallet pool on L2 for every chain (via L1→L2
-        // deposits) so background activity has spendable balances. We run before
-        // save_state so these deposits are captured in the snapshot — cache hits
-        // get them for free. Sequential per recipient: all share the deployer
+        // Fund each chain's transfer wallet on L2 (via an L1→L2 deposit) so
+        // background self-transfers have gas money. Only the transfer wallet
+        // needs L2 funds — the deposit wallet only ever receives deposits. We run
+        // before save_state so these deposits are captured in the snapshot —
+        // cache hits get them for free. Sequential: all share the deployer
         // signer, so concurrent sends would race the L1 nonce.
-        let activity_recipients: Vec<Address> = ACTIVITY_WALLET_KEYS
-            .iter()
-            .map(|k| {
-                k.parse::<PrivateKeySigner>()
-                    .expect("parse activity wallet key")
-                    .address()
-            })
-            .collect();
         let activity_amount =
             U256::from(ACTIVITY_WALLET_L2_FUND_ETH) * U256::from(1_000_000_000_000_000_000u128);
-        for &chain_id in chain_ids {
-            for recipient in &activity_recipients {
-                deposit_eth(
-                    &l1_rpc,
-                    deployed.bridgehub,
-                    chain_id,
-                    *recipient,
-                    activity_amount,
-                    DEFAULT_L1_TO_L2_GAS_PRICE,
-                    super::DEPLOYER_KEY,
-                )
-                .await
-                .expect("fund activity wallet on L2");
-            }
+        for (i, &chain_id) in chain_ids.iter().enumerate() {
+            let transfer_wallet = ACTIVITY_WALLET_KEYS[transfer_wallet_index(i)]
+                .parse::<PrivateKeySigner>()
+                .expect("parse transfer wallet key")
+                .address();
+            deposit_eth(
+                &l1_rpc,
+                deployed.bridgehub,
+                chain_id,
+                transfer_wallet,
+                activity_amount,
+                DEFAULT_L1_TO_L2_GAS_PRICE,
+                super::DEPLOYER_KEY,
+            )
+            .await
+            .expect("fund transfer wallet on L2");
         }
 
         // Snapshot the deployment (anvil state incl. deposits + workdir).
@@ -245,9 +242,9 @@ pub async fn ecosystem(
     #[default(vec![super::TEST_CHAIN_ID])] chains: Vec<u64>,
     #[default(None)] activity: Option<ActivityConfig>,
 ) -> Ecosystem {
-    let mut eco = setup_l1_chains(&chains).await;
+    let eco = setup_l1_chains(&chains).await;
     if let Some(config) = activity {
-        eco.start_background_activity(config).await;
+        eco.start_activity(config).await;
     }
     eco
 }
