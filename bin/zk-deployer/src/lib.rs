@@ -1,6 +1,7 @@
 pub mod anvil;
 pub mod commands;
 pub mod deployed;
+pub mod funding;
 pub mod identity;
 pub mod intent;
 pub mod l1_l2_deposit;
