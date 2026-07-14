@@ -29,7 +29,10 @@ jobs:
       - name: Run cargo audit
         # RUSTSEC-2025-0055: tracing-subscriber 0.2.x pulled in by ark-relations
         # (transitive dep of zksync-os); not fixable from this repo.
-        run: cargo audit --ignore RUSTSEC-2025-0055
+        # RUSTSEC-2026-0194 / RUSTSEC-2026-0195: quick-xml <0.41 DoS, pulled only by
+        # `inferno` (flamegraph tooling) deep inside zksync-airbender (tag-pinned);
+        # bumping is blocked upstream and it is not on any runtime path.
+        run: cargo audit --ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
 
   cargo-deny:
     runs-on: ubuntu-latest
