@@ -7,7 +7,9 @@ use anyhow::{bail, Context, Result};
 use clap::Parser;
 
 use protocol_ops::commands::dev::execute_safe::execute_one_bundle;
-use protocol_ops::common::{anvil::set_balance, logger, preflight::is_local_rpc, PrivateKey};
+use protocol_ops::common::{logger, preflight::is_local_rpc, PrivateKey};
+
+use crate::funding::fund;
 
 /// Apply every bundle listed in a `manifest.json` file, routing each one to the
 /// correct signer.
@@ -54,9 +56,9 @@ pub struct ExecuteManifestArgs {
     #[arg(long, default_value = "http://localhost:8545")]
     pub l1_rpc_url: String,
 
-    /// Fund each bundle's target address via `anvil_setBalance` before applying.
-    /// Defaults to true when `--l1-rpc-url` is a localhost URL. Set
-    /// `--fund-targets=false` when targeting a non-Anvil node (production).
+    /// Fund each bundle's target address (via a transfer from the first
+    /// `--private-key`) before applying. Defaults to true when `--l1-rpc-url`
+    /// is a localhost URL. Set `--fund-targets=false` for a real network.
     #[arg(long, default_value = None)]
     pub fund_targets: Option<bool>,
 }
@@ -70,12 +72,18 @@ pub async fn run(args: ExecuteManifestArgs) -> Result<()> {
         .iter()
         .map(|k| k.expose().to_string())
         .collect();
+    // Fund each target from the first supplied key via transfer (localhost only).
+    let funder = if fund {
+        keys.first().map(String::as_str)
+    } else {
+        None
+    };
     apply_manifest(
         &args.manifest,
         &keys,
         args.wallets.as_deref(),
         &args.l1_rpc_url,
-        fund,
+        funder,
     )
     .await
 }
@@ -87,7 +95,7 @@ pub async fn apply_manifest(
     private_keys: &[String],
     wallets_path: Option<&Path>,
     l1_rpc_url: &str,
-    fund_targets: bool,
+    funder_key: Option<&str>,
 ) -> Result<()> {
     apply_manifest_from(
         manifest_path,
@@ -96,7 +104,7 @@ pub async fn apply_manifest(
         private_keys,
         wallets_path,
         l1_rpc_url,
-        fund_targets,
+        funder_key,
     )
     .await
 }
@@ -113,7 +121,7 @@ pub async fn apply_manifest_from(
     private_keys: &[String],
     wallets_path: Option<&Path>,
     l1_rpc_url: &str,
-    fund_targets: bool,
+    funder_key: Option<&str>,
 ) -> Result<()> {
     let key_map = build_key_map(private_keys, wallets_path)?;
 
@@ -167,13 +175,10 @@ pub async fn apply_manifest_from(
 
         let bundle_path = manifest_dir.join(file);
 
-        if fund_targets {
-            logger::info(format!("  funding {target:#x} via anvil_setBalance..."));
-            set_balance(l1_rpc_url, target).await.with_context(|| {
-                format!(
-                    "anvil_setBalance({target:#x}) failed — use --fund-targets=false for non-Anvil nodes"
-                )
-            })?;
+        if let Some(fk) = funder_key {
+            fund(l1_rpc_url, fk, target)
+                .await
+                .with_context(|| format!("funding bundle target {target:#x}"))?;
         }
 
         execute_one_bundle(&bundle_path, l1_rpc_url, key, None).await?;
