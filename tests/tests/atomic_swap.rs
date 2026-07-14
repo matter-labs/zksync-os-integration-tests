@@ -69,6 +69,7 @@ sol! {
     interface IERC7786Attributes {
         function indirectCall(uint256 callValue);
         function atomicBundle(bytes32 flowId, uint64 deadline, uint256 lowNullifierIndex);
+        function interopBundleSalt(bytes32 salt);
     }
 
     // ── Bundle / proof structs (mirror common/Messaging.sol + atomic-interop/IAtomicInterop.sol) ──
@@ -81,7 +82,7 @@ sol! {
         uint256 value;
         bytes data;
     }
-    struct BundleAttributes { bytes executionAddress; bytes unbundlerAddress; bool useFixedFee; }
+    struct BundleAttributes { bytes executionAddress; bytes unbundlerAddress; bool useFixedFee; bytes32 salt; }
     struct InteropBundle {
         bytes1 version;
         uint256 sourceChainId;
@@ -103,11 +104,15 @@ sol! {
         uint256 imtLeafIndex;
         bytes32[] imtProof;
     }
-    struct AtomicFinalityProof {
+    struct AtomicFlow {
         bytes32 flowId;
         uint64 deadline;
+        uint256 settlementLayerChainId;
         bytes32[] legBundleHashes;
-        uint256[] chainIds;
+        uint256[] legSourceChainIds;
+    }
+    struct AtomicFinalityProof {
+        AtomicFlow flow;
         ImtInclusionProof[] proofs;
     }
 
@@ -261,9 +266,28 @@ fn bridge_call_starter(source: &ChainCtx, amount: U256, recipient: Address) -> I
     }
 }
 
-/// `flowId = keccak256(abi.encode(bytes32[] legBundleHashes, uint256[] chainIds, uint64 deadline))` (both arrays ascending).
-fn compute_flow_id(leg_hashes_asc: &[B256], chain_ids_asc: &[U256], deadline: u64) -> B256 {
-    keccak256((leg_hashes_asc.to_vec(), chain_ids_asc.to_vec(), deadline).abi_encode_params())
+/// `flowId = keccak256(abi.encode(bytes32[] legBundleHashes, uint256[] legSourceChainIds, uint64 deadline, uint256 settlementLayerChainId))` (both arrays ascending).
+fn compute_flow_id(
+    leg_hashes_asc: &[B256],
+    chain_ids_asc: &[U256],
+    deadline: u64,
+    settlement_layer_chain_id: U256,
+) -> B256 {
+    keccak256(
+        (
+            leg_hashes_asc.to_vec(),
+            chain_ids_asc.to_vec(),
+            deadline,
+            settlement_layer_chain_id,
+        )
+            .abi_encode_params(),
+    )
+}
+
+/// `interopBundleSalt` ERC-7786 attribute. The InteropCenter folds `keccak256(msg.sender, salt)` into the
+/// bundle hash and enforces each `(sender, salt)` pair is used at most once, so every leg needs a distinct salt.
+fn interop_bundle_salt_attr(salt: B256) -> Bytes {
+    Bytes::from(IERC7786Attributes::interopBundleSaltCall { salt }.abi_encode())
 }
 
 /// `commitValue = keccak256(abi.encode(bytes4 ATOMIC_COMMIT_LEAF_TAG, bytes32 flowId, bytes32 bundleHash))` as uint256.
@@ -437,12 +461,17 @@ async fn predict_bundle_hash(
     amount: U256,
     recipient: Address,
     fee: U256,
+    salt: B256,
 ) -> Result<B256> {
     let ic = IInteropCenter::new(INTEROP_CENTER, &source.provider);
     ic.sendBundle(
         encode_evm_chain(dest.chain_id),
         vec![bridge_call_starter(source, amount, recipient)],
-        vec![atomic_bundle_attr(B256::ZERO, DEADLINE, U256::ZERO)],
+        // Same salt as `send_atomic_leg` so the predicted hash matches the emitted one.
+        vec![
+            atomic_bundle_attr(B256::ZERO, DEADLINE, U256::ZERO),
+            interop_bundle_salt_attr(salt),
+        ],
     )
     .value(fee)
     .gas(ATOMIC_SEND_GAS)
@@ -452,6 +481,7 @@ async fn predict_bundle_hash(
 }
 
 /// Atomic-send one leg (burn + IMT insert). Returns `(bundleData, bundleHash, txHash, sendBlock)`.
+#[allow(clippy::too_many_arguments)]
 async fn send_atomic_leg(
     source: &ChainCtx,
     dest: &ChainCtx,
@@ -460,6 +490,7 @@ async fn send_atomic_leg(
     flow_id: B256,
     predicted_hash: B256,
     fee: U256,
+    salt: B256,
 ) -> Result<(Bytes, B256, B256, u64)> {
     let value = commit_value(flow_id, predicted_hash);
     // Low-nullifier (predecessor) index from the server's Rust IMT engine against the pre-insert tree.
@@ -476,7 +507,10 @@ async fn send_atomic_leg(
         .sendBundle(
             encode_evm_chain(dest.chain_id),
             vec![bridge_call_starter(source, amount, recipient)],
-            vec![atomic_bundle_attr(flow_id, DEADLINE, U256::from(low_null))],
+            vec![
+                atomic_bundle_attr(flow_id, DEADLINE, U256::from(low_null)),
+                interop_bundle_salt_attr(salt),
+            ],
         )
         .value(fee)
         .gas(ATOMIC_SEND_GAS)
@@ -657,14 +691,33 @@ async fn atomic_swap_l1_settled(
     register_chains_for_interop(ca.l1_rpc_url(), ca.bridgehub_addr(), &a, &b).await?;
 
     // ── Predict bundle hashes -> flowId ──
-    let h_ab = predict_bundle_hash(&a, &b, a_amount, user, fee).await?;
-    let h_ba = predict_bundle_hash(&b, &a, b_amount, user, fee).await?;
+    // For L1-settling chains the atomic flow's settlement layer is L1 itself; its chain id is now part
+    // of the flowId preimage, so resolve it before computing the flowId.
+    let l1 = ProviderBuilder::new()
+        .connect(ca.l1_rpc_url())
+        .await?
+        .erased();
+    let l1_chain_id = l1.get_chain_id().await?;
+    // Each leg needs a distinct interop-bundle salt: the InteropCenter folds `keccak256(sender, salt)`
+    // into the bundle hash and rejects a reused (sender, salt) pair. Legs settle on different chains, so
+    // fixed per-leg salts are unique enough for the fresh test chains.
+    let salt_ab = keccak256(b"atomic-swap-leg-ab");
+    let salt_ba = keccak256(b"atomic-swap-leg-ba");
+    let h_ab = predict_bundle_hash(&a, &b, a_amount, user, fee, salt_ab).await?;
+    let h_ba = predict_bundle_hash(&b, &a, b_amount, user, fee, salt_ba).await?;
     let mut leg_hashes_asc = [h_ab, h_ba];
     leg_hashes_asc.sort();
     let mut chain_ids_asc = [U256::from(a.chain_id), U256::from(b.chain_id)];
     chain_ids_asc.sort();
-    let flow_id = compute_flow_id(&leg_hashes_asc, &chain_ids_asc, DEADLINE);
-    println!("[atomic-swap] flowId={flow_id} deadline={DEADLINE}");
+    let flow_id = compute_flow_id(
+        &leg_hashes_asc,
+        &chain_ids_asc,
+        DEADLINE,
+        U256::from(l1_chain_id),
+    );
+    println!(
+        "[atomic-swap] flowId={flow_id} deadline={DEADLINE} settlementLayer(L1)={l1_chain_id}"
+    );
 
     // ── PHASE 1: atomic send both legs ──
     let a_token = ITestnetERC20::new(a.token, &a.provider);
@@ -673,9 +726,9 @@ async fn atomic_swap_l1_settled(
     let b_before = b_token.balanceOf(user).call().await?;
 
     let (ab_data, _ab_hash, ab_tx, ab_block) =
-        send_atomic_leg(&a, &b, a_amount, user, flow_id, h_ab, fee).await?;
+        send_atomic_leg(&a, &b, a_amount, user, flow_id, h_ab, fee, salt_ab).await?;
     let (ba_data, _ba_hash, ba_tx, ba_block) =
-        send_atomic_leg(&b, &a, b_amount, user, flow_id, h_ba, fee).await?;
+        send_atomic_leg(&b, &a, b_amount, user, flow_id, h_ba, fee, salt_ba).await?;
 
     let mgr_a = IAtomicFlowManager::new(ATOMIC_FLOW_MANAGER, &a.provider);
     let mgr_b = IAtomicFlowManager::new(ATOMIC_FLOW_MANAGER, &b.provider);
@@ -722,20 +775,18 @@ async fn atomic_swap_l1_settled(
         vec![ba_proof, ab_proof]
     };
     let finality = AtomicFinalityProof {
-        flowId: flow_id,
-        deadline: DEADLINE,
-        legBundleHashes: leg_hashes_asc.to_vec(),
-        chainIds: chain_ids_asc.to_vec(),
+        flow: AtomicFlow {
+            flowId: flow_id,
+            deadline: DEADLINE,
+            settlementLayerChainId: U256::from(l1_chain_id),
+            legBundleHashes: leg_hashes_asc.to_vec(),
+            legSourceChainIds: chain_ids_asc.to_vec(),
+        },
         proofs: proofs_asc,
     };
 
     // Both executeAtomicBundle calls verify every leg, so each executing chain must have imported the
-    // L1 interop root at each leg's settlement block.
-    let l1 = ProviderBuilder::new()
-        .connect(ca.l1_rpc_url())
-        .await?
-        .erased();
-    let l1_chain_id = l1.get_chain_id().await?;
+    // L1 interop root at each leg's settlement block. (`l1`/`l1_chain_id` resolved above.)
     let sl_blocks: Vec<u64> = [ab_raw.gateway_block_number, ba_raw.gateway_block_number]
         .into_iter()
         .flatten()
