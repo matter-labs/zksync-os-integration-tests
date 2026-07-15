@@ -54,8 +54,11 @@ const INTEROP_ROOT_STORAGE: Address = address!("00000000000000000000000000000000
 const ANVIL_KEY0: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
 
 const TOKEN_DECIMALS: u8 = 18;
-/// The flow deadline (an L1 settlement-layer block number); set well above the harness L1 head.
-const DEADLINE: u64 = 10_000_000;
+/// The flow deadline, as an L1 settlement-layer **timestamp** (unix seconds). The atomic-interop
+/// l1-timestamp feature binds each settled batch's `block.timestamp` into its leaf and rejects a leg
+/// whose batch settled after the deadline (`ProofDeadlineExceeded`), so this must sit comfortably
+/// above the batches' real settlement timestamps — far in the future here (year ~2286).
+const DEADLINE: u64 = 10_000_000_000;
 const ATOMIC_SEND_GAS: u64 = 3_000_000;
 const TX_GAS: u64 = 5_000_000;
 

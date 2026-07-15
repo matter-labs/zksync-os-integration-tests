@@ -9335,7 +9335,7 @@ dependencies = [
 [[package]]
 name = "protocol_ops"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?branch=atomic-imt-interop#5dbf7341a099fc4008feeb78e094748dfb427908"
+source = "git+https://github.com/matter-labs/era-contracts?branch=atomic-imt-interop#76f40b53066311afaea52b1b8bb540ccff6b6db0"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -15737,7 +15737,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-genesis-gen"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?branch=atomic-imt-interop#5dbf7341a099fc4008feeb78e094748dfb427908"
+source = "git+https://github.com/matter-labs/era-contracts?branch=atomic-imt-interop#76f40b53066311afaea52b1b8bb540ccff6b6db0"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
