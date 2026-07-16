@@ -208,9 +208,9 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
             if preflight::is_local_rpc(&l1_rpc_url) {
                 logger::step("Funding operator addresses on L1...");
                 for addr in [commit_operator, prove_operator, execute_operator] {
-                    protocol_ops::common::anvil::set_balance(&l1_rpc_url, addr)
+                    crate::funding::fund(&l1_rpc_url, &deployer_key, addr)
                         .await
-                        .with_context(|| format!("anvil_setBalance({addr:#x})"))?;
+                        .with_context(|| format!("funding operator {addr:#x}"))?;
                     logger::info(format!("  funded {addr:#x}"));
                 }
             }
@@ -235,7 +235,7 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 .with_context(|| format!("{} not found in state", prepared_key))?;
 
             logger::step(format!("Applying chain bundles for {}...", chain.chain_id));
-            let fund = preflight::is_local_rpc(&l1_rpc_url);
+            let funder = preflight::is_local_rpc(&l1_rpc_url).then_some(deployer_key.as_str());
             apply_manifest_from(
                 &manifest_path,
                 prepared.manifest_start,
@@ -243,7 +243,7 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 std::slice::from_ref(&deployer_key),
                 Some(&args.wallets),
                 &l1_rpc_url,
-                fund,
+                funder,
             )
             .await
             .with_context(|| {
@@ -301,9 +301,9 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
             let execute_operator = chain_wallets.operator_execute_sk.address;
 
             for addr in [commit_operator, prove_operator, execute_operator] {
-                protocol_ops::common::anvil::set_balance(&l1_rpc_url, addr)
+                crate::funding::fund(&l1_rpc_url, &deployer_key, addr)
                     .await
-                    .with_context(|| format!("anvil_setBalance({addr:#x})"))?;
+                    .with_context(|| format!("funding operator {addr:#x}"))?;
                 logger::info(format!("  funded {addr:#x} (chain {})", chain.chain_id));
             }
         }
