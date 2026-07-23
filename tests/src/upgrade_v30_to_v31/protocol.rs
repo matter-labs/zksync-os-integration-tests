@@ -18,7 +18,7 @@
 
 use std::path::Path;
 
-use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::primitives::{b256, Address, FixedBytes, U256};
 use anyhow::{Context, Result};
 use protocol_ops::commands::chain;
 use protocol_ops::commands::dev::execute_manifest::apply_manifest;
@@ -297,6 +297,47 @@ pub async fn set_zkos_pre_v31_total_supply(
     )
     .await
     .context("ChainAdmin.multicall(setZKsyncOSPreV31TotalSupply)")?;
+    Ok(())
+}
+
+alloy::sol! {
+    interface IL1MessageRootView {
+        function v31UpgradeChainBatchNumber(uint256 _chainId) external view returns (uint256);
+    }
+}
+
+/// keccak256("V31_UPGRADE_CHAIN_BATCH_NUMBER_PLACEHOLDER_VALUE") — the marker
+/// `L1MessageRoot.initializeL1V31Upgrade` stamps on every pre-existing chain
+/// during the ecosystem upgrade, finalized to a real batch number only inside
+/// each chain's own diamond upgrade. Mirrors IMessageRoot.sol.
+fn v31_placeholder_marker() -> U256 {
+    U256::from_be_bytes(b256!("33a2a744678e6f76aeaf049bfc1b3e71444acea80e2454142fa0267961f85830").0)
+}
+
+/// Assert the chain sits in the v31 upgrade *placeholder window*: the ecosystem
+/// upgrade has stamped the placeholder marker, but this chain has not yet run
+/// its own diamond upgrade to finalize it. This is precisely the window during
+/// which `L1AssetTracker._getWithdrawalChain` must keep withdrawals live
+/// (attributing them to the chain itself rather than reverting).
+pub async fn assert_in_v31_placeholder_window(
+    l1_rpc: &str,
+    bridgehub: Address,
+    chain_id: u64,
+) -> Result<()> {
+    let provider = provider(l1_rpc).await?;
+    let message_root = call(&provider, bridgehub, BridgehubAbi::messageRootCall {}).await?;
+    let marker = call(
+        &provider,
+        message_root,
+        IL1MessageRootView::v31UpgradeChainBatchNumberCall {
+            _chainId: U256::from(chain_id),
+        },
+    )
+    .await?;
+    anyhow::ensure!(
+        marker == v31_placeholder_marker(),
+        "chain {chain_id} is not in the v31 placeholder window (marker={marker})"
+    );
     Ok(())
 }
 

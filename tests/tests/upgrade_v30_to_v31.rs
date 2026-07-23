@@ -4,7 +4,11 @@
 /// the full upgrade through protocol-ops, and verifies the upgraded chain
 /// still processes deposits. The fixture is restored from a committed snapshot
 /// via [`fixture::start`]; the upgrade steps live in [`protocol`].
+use std::time::Duration;
+
 use alloy::primitives::{Address, U256};
+use alloy::providers::Provider;
+use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use protocol_ops::commands::ecosystem::upgrade::{
     run_upgrade_governance, run_upgrade_prepare_all, UpgradeGovernanceArgs, UpgradePrepareAllArgs,
@@ -28,6 +32,53 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     let l1_rpc = chain.l1_rpc_url();
     let bridgehub = chain.bridgehub_addr();
     let chain_id = chain.chain_id();
+
+    // ── Initiate a withdrawal on the still-v30 chain ─────────────────────────
+    //
+    // PR #2237 keeps withdrawals live across the v31 ecosystem upgrade: once
+    // `initializeL1V31Upgrade` stamps the placeholder marker on every chain,
+    // `L1AssetTracker._getWithdrawalChain` used to revert until each chain ran
+    // its own diamond upgrade. We reproduce that exact window: initiate the
+    // withdrawal now (a strictly pre-v31 batch), then finalize it on L1 after
+    // the ecosystem upgrade but before this chain's diamond upgrade.
+    //
+    // The v30.2 fixture has no pre-funded test wallets, so fund an L2 account
+    // via an L1→L2 deposit first, then withdraw part of it to a fresh L1
+    // address whose balance delta cleanly measures the finalized amount.
+    let withdrawer_key = zk_deployer::l1_l2_deposit::DEFAULT_L2_RICH_KEYS[2];
+    let withdrawer: Address = withdrawer_key.parse::<PrivateKeySigner>()?.address();
+    let withdraw_l1_receiver: Address = "0x000000000000000000000000000000000000bEEF".parse()?;
+    let withdraw_amount = U256::from(100_000_000_000_000_000u128); // 0.1 ETH
+
+    zk_deployer::l1_l2_deposit::deposit_eth(
+        l1_rpc,
+        bridgehub,
+        chain_id,
+        withdrawer,
+        U256::from(1_000_000_000_000_000_000u128), // 1 ETH
+        zk_deployer::l1_l2_deposit::DEFAULT_L1_TO_L2_GAS_PRICE,
+        DEPLOYER_KEY,
+    )
+    .await
+    .context("pre-upgrade deposit to fund the withdrawer")?;
+    zk_deployer::l1_l2_deposit::wait_for_l2_balance(chain.l2_rpc_url(), withdrawer, 120)
+        .await
+        .context("wait for withdrawer funding on L2")?;
+
+    let withdraw_tx = zk_deployer::l2_l1_withdraw::withdraw_eth(
+        chain.l2_rpc_url(),
+        withdrawer_key,
+        withdraw_l1_receiver,
+        withdraw_amount,
+    )
+    .await
+    .context("initiate L2→L1 withdrawal")?;
+    // Finalizing needs the withdrawal's batch executed on L1 (that's when the
+    // log proof becomes available); waiting here also keeps the batch pre-v31.
+    chain
+        .wait_for_tx_finalized(withdraw_tx)
+        .await
+        .context("finalize withdrawal batch on L1")?;
 
     // ── ecosystem upgrade-prepare (deployer) ─────────────────────────────────
     //
@@ -103,6 +154,37 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     protocol::run_stage3(l1_rpc, eco.workdir(), bridgehub, chain_id, DEPLOYER_KEY)
         .await
         .context("stage3 token migration")?;
+
+    // ── Finalize the withdrawal inside the placeholder window ────────────────
+    //
+    // The ecosystem upgrade (governance) has stamped the v31 placeholder marker
+    // and stage3 has registered ETH in the L1AssetTracker, but this chain's
+    // diamond upgrade has not run yet — so the marker is still the placeholder.
+    // This is exactly the case PR #2237 fixes: pre-PR, finalizeWithdrawal would
+    // revert in `_getWithdrawalChain`; post-PR it attributes the withdrawal to
+    // the chain and succeeds.
+    protocol::assert_in_v31_placeholder_window(l1_rpc, bridgehub, chain_id)
+        .await
+        .context("confirm chain holds the v31 placeholder marker before finalize")?;
+    let l1_provider = chain.l1_provider().await?;
+    let receiver_before = l1_provider.get_balance(withdraw_l1_receiver).await?;
+    zk_deployer::l2_l1_withdraw::finalize_withdrawal(
+        l1_rpc,
+        chain.l2_rpc_url(),
+        bridgehub,
+        chain_id,
+        withdraw_tx,
+        DEPLOYER_KEY,
+        Duration::from_secs(120),
+    )
+    .await
+    .context("finalize withdrawal during the v31 placeholder window")?;
+    let receiver_after = l1_provider.get_balance(withdraw_l1_receiver).await?;
+    anyhow::ensure!(
+        receiver_after - receiver_before == withdraw_amount,
+        "withdrawal did not credit the L1 receiver: before={receiver_before}, after={receiver_after}"
+    );
+
     protocol::run_chain_upgrade(l1_rpc, eco.workdir(), GOVERNOR_KEY, bridgehub, chain_id)
         .await
         .context("chain upgrade")?;
