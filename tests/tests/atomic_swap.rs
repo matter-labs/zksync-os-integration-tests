@@ -77,9 +77,11 @@ sol! {
         function atomicBundle(AtomicFlowPreimage flowPreimage, uint256 lowNullifierIndex);
     }
 
-    // Mirrors atomic-interop/IAtomicInterop.sol: the flowId preimage. `legBundleHashes` strictly
-    // ascending; `legSourceChainIds` positional (aligned 1:1 with the sorted hashes).
+    // Mirrors atomic-interop/IAtomicInterop.sol: the flowId preimage. `version` must equal
+    // ATOMIC_FLOW_PREIMAGE_VERSION (0x01); `legBundleHashes` strictly ascending;
+    // `legSourceChainIds` positional (aligned 1:1 with the sorted hashes).
     struct AtomicFlowPreimage {
+        bytes1 version;
         uint64 deadline;
         uint256 settlementLayerChainId;
         bytes32[] legBundleHashes;
@@ -138,7 +140,16 @@ sol! {
             InteropCallStarter[] callStarters,
             bytes[] bundleAttributes
         ) external payable returns (bytes32 bundleHash);
+        // Quoter for the bundleHash a `sendBundle` with the same inputs would produce: ALWAYS
+        // reverts with `InteropPreviewHash(bundleHash)` (never returns), so the value burn its
+        // simulation performs can never commit. Invoke via eth_call and decode the revert.
+        function previewBundleHash(
+            bytes destinationChainId,
+            InteropCallStarter[] callStarters,
+            bytes[] bundleAttributes
+        ) external;
         function interopProtocolFee() external view returns (uint256);
+        error InteropPreviewHash(bytes32 bundleHash);
         event InteropBundleSent(bytes32 l2l1MsgHash, bytes32 interopBundleHash, InteropBundle interopBundle);
     }
     #[sol(rpc)]
@@ -279,10 +290,9 @@ fn bridge_call_starter(source: &ChainCtx, amount: U256, recipient: Address) -> I
     }
 }
 
-/// `flowId = keccak256(abi.encode(bytes32[] legBundleHashes, uint256[] legSourceChainIds, uint64 deadline, uint256 settlementLayerChainId))`.
+/// `flowId = keccak256(abi.encode(preimage))` (AtomicFlowManager._validateAndComputeFlowId).
 /// `legBundleHashes` is strictly ascending; `legSourceChainIds` is POSITIONAL (aligned 1:1 with the
 /// hashes, may repeat, need not be sorted).
-/// `flowId = keccak256(abi.encode(preimage))` (AtomicFlowManager._validateAndComputeFlowId).
 fn compute_flow_id(preimage: &AtomicFlowPreimage) -> B256 {
     keccak256(preimage.abi_encode())
 }
@@ -451,29 +461,36 @@ async fn register_chains_for_interop(
     Ok(())
 }
 
-/// Predict a leg's bundleHash via an atomic `sendBundle` callStatic (bundleHash is independent of the atomic params).
+/// Predict a leg's bundleHash via the `previewBundleHash` quoter. The hash is independent of the
+/// atomic attribute (the atomic metadata deliberately never enters the bundle), which is what makes
+/// prediction possible at all: the real attribute's preimage contains this bundle's own hash.
+/// A plain `sendBundle` callStatic can't serve as the predictor — L2->L2 sends are atomic-only
+/// (`NonAtomicSendUnsupported`), so the quoter reverts with `InteropPreviewHash(bundleHash)` instead
+/// of returning, and the hash is decoded out of the revert data.
 async fn predict_bundle_hash(
     source: &ChainCtx,
     dest: &ChainCtx,
     amount: U256,
     recipient: Address,
-    fee: U256,
 ) -> Result<B256> {
     let ic = IInteropCenter::new(INTEROP_CENTER, &source.provider);
-    // bundleHash is independent of the atomic attribute (the atomic metadata deliberately never
-    // enters the bundle - see InteropCenter._parseAtomicSend), so predict without it: the real
-    // attribute cannot be built yet (its preimage contains this bundle's own hash), and a
-    // placeholder would fail `append`'s bundle-is-a-leg check.
-    ic.sendBundle(
-        encode_evm_chain(dest.chain_id),
-        vec![bridge_call_starter(source, amount, recipient)],
-        vec![],
-    )
-    .value(fee)
-    .gas(ATOMIC_SEND_GAS)
-    .call()
-    .await
-    .context("predict sendBundle callStatic")
+    let err = match ic
+        .previewBundleHash(
+            encode_evm_chain(dest.chain_id),
+            vec![bridge_call_starter(source, amount, recipient)],
+            vec![],
+        )
+        .gas(ATOMIC_SEND_GAS)
+        .call()
+        .await
+    {
+        Ok(_) => anyhow::bail!("previewBundleHash returned instead of reverting with the hash"),
+        Err(e) => e,
+    };
+    let preview: IInteropCenter::InteropPreviewHash = err
+        .as_decoded_error()
+        .context("previewBundleHash reverted, but not with InteropPreviewHash")?;
+    Ok(preview.bundleHash)
 }
 
 /// Atomic-send one leg (burn + IMT insert). Returns `(bundleData, bundleHash, txHash, sendBlock)`.
@@ -680,14 +697,15 @@ async fn atomic_swap_l1_settled(
     let deadline = l1_now + DEADLINE_BUFFER_SECS;
 
     // ── Predict bundle hashes -> flowId ──
-    let h_ab = predict_bundle_hash(&a, &b, a_amount, user, fee).await?;
-    let h_ba = predict_bundle_hash(&b, &a, b_amount, user, fee).await?;
+    let h_ab = predict_bundle_hash(&a, &b, a_amount, user).await?;
+    let h_ba = predict_bundle_hash(&b, &a, b_amount, user).await?;
     // legBundleHashes ascending; legSourceChainIds POSITIONAL (aligned 1:1 with the sorted hashes).
     let mut legs = [(h_ab, U256::from(a.chain_id)), (h_ba, U256::from(b.chain_id))];
     legs.sort_by(|x, y| x.0.cmp(&y.0));
     let leg_hashes_asc: Vec<B256> = legs.iter().map(|(h, _)| *h).collect();
     let leg_source_chain_ids: Vec<U256> = legs.iter().map(|(_, c)| *c).collect();
     let preimage = AtomicFlowPreimage {
+        version: FixedBytes::from([0x01]),
         deadline,
         settlementLayerChainId: U256::from(l1_chain_id),
         legBundleHashes: leg_hashes_asc.clone(),
