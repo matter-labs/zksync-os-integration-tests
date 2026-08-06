@@ -13479,7 +13479,6 @@ dependencies = [
  "sha2 0.11.0",
  "tempfile",
  "tokio",
- "toml 1.1.2+spec-1.1.0",
  "tracing-subscriber 0.3.23",
  "zk-deployer",
 ]
@@ -15634,7 +15633,6 @@ dependencies = [
  "chrono",
  "clap 4.6.1",
  "flate2",
- "futures",
  "hex",
  "human-panic",
  "protocol_ops",
@@ -15645,7 +15643,6 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
- "toml 1.1.2+spec-1.1.0",
  "zksync-os-genesis-gen",
 ]
 

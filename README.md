@@ -79,11 +79,6 @@ code is deliberately excluded from the cache key, so local server builds still
 get cache hits on the deployment half (contracts, wallet deposits) and only pay
 for the server recompile.
 
-### VM crates (`zksync-os`)
-
-Same pattern: uncomment the `[patch."https://github.com/matter-labs/zksync-os"]`
-block and fill in the crate paths within your local checkout.
-
 ## Writing tests
 
 Tests are Rust integration tests in `tests/tests/`, using rstest fixtures:
