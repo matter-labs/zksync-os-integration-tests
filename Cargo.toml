@@ -24,15 +24,18 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-# Atomic-interop contracts, pinned by rev rather than branch. `atomic-imt-interop` was deleted when
-# era-contracts#2218 merged into `atomic-imt-interop-release`; this rev is the merged tip of that
-# branch and the newest one the server can serve. The release branch has since moved the atomic proof
-# onto the height-3 ChainBatchRootTree (IMT begin/end roots as chain-batch-root leaves 2/3,
-# era-contracts#2335), which zksync-os-server does not produce yet — it still commits
-# `keccak256(logsRoot ++ multichainRoot)`. Re-point at the release branch once the server publishes
-# that layout, and rebuild the leg proofs in `tests/src/atomic_swap` against the new `ImtProof`.
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "76f40b53066311afaea52b1b8bb540ccff6b6db0" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "76f40b53066311afaea52b1b8bb540ccff6b6db0" }
+# Atomic-interop contracts: the merged tip of `atomic-imt-interop` (era-contracts#2218 merged it into
+# `atomic-imt-interop-release` and deleted the branch), plus the genesis protocol-version bump to
+# v0.32.0 that the merged server requires — see era-contracts#2373, which ports the same bump to
+# draft-v32. Re-point at upstream once that bump reaches the atomic-interop line.
+#
+# Not the release branch: it moved the atomic proof onto the height-3 ChainBatchRootTree (IMT
+# begin/end roots as chain-batch-root leaves 2/3, era-contracts#2335), which zksync-os-server does not
+# produce yet — it still commits `keccak256(logsRoot ++ multichainRoot)`. Moving to it means rebuilding
+# the leg proofs in `tests/src/atomic_swap` against the new `ImtProof` once the server publishes that
+# layout.
+protocol_ops = { git = "https://github.com/kelemeno/era-contracts", rev = "90443d29de760f917e685da3f268a5a1f14c738a" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/kelemeno/era-contracts", rev = "90443d29de760f917e685da3f268a5a1f14c738a" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 rstest = "0.26.1"
 serde = "1.0"
