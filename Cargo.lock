@@ -1120,7 +1120,7 @@ dependencies = [
  "alloy-rlp",
  "alloy-serde 1.8.3",
  "alloy-sol-types 1.6.0",
- "itertools 0.14.0",
+ "itertools 0.13.0",
  "serde",
  "serde_json",
  "serde_with",
@@ -1850,6 +1850,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-ff"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7a806ac6c8307b929df4645776290a50ee2aac754ad09d8bdf73391309e43af"
+dependencies = [
+ "ark-ff-asm 0.6.0",
+ "ark-ff-macros 0.6.0",
+ "ark-serialize 0.6.0",
+ "ark-std 0.6.0",
+ "digest 0.10.7",
+ "educe",
+ "num-bigint",
+ "num-traits",
+ "zeroize",
+]
+
+[[package]]
 name = "ark-ff-asm"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1874,6 +1891,16 @@ name = "ark-ff-asm"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "62945a2f7e6de02a31fe400aa489f0e0f5b2502e69f95f853adb82a96c7a6b60"
+dependencies = [
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "ark-ff-asm"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1479009684adc073dff49a1025d3a7065b317a9ead25aaaca38cdc70058ba8a2"
 dependencies = [
  "quote",
  "syn 2.0.117",
@@ -1909,6 +1936,19 @@ name = "ark-ff-macros"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "09be120733ee33f7693ceaa202ca41accd5653b779563608f1234f78ae07c4b3"
+dependencies = [
+ "num-bigint",
+ "num-traits",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "ark-ff-macros"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a0691ed21ef00ef89c1e9bda832eba493dda3ec2f8d892fb25b705f73f06bb8"
 dependencies = [
  "num-bigint",
  "num-traits",
@@ -1988,7 +2028,7 @@ version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f4d068aaf107ebcd7dfb52bc748f8030e0fc930ac8e360146ca54c1203088f7"
 dependencies = [
- "ark-serialize-derive",
+ "ark-serialize-derive 0.5.0",
  "ark-std 0.5.0",
  "arrayvec",
  "digest 0.10.7",
@@ -1996,10 +2036,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-serialize"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a74dd304fd536fb95d0a328e72be759209cc496a9da094c5bc56e5fea4f9e86b"
+dependencies = [
+ "ark-serialize-derive 0.6.0",
+ "ark-std 0.6.0",
+ "digest 0.10.7",
+ "num-bigint",
+ "serde_with",
+]
+
+[[package]]
 name = "ark-serialize-derive"
 version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "213888f660fddcca0d257e88e54ac05bca01885f258ccdf695bafd77031bb69d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "ark-serialize-derive"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4f153690697a2b91e5e1251ff98411ee5371500a111a0fd317a70e588eb300f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2037,6 +2101,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ark-std"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "367c9c827ed431bff6868b7aa926e05b16eb46603cc8b6e768e4a5553fa1d155"
+dependencies = [
+ "num-traits",
+ "rand 0.8.6",
+]
+
+[[package]]
 name = "arrayref"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2067,6 +2141,17 @@ dependencies = [
  "compression-core",
  "pin-project-lite",
  "tokio",
+]
+
+[[package]]
+name = "async-lock"
+version = "3.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "290f7f2596bd5b78a9fec8088ccd89180d7f9f55b94b0576823bbbdc72ee8311"
+dependencies = [
+ "event-listener",
+ "event-listener-strategy",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -2629,6 +2714,72 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "tracing",
+]
+
+[[package]]
+name = "azure_core"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4e41cbd819986ba41904c207d8ffc4106f8f8352a548d773e9554906379bb2fb"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core_macros",
+ "bytes",
+ "futures",
+ "pin-project",
+ "rustc_version 0.4.1",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "typespec",
+ "typespec_client_core",
+]
+
+[[package]]
+name = "azure_core_macros"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9b52dba6a345f3ad2d42ff8d0d63df9d0994cfa29657bf18ffdbf149f78a4f5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "tracing",
+]
+
+[[package]]
+name = "azure_identity"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32edf96b356ca7c51d7590c4925cc36efc3947a5da4468e8e0b25c56ecbb3de5"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core",
+ "futures",
+ "pin-project",
+ "serde",
+ "serde_json",
+ "time",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "azure_security_keyvault_keys"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb869c31138eaf27e4bb4854e51810964cf689925d2ce0a790e9be37188e45fb"
+dependencies = [
+ "async-lock",
+ "async-trait",
+ "azure_core",
+ "futures",
+ "rustc_version 0.4.1",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -5196,6 +5347,26 @@ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "event-listener"
+version = "5.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a23add41df1562121a9393cb065eab5146a1242410f23a644851e90cfd669d2"
+dependencies = [
+ "parking",
+ "pin-project-lite",
+]
+
+[[package]]
+name = "event-listener-strategy"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8be9f3dfaaffdae2972880079a491a1a8bb7cbed0b8dd7a347f668b4150a3b93"
+dependencies = [
+ "event-listener",
+ "pin-project-lite",
 ]
 
 [[package]]
@@ -8741,17 +8912,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "object"
-version = "0.39.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
-dependencies = [
- "flate2",
- "memchr",
- "ruzstd 0.8.3",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9597,7 +9757,7 @@ dependencies = [
 [[package]]
 name = "protocol_ops"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?branch=atomic-imt-interop#76f40b53066311afaea52b1b8bb540ccff6b6db0"
+source = "git+https://github.com/matter-labs/era-contracts?rev=76f40b53066311afaea52b1b8bb540ccff6b6db0#76f40b53066311afaea52b1b8bb540ccff6b6db0"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -11947,7 +12107,7 @@ dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "inferno",
  "memmap2",
- "object 0.39.1",
+ "object 0.35.0",
  "poseidon2 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3)",
  "rand 0.9.4",
  "ringbuffer",
@@ -12079,14 +12239,15 @@ dependencies = [
 
 [[package]]
 name = "ruint"
-version = "1.18.0"
+version = "1.20.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0298da754d1395046b0afdc2f20ee76d29a8ae310cd30ffa84ed42acba9cb12a"
+checksum = "f5e99bff0393163bb25029a6af25d3d8d202ba5b5438a74d1bd8789f5c822970"
 dependencies = [
  "alloy-rlp",
  "ark-ff 0.3.0",
  "ark-ff 0.4.2",
  "ark-ff 0.5.0",
+ "ark-ff 0.6.0",
  "bytes",
  "fastrlp 0.3.1",
  "fastrlp 0.4.0",
@@ -14023,6 +14184,7 @@ dependencies = [
  "futures-core",
  "futures-io",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "slab",
  "tokio",
@@ -14562,6 +14724,57 @@ name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6f5e870be6c3b371b77fe0ee0bafb859fa4964b4404c27de1d380043c4dda20"
+
+[[package]]
+name = "typespec"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "753a2fe021e407d4fc9ee6f4f0a33403cc306d5c54c4e4ebe1b8cbde0ca052b9"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
+name = "typespec_client_core"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0373af0f9d4f580b3a1a9d9639cedaabe015ed262b35bfbe13941bfb14fe1ea6"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "dyn-clone",
+ "futures",
+ "pin-project",
+ "rand 0.10.1",
+ "reqwest 0.13.4",
+ "serde",
+ "serde_json",
+ "time",
+ "tokio",
+ "tracing",
+ "typespec",
+ "typespec_macros",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "typespec_macros"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c608f4427943f8adb211abc95c87672b1b98847152783507d54e3246e502f60"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "rustc_version 0.4.1",
+ "syn 2.0.117",
+]
 
 [[package]]
 name = "ucd-trie"
@@ -16014,7 +16227,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-genesis-gen"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?branch=atomic-imt-interop#76f40b53066311afaea52b1b8bb540ccff6b6db0"
+source = "git+https://github.com/matter-labs/era-contracts?rev=76f40b53066311afaea52b1b8bb540ccff6b6db0#76f40b53066311afaea52b1b8bb540ccff6b6db0"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16041,8 +16254,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_alloy_ext"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "serde",
@@ -16093,8 +16306,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_backpressure"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "futures",
  "reth-tasks",
@@ -16110,8 +16323,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_base_token_adjuster"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16129,8 +16342,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_types"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16150,8 +16363,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_verification"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16174,16 +16387,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batcher_metrics"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "vise",
 ]
 
 [[package]]
 name = "zksync_os_config_validation_macros"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -16192,8 +16405,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_types"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "openraft",
  "reth-network-peers",
@@ -16202,8 +16415,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_contract_interface"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16219,8 +16432,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_crypto"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "blake2",
@@ -16247,8 +16460,8 @@ checksum = "d9dfbba34ae7617db056b0e3a74a67c9cab1c93457f6b1cfbf7cee3ff34db01e"
 
 [[package]]
 name = "zksync_os_external_price_api"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16267,8 +16480,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_gas_adjuster"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16283,8 +16496,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_genesis"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16340,8 +16553,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_internal_config"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16352,8 +16565,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_sender"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16377,8 +16590,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_watcher"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16401,8 +16614,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mempool"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16412,17 +16625,22 @@ dependencies = [
  "metrics",
  "num",
  "pin-project",
+ "rand 0.9.4",
  "reth-chainspec",
+ "reth-eth-wire-types",
  "reth-ethereum-primitives",
  "reth-evm-ethereum",
  "reth-execution-types",
  "reth-primitives-traits",
+ "reth-storage-api",
  "reth-tasks",
  "reth-transaction-pool",
+ "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tracing",
  "vise",
+ "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.1-interface-v0.1.3)",
  "zksync_os_base_token_adjuster",
  "zksync_os_contract_interface",
  "zksync_os_genesis",
@@ -16435,8 +16653,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16452,8 +16670,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree_api"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16463,16 +16681,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_metadata"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "semver 1.0.28",
 ]
 
 [[package]]
 name = "zksync_os_mini_merkle_tree"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "once_cell",
@@ -16482,8 +16700,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_multivm"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16503,8 +16721,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_network"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "alloy-rlp",
@@ -16517,7 +16735,6 @@ dependencies = [
  "reth-chainspec",
  "reth-discv5",
  "reth-eth-wire",
- "reth-net-nat",
  "reth-network",
  "reth-network-peers",
  "reth-provider",
@@ -16540,8 +16757,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_observability"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "anyhow",
  "chrono",
@@ -16570,13 +16787,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_operator_signer"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "alloy-signer 2.0.5",
  "anyhow",
  "async-trait",
+ "azure_core",
+ "azure_identity",
+ "azure_security_keyvault_keys",
  "crc32c",
  "google-cloud-gax",
  "google-cloud-kms-v1",
@@ -16587,8 +16807,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_pipeline"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -16603,8 +16823,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_priority_tree"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16626,8 +16846,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_provider"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16642,8 +16862,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_raft"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -16668,16 +16888,18 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_replay_archive"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "age",
+ "age-core",
  "alloy 2.0.5",
  "anyhow",
  "async-trait",
  "aws-config",
  "aws-runtime",
  "aws-sdk-s3",
+ "bytes",
  "clap 4.6.1",
  "futures",
  "reth-tasks",
@@ -16686,6 +16908,7 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
+ "tracing-subscriber 0.3.23",
  "vise",
  "zksync_os_interface 0.1.3",
  "zksync_os_l1_sender",
@@ -16697,8 +16920,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_reth_compat"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "reth-chainspec",
@@ -16714,8 +16937,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_revm_consistency_checker"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16751,8 +16974,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rocksdb"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -16764,8 +16987,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16781,6 +17004,7 @@ dependencies = [
  "governor",
  "hyper",
  "jsonrpsee",
+ "rand 0.9.4",
  "reth-rpc-eth-types",
  "reth-tasks",
  "roaring",
@@ -16792,6 +17016,7 @@ dependencies = [
  "tokio",
  "tokio-metrics",
  "tokio-stream",
+ "tokio-util",
  "tower",
  "tower-http",
  "tracing",
@@ -16819,8 +17044,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc_api"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "alloy-rlp",
@@ -16902,8 +17127,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_sequencer"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16916,6 +17141,7 @@ dependencies = [
  "semver 1.0.28",
  "serde",
  "serde_json",
+ "serde_with",
  "smart-config",
  "tokio",
  "tracing",
@@ -16936,8 +17162,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_server"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -17024,8 +17250,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -17044,8 +17270,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state_full_diffs"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -17062,8 +17288,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_status_server"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "anyhow",
  "axum",
@@ -17078,8 +17304,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -17101,8 +17327,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage_api"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "alloy-rlp",
@@ -17114,6 +17340,7 @@ dependencies = [
  "roaring",
  "semver 1.0.28",
  "serde",
+ "serde_with",
  "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
@@ -17130,8 +17357,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_tx_validators"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -17150,8 +17377,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_types"
-version = "0.20.11"
-source = "git+https://github.com/matter-labs/zksync-os-server?branch=kl%2Fl1-settled-interop-proof#ea5ac53b959ef40b9351af5b5db712bde00253e9"
+version = "0.21.0"
+source = "git+https://github.com/matter-labs/zksync-os-server?rev=597489700bc45d61437e829305c8aa6517548958#597489700bc45d61437e829305c8aa6517548958"
 dependencies = [
  "alloy 2.0.5",
  "alloy-rlp",
@@ -17162,6 +17389,7 @@ dependencies = [
  "reth-primitives-traits",
  "semver 1.0.28",
  "serde",
+ "serde_with",
  "thiserror 2.0.18",
  "zksync_os_contract_interface",
  "zksync_os_interface 0.1.3",

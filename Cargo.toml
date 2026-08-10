@@ -24,8 +24,15 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "atomic-imt-interop" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "atomic-imt-interop" }
+# Atomic-interop contracts, pinned by rev rather than branch. `atomic-imt-interop` was deleted when
+# era-contracts#2218 merged into `atomic-imt-interop-release`; this rev is the merged tip of that
+# branch and the newest one the server can serve. The release branch has since moved the atomic proof
+# onto the height-3 ChainBatchRootTree (IMT begin/end roots as chain-batch-root leaves 2/3,
+# era-contracts#2335), which zksync-os-server does not produce yet — it still commits
+# `keccak256(logsRoot ++ multichainRoot)`. Re-point at the release branch once the server publishes
+# that layout, and rebuild the leg proofs in `tests/src/atomic_swap` against the new `ImtProof`.
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "76f40b53066311afaea52b1b8bb540ccff6b6db0" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "76f40b53066311afaea52b1b8bb540ccff6b6db0" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 rstest = "0.26.1"
 serde = "1.0"
@@ -40,12 +47,16 @@ tokio = "1"
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "kl/l1-settled-interop-proof" }
-zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", branch = "kl/l1-settled-interop-proof" }
+# The L1 aggregation-hop proof landed on server `main` as zksync-os-server#1413; this rev is its merge
+# commit. Pinned rather than tracking `main` because everything after it (zksync-os 0.4.0, #1421)
+# requires nightly-2026-02-10, while the atomic-interop contracts rev above still pins airbender
+# v0.4.3, which does not build on that toolchain. Both move together, not separately.
+zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", rev = "597489700bc45d61437e829305c8aa6517548958" }
+zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", rev = "597489700bc45d61437e829305c8aa6517548958" }
 
 # Local-checkout overrides for these git deps are DEV-ONLY and must not be committed.
 # Put them in a local `[patch]` (e.g. a git-ignored Cargo override / your own working copy),
-# never here — CI resolves the git branches declared above.
+# never here — CI resolves the git refs declared above.
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu
