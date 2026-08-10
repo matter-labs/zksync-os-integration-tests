@@ -152,7 +152,7 @@ async fn deploy_token(
         DynSolValue::String(symbol.to_string()),
         DynSolValue::Uint(U256::from(18u8), 8),
     ])
-    .abi_encode();
+    .abi_encode_params();
 
     let mut init_code = bytecode.clone();
     init_code.extend_from_slice(&constructor_args);

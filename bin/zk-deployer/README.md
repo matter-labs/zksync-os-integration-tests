@@ -83,6 +83,65 @@ L1_PROVIDER_RPC_URL=http://localhost:8545 zksync-os-server \
 
 ---
 
+## Custom base token (non-ETH)
+
+By default a chain uses ETH as its base token. To use a custom ERC20 base token
+(e.g. `ZK`) instead, add a `base_token` entry to the chain in `intent.yaml`.
+The rest of the flow (`bootstrap` → `apply` → `server-config`) is unchanged.
+
+```yaml
+chains:
+  - chain_id: 6565
+    base_token:
+      symbol: ZK          # deploy a fresh token during bootstrap
+    da_mode: rollup
+```
+
+Three modes, selected by what you put under `base_token`:
+
+| `base_token`                  | Behaviour |
+|-------------------------------|-----------|
+| *(omitted)*                   | ETH base token (default). |
+| `{ symbol }`                  | `bootstrap` deploys a `TestnetERC20Token` with this symbol and registers it on the L1 Native Token Vault. |
+| `{ symbol, address }`         | Use an existing ERC20 already deployed on L1; `bootstrap` skips deployment. |
+
+### What each step does
+
+- **`bootstrap`** deploys the token (when no `address` is given) via CREATE2,
+  mints `10^27` units to the deployer, and registers it on the Native Token
+  Vault. The deployed address is recorded in `state.json`.
+- **`apply`** registers the chain against the token (`base_token_addr`) and funds
+  the well-known dev wallets on L2. For a custom base token, funding deposits
+  are paid in the ERC20: the deployer approves the Native Token Vault for the
+  `mintValue` and the L1→L2 deposit is sent with `msg.value = 0` (sending ETH to
+  a non-ETH base chain reverts with `MsgValueMismatch`). On a real L1 the
+  deployer must already hold enough of the token; on local/Anvil the `10^27`
+  bootstrap mint covers it.
+- **`server-config`** forces the base token price to `1` so the chain is usable
+  immediately for local testing.
+
+### Limitations
+
+- **One base token per ecosystem.** All chains that need a freshly-deployed token
+  must share the same `symbol`; `bootstrap` rejects mismatched symbols. (Chains
+  pointing at distinct pre-deployed `address`es are unaffected.)
+
+### Example: deploy a token standalone
+
+To deploy and register a token outside the `bootstrap` flow:
+
+```bash
+zk-deployer token deploy \
+  --l1-rpc-url http://localhost:8545 \
+  --private-key 0x... \
+  --l1-contracts-out path/to/l1-contracts/zkstack-out \
+  --bridgehub 0x... \
+  --symbol ZK \
+  --name "ZKsync Token"
+```
+
+---
+
 ## Command reference
 
 | Command | Purpose |
@@ -102,4 +161,4 @@ L1_PROVIDER_RPC_URL=http://localhost:8545 zksync-os-server \
 |------|---------|-------------|
 | `--broadcast` | false | Broadcast bundles immediately (required for local dev) |
 | `--l1-state <path>` | l1-state.json | Anvil state file (auto-Anvil mode) |
-| `--no-fund-l2` | false | Skip the default L1→L2 deposits that fund the well-known dev wallets (100 ETH each) on every chain. Funding runs automatically on local/Anvil so a fresh chain is ready to operate. |
+| `--no-fund-l2` | false | Skip the default L1→L2 deposits that fund the well-known dev wallets (100 base-token units each — ETH, or the custom base token) on every chain. Funding runs automatically on local/Anvil so a fresh chain is ready to operate. |

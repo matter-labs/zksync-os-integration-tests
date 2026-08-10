@@ -272,11 +272,13 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 "Funding default dev wallets on L2 for chain {} (priority deposits)...",
                 chain.chain_id
             ));
+            let base_token = resolve_base_token_addr(chain, &state)?;
             crate::l1_l2_deposit::fund_default_l2_wallets(
                 &l1_rpc_url,
                 bridgehub,
                 chain.chain_id,
                 &deployer_key,
+                base_token,
             )
             .await?;
 

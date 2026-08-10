@@ -7,6 +7,17 @@ use alloy::providers::{Provider, ProviderBuilder};
 use anyhow::{Context, Result};
 use flate2::read::GzDecoder;
 
+/// Builder for the deploy phase (bootstrap/apply). Pure automine — one block
+/// per submitted transaction, no interval-mined empty blocks — so the dumped
+/// L1 state stays compact. `anvil_dumpState(true)` still preserves historical
+/// states here, so a restored dump can serve historical L1 reads.
+pub fn deploy_builder() -> Anvil {
+    Anvil::new().args(["--slots-in-an-epoch", "2"])
+}
+
+/// Builder for the run phase (serving a restored chain). Interval mining keeps
+/// L1 advancing in wall-clock time so the sequencer's finality-gated pipeline
+/// (commit → prove → execute) makes progress without new user transactions.
 pub fn default_builder() -> Anvil {
     Anvil::new()
         .block_time_f64(0.25)
@@ -97,9 +108,9 @@ pub async fn resolve_l1(
         return Ok((url.to_string(), None));
     }
     let instance = if state_path.exists() {
-        spawn_from_file(default_builder(), state_path).await?
+        spawn_from_file(deploy_builder(), state_path).await?
     } else {
-        spawn(default_builder()).await?
+        spawn(deploy_builder()).await?
     };
     let url = instance.endpoint();
     Ok((url, Some(instance)))

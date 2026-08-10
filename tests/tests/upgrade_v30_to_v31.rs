@@ -129,7 +129,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
 
     // ── Post-upgrade traffic: L1→L2 deposit must work end-to-end ─────────────
     let recipient: Address = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8".parse()?;
-    zk_deployer::l1_l2_deposit::deposit_eth(
+    zk_deployer::l1_l2_deposit::deposit_base_token(
         l1_rpc,
         bridgehub,
         chain_id,
@@ -137,6 +137,7 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
         U256::from(1_000_000_000_000_000_000u128), // 1 ETH
         1_000_000_000,
         DEPLOYER_KEY,
+        None, // ETH base token
     )
     .await
     .context("post-upgrade L1→L2 deposit")?;

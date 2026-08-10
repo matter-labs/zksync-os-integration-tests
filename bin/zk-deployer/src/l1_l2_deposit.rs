@@ -6,7 +6,7 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::sol_types::SolCall;
 use anyhow::{Context, Result};
 
-use protocol_ops::common::abi::BridgehubAbi;
+use protocol_ops::common::abi::{BridgehubAbi, IL1AssetRouterAbi, TestnetERC20TokenAbi};
 
 const L2_DEPOSIT_GAS_LIMIT: u64 = 500_000;
 const REQUIRED_L1_TO_L2_GAS_PER_PUBDATA_BYTE: u64 = 800;
@@ -51,12 +51,23 @@ pub const DEFAULT_L2_RICH_KEYS: [&str; 10] = [
 ];
 
 /// Submit an L1→L2 deposit via `Bridgehub.requestL2TransactionDirect()` to
-/// fund `recipient` with `amount_wei` of ETH on the L2 chain `chain_id`.
+/// fund `recipient` with `amount_wei` of the chain's base token on L2 chain
+/// `chain_id`.
+///
+/// `base_token` selects how `mintValue` is paid on L1:
+///   - `None`        → ETH base token: `mintValue` is sent as `msg.value`.
+///   - `Some(token)` → custom ERC20 base token: `msg.value` must be 0 and
+///     `mintValue` is pulled from the deployer's ERC20 balance. The Bridgehub
+///     reverts `MsgValueMismatch(0, msg.value)` if ETH is sent to a non-ETH
+///     base chain, so we approve the L1 Native Token Vault for `mintValue`
+///     first and send the deposit with zero value. The NTV pulls the tokens
+///     via `transferFrom` during `requestL2TransactionDirect`.
 ///
 /// Returns the L1 transaction hash.  The deposit is queued as a priority
 /// transaction on the chain; call `wait_for_l2_balance` afterwards to
 /// block until the chain has processed it.
-pub async fn deposit_eth(
+#[allow(clippy::too_many_arguments)]
+pub async fn deposit_base_token(
     l1_rpc_url: &str,
     bridgehub_addr: Address,
     chain_id: u64,
@@ -64,6 +75,7 @@ pub async fn deposit_eth(
     amount_wei: U256,
     gas_price_wei: u64,
     deployer_sk: &str,
+    base_token: Option<Address>,
 ) -> Result<TxHash> {
     let signer: PrivateKeySigner = deployer_sk
         .parse()
@@ -101,6 +113,38 @@ pub async fn deposit_eth(
 
     let mint_value = amount_wei + base_cost;
 
+    // For a custom ERC20 base token, the Bridgehub pulls `mintValue` from the
+    // deployer through the L1 Native Token Vault instead of accepting ETH
+    // `msg.value`. Approve the NTV for `mintValue` so `requestL2TransactionDirect`
+    // can `transferFrom` the tokens; resolve its address the same way the token
+    // deploy flow does: bridgehub → sharedBridge (asset router) → NTV.
+    let l1_msg_value = if let Some(token_addr) = base_token {
+        let bridgehub = BridgehubAbi::new(bridgehub_addr, provider.clone());
+        let asset_router_addr = bridgehub
+            .sharedBridge()
+            .call()
+            .await
+            .context("bridgehub.sharedBridge()")?;
+        let ntv_addr = IL1AssetRouterAbi::new(asset_router_addr, provider.clone())
+            .nativeTokenVault()
+            .call()
+            .await
+            .context("assetRouter.nativeTokenVault()")?;
+
+        TestnetERC20TokenAbi::new(token_addr, provider.clone())
+            .approve(ntv_addr, mint_value)
+            .send()
+            .await
+            .context("approve base token to NTV")?
+            .get_receipt()
+            .await
+            .context("await base token approve receipt")?;
+
+        U256::ZERO
+    } else {
+        mint_value
+    };
+
     // Encode requestL2TransactionDirect(L2TransactionRequestDirect) using the
     // sol!-generated call struct.  This avoids the dyn-abi double-wrapping bug
     // where wrapping struct_fields in an outer Tuple before calling
@@ -124,7 +168,7 @@ pub async fn deposit_eth(
         .with_from(from)
         .with_to(bridgehub_addr)
         .with_input(alloy::primitives::Bytes::from(calldata2))
-        .with_value(mint_value)
+        .with_value(l1_msg_value)
         .with_gas_price(gas_price_wei as u128);
 
     let pending = provider
@@ -141,17 +185,24 @@ pub async fn deposit_eth(
 }
 
 /// Fund every [`DEFAULT_L2_RICH_KEYS`] wallet with [`DEFAULT_L2_FUND_AMOUNT_ETH`]
-/// ETH on `chain_id` via L1→L2 deposits, so the chain is ready to operate.
+/// units of the chain's base token on `chain_id` via L1→L2 deposits, so the
+/// chain is ready to operate.
+///
+/// `base_token` is `None` for an ETH base chain, or `Some(token)` for a custom
+/// ERC20 base token — see [`deposit_base_token`]. For a custom token the
+/// deployer must already hold a sufficient L1 balance (the `bootstrap` token
+/// deploy mints 10^27 units to the deployer, far more than this funding needs).
 ///
 /// Each deposit is queued as a priority transaction and is mined into the
 /// chain's first batch once a server starts processing its priority queue —
 /// no L2 server needs to be running when this is called. Intended for
-/// local/Anvil deployments only (on a real L1 the deployer would pay real ETH).
+/// local/Anvil deployments only (on a real L1 the deployer would pay real funds).
 pub async fn fund_default_l2_wallets(
     l1_rpc_url: &str,
     bridgehub_addr: Address,
     chain_id: u64,
     deployer_sk: &str,
+    base_token: Option<Address>,
 ) -> Result<()> {
     let amount = U256::from(DEFAULT_L2_FUND_AMOUNT_ETH) * U256::from(1_000_000_000_000_000_000u128);
 
@@ -169,7 +220,7 @@ pub async fn fund_default_l2_wallets(
     // concurrent sends race on the nonce and produce "replacement transaction
     // underpriced" rejections.
     for recipient in recipients {
-        deposit_eth(
+        deposit_base_token(
             l1_rpc_url,
             bridgehub_addr,
             chain_id,
@@ -177,6 +228,7 @@ pub async fn fund_default_l2_wallets(
             amount,
             DEFAULT_L1_TO_L2_GAS_PRICE,
             deployer_sk,
+            base_token,
         )
         .await
         .with_context(|| format!("fund {recipient:#x} on chain {chain_id}"))?;

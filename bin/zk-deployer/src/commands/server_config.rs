@@ -169,16 +169,16 @@ l1_sender:
     ));
 
     if let Some(addr) = base_token_addr {
-        // local_dev.yaml already sets source: Forced and ETH price via deep merge.
-        // We only need to add the base token entry on top.
         out.push_str(&format!(
             "
 external_price_api_client:
   forced_prices:
+    \"0x0000000000000000000000000000000000000001\": 1
     \"{addr:#x}\": 1
 
 base_token_price_updater:
   fallback_prices:
+    \"0x0000000000000000000000000000000000000001\": 1
     \"{addr:#x}\": 1
 "
         ));
@@ -342,12 +342,18 @@ mod tests {
         .unwrap();
         let doc: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("valid YAML");
 
-        assert!(doc["external_price_api_client"]["forced_prices"]
-            ["0x000000000000000000000000000000000000abcd"]
+        let eth = "0x0000000000000000000000000000000000000001";
+        let erc20 = "0x000000000000000000000000000000000000abcd";
+        assert!(doc["external_price_api_client"]["forced_prices"][erc20]
             .as_u64()
             .is_some());
-        assert!(doc["base_token_price_updater"]["fallback_prices"]
-            ["0x000000000000000000000000000000000000abcd"]
+        assert!(doc["external_price_api_client"]["forced_prices"][eth]
+            .as_u64()
+            .is_some());
+        assert!(doc["base_token_price_updater"]["fallback_prices"][erc20]
+            .as_u64()
+            .is_some());
+        assert!(doc["base_token_price_updater"]["fallback_prices"][eth]
             .as_u64()
             .is_some());
     }
