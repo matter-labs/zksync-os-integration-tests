@@ -9757,7 +9757,7 @@ dependencies = [
 [[package]]
 name = "protocol_ops"
 version = "0.1.0"
-source = "git+https://github.com/kelemeno/era-contracts?rev=90443d29de760f917e685da3f268a5a1f14c738a#90443d29de760f917e685da3f268a5a1f14c738a"
+source = "git+https://github.com/matter-labs/era-contracts?rev=90443d29de760f917e685da3f268a5a1f14c738a#90443d29de760f917e685da3f268a5a1f14c738a"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
@@ -16227,7 +16227,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-genesis-gen"
 version = "0.1.0"
-source = "git+https://github.com/kelemeno/era-contracts?rev=90443d29de760f917e685da3f268a5a1f14c738a#90443d29de760f917e685da3f268a5a1f14c738a"
+source = "git+https://github.com/matter-labs/era-contracts?rev=90443d29de760f917e685da3f268a5a1f14c738a#90443d29de760f917e685da3f268a5a1f14c738a"
 dependencies = [
  "alloy 2.0.5",
  "anyhow",
