@@ -97,8 +97,8 @@ async fn resolve_token_contracts(
     )
     .await?;
     // NOTE: the L1AssetTracker was removed in era-contracts (#2269). This v30->v31 flow is
-    // `#[ignore]`d on the atomic-interop branch (see `tests/upgrade_v30_to_v31.rs`); the tracker
-    // lookup is dropped so the module still compiles against the asset-tracking-removed API.
+    // `#[ignore]`d while the workspace pins that contracts line (see `tests/upgrade_v30_to_v31.rs`);
+    // the tracker lookup is dropped so the module still compiles against the asset-tracking-removed API.
     Ok((asset_id, ntv))
 }
 
@@ -252,8 +252,8 @@ pub async fn set_zkos_pre_v31_total_supply(
 
     // Pre-v31 total supply per L1 accounting was the balance `registerLegacyToken` migrated into the
     // L1AssetTracker for this chain. The asset-tracker subsystem was removed in era-contracts (#2269);
-    // this v30->v31 flow is `#[ignore]`d on the atomic-interop branch, so the value is stubbed to keep
-    // the module compiling. Re-derive it from the new accounting when re-enabling this test on main.
+    // this v30->v31 flow is `#[ignore]`d while that contracts line is pinned, so the value is stubbed
+    // to keep the module compiling. Re-derive it from the new accounting when re-enabling this test.
     let pre_v31_supply = U256::ZERO;
 
     // Owner → ChainAdmin.multicall → diamond.setZKsyncOSPreV31TotalSupply
