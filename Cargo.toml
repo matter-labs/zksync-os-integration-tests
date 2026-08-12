@@ -24,8 +24,22 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
+# Atomic-interop contracts: the merged tip of `atomic-imt-interop` (era-contracts#2218 merged it into
+# `atomic-imt-interop-release` and deleted the branch), plus the genesis protocol-version bump to
+# v0.32.0 that the merged server requires.
+#
+# The bump itself is upstream now (era-contracts#2379, on `atomic-imt-reduced`), but this pin cannot
+# follow it: that line also carries the reworked atomic proof, where a leg is authenticated by a
+# `settlementProof` against the height-3 ChainBatchRootTree — IMT begin/end roots as chain-batch-root
+# leaves 2/3 (era-contracts#2335). zksync-os-server does not produce that layout; it still commits
+# `keccak256(logsRoot ++ multichainRoot)` and serves the message-based proof this revision expects.
+# The shapes differ, so the bindings in `tests/src/atomic_swap` would not even compile against it:
+#   ImtProof:     messageTxNumberInBatch/messageIndex/messageProof -> settlementProof + provesAgainstBeginRoot
+#   atomicBundle: (bytes32 flowId, uint64, uint256)                -> (AtomicFlowPreimage, uint256)
+# Moving off this pin therefore waits on the server publishing the chain-batch-root layout, and then
+# rebuilding the leg proofs against the new `ImtProof` — not on the genesis bump.
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "90443d29de760f917e685da3f268a5a1f14c738a" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "90443d29de760f917e685da3f268a5a1f14c738a" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 rstest = "0.26.1"
 serde = "1.0"
@@ -40,21 +54,16 @@ tokio = "1"
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
-zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
+# The L1 aggregation-hop proof landed on server `main` as zksync-os-server#1413; this rev is its merge
+# commit. Pinned rather than tracking `main` because everything after it (zksync-os 0.4.0, #1421)
+# requires nightly-2026-02-10, while the atomic-interop contracts rev above still pins airbender
+# v0.4.3, which does not build on that toolchain. Both move together, not separately.
+zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", rev = "597489700bc45d61437e829305c8aa6517548958" }
+zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", rev = "597489700bc45d61437e829305c8aa6517548958" }
 
-# ── Local path overrides ───────────────────────────────────────────────────────
-# Uncomment to test against a local checkout instead of the pinned git rev.
-# For contracts you also need PROTOCOL_CONTRACTS_ROOT so the deployment cache
-# keys on file content rather than the git rev (see README.md § Local development).
-#
-# [patch."https://github.com/matter-labs/era-contracts"]
-# protocol_ops          = { path = "../era-contracts/protocol-ops" }
-# zksync-os-genesis-gen = { path = "../era-contracts/tools/zksync-os-genesis-gen" }
-#
-# [patch."https://github.com/matter-labs/zksync-os-server"]
-# zksync_os_server           = { path = "../zksync-os-server" }
-# zksync_os_state_full_diffs = { path = "../zksync-os-server" }
+# Local-checkout overrides for these git deps are DEV-ONLY and must not be committed.
+# Put them in a local `[patch]` (e.g. a git-ignored Cargo override / your own working copy),
+# never here — CI resolves the git refs declared above.
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

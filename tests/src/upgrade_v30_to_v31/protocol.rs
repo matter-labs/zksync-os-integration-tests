@@ -26,8 +26,7 @@ use protocol_ops::common::forge::ForgeScriptArgs;
 use protocol_ops::common::{EcosystemArgs, EcosystemChainArgs, SharedRunArgs};
 
 use protocol_ops::common::abi::{
-    BridgehubAbi, IAssetTrackerBaseAbi, IChainAdminAbi, IChainTypeManagerAbi, IL1AssetRouterAbi,
-    IL1NativeTokenVaultAbi, ZkChainAbi,
+    BridgehubAbi, IChainAdminAbi, IL1AssetRouterAbi, IL1NativeTokenVaultAbi, ZkChainAbi,
 };
 
 use crate::eth::{call, provider, send_as_signer};
@@ -80,7 +79,7 @@ async fn resolve_token_contracts(
     l1_rpc: &str,
     bridgehub: Address,
     chain_id: u64,
-) -> Result<(FixedBytes<32>, Address, Address)> {
+) -> Result<(FixedBytes<32>, Address)> {
     let provider = provider(l1_rpc).await?;
     let asset_id = call(
         &provider,
@@ -97,13 +96,10 @@ async fn resolve_token_contracts(
         IL1AssetRouterAbi::nativeTokenVaultCall {},
     )
     .await?;
-    let tracker = call(
-        &provider,
-        ntv,
-        IL1NativeTokenVaultAbi::l1AssetTrackerCall {},
-    )
-    .await?;
-    Ok((asset_id, ntv, tracker))
+    // NOTE: the L1AssetTracker was removed in era-contracts (#2269). This v30->v31 flow is
+    // `#[ignore]`d while the workspace pins that contracts line (see `tests/upgrade_v30_to_v31.rs`);
+    // the tracker lookup is dropped so the module still compiles against the asset-tracking-removed API.
+    Ok((asset_id, ntv))
 }
 
 /// v31 stage3: register legacy tokens (ETH + the bridged-token list) in the
@@ -123,7 +119,7 @@ pub async fn run_stage3(
     let sender: alloy::signers::local::PrivateKeySigner =
         sender_key.parse().context("parse stage3 sender key")?;
 
-    let (asset_id, ntv, _tracker) = resolve_token_contracts(l1_rpc, bridgehub, chain_id).await?;
+    let (asset_id, ntv) = resolve_token_contracts(l1_rpc, bridgehub, chain_id).await?;
     let provider = provider(l1_rpc).await?;
     let origin = call(
         &provider,
@@ -171,18 +167,11 @@ pub async fn schedule_upgrade_timestamp(
     bridgehub: Address,
     chain_id: u64,
 ) -> Result<()> {
-    let provider = provider(l1_rpc).await?;
-
     let upgrade_timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
         .saturating_sub(60);
-
-    let ctm = protocol_ops::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve CTM")?;
-    let target_pv = call(&provider, ctm, IChainTypeManagerAbi::protocolVersionCall {}).await?;
 
     let out_dir = workdir.join("schedule_upgrade");
     std::fs::create_dir_all(&out_dir).context("create out dir")?;
@@ -193,7 +182,6 @@ pub async fn schedule_upgrade_timestamp(
     chain::set_upgrade_timestamp::run(chain::set_upgrade_timestamp::ChainSetUpgradeTimestampArgs {
         topology: chain_args(bridgehub, chain_id),
         access_control_restriction: Address::ZERO,
-        new_protocol_version: target_pv.to_string(),
         upgrade_timestamp: upgrade_timestamp.to_string(),
         shared: shared_args(l1_rpc, &out_dir),
     })
@@ -262,19 +250,11 @@ pub async fn set_zkos_pre_v31_total_supply(
             .await
             .context("resolve chain admin")?;
 
-    // Pre-v31 total supply per L1 accounting: the balance registerLegacyToken
-    // migrated into the L1AssetTracker for this chain.
-    let (asset_id, _ntv, tracker) = resolve_token_contracts(l1_rpc, bridgehub, chain_id).await?;
-    let provider = provider(l1_rpc).await?;
-    let pre_v31_supply = call(
-        &provider,
-        tracker,
-        IAssetTrackerBaseAbi::chainBalanceCall {
-            _chainId: U256::from(chain_id),
-            _assetId: asset_id,
-        },
-    )
-    .await?;
+    // Pre-v31 total supply per L1 accounting was the balance `registerLegacyToken` migrated into the
+    // L1AssetTracker for this chain. The asset-tracker subsystem was removed in era-contracts (#2269);
+    // this v30->v31 flow is `#[ignore]`d while that contracts line is pinned, so the value is stubbed
+    // to keep the module compiling. Re-derive it from the new accounting when re-enabling this test.
+    let pre_v31_supply = U256::ZERO;
 
     // Owner → ChainAdmin.multicall → diamond.setZKsyncOSPreV31TotalSupply
     // → L2 service tx.

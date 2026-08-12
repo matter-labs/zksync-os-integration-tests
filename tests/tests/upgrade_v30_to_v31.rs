@@ -18,6 +18,13 @@ use tests::upgrade_v30_to_v31::fixture::{
 };
 use tests::upgrade_v30_to_v31::protocol;
 
+// Ignored while the workspace pins the atomic-interop contracts line (`atomic-imt-interop-release`):
+// that line removed the L1AssetTracker (era-contracts#2269), so the pre-v31 total-supply handover
+// this flow performs has no source of truth and is stubbed to `0` (see
+// `upgrade_v30_to_v31::protocol::set_zkos_pre_v31_total_supply`). Re-enable once the supply is re-derived
+// from the post-#2269 accounting. The original upgrade regression — the atomic IMT seed reverting the
+// v31 upgrade tx — is already fixed upstream (seed only on fresh genesis).
+#[ignore = "pre-v31 total supply is stubbed while the atomic-interop contracts line has no L1AssetTracker (era-contracts#2269)"]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v30_to_v31_upgrade() -> Result<()> {
     // The upgrade runbook runs forge scripts — compiled contracts are required.
