@@ -24,8 +24,9 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
+# TODO: re-point at the release branch once the atomic-interop DA work merges.
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "atomic-imt-reduced" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "atomic-imt-reduced" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
 rstest = "0.26.1"
 serde = "1.0"
@@ -40,21 +41,14 @@ tokio = "1"
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
-zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
+# TODO: re-point at main once the atomic-interop server work (rebased onto the 0.4.0
+# native-batch-PIG line) merges.
+zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "ad-atomic-interop-timestamps-0.4.0" }
+zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", branch = "ad-atomic-interop-timestamps-0.4.0" }
 
-# ── Local path overrides ───────────────────────────────────────────────────────
-# Uncomment to test against a local checkout instead of the pinned git rev.
-# For contracts you also need PROTOCOL_CONTRACTS_ROOT so the deployment cache
-# keys on file content rather than the git rev (see README.md § Local development).
-#
-# [patch."https://github.com/matter-labs/era-contracts"]
-# protocol_ops          = { path = "../era-contracts/protocol-ops" }
-# zksync-os-genesis-gen = { path = "../era-contracts/tools/zksync-os-genesis-gen" }
-#
-# [patch."https://github.com/matter-labs/zksync-os-server"]
-# zksync_os_server           = { path = "../zksync-os-server" }
-# zksync_os_state_full_diffs = { path = "../zksync-os-server" }
+# Local-checkout overrides for these git deps are DEV-ONLY and must not be committed.
+# Put them in a local `[patch]` (e.g. a git-ignored Cargo override / your own working copy),
+# never here — CI resolves the git branches declared above.
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

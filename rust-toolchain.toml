@@ -1,2 +1,5 @@
 [toolchain]
-channel = "nightly-2026-01-22"
+# The atomic-interop zksync-os line (dev-20260724-atomic-interop) requires nightly-2026-02-10:
+# its airbender-platform crypto uses `ptr_as_ref_unchecked`, which older nightlies reject.
+channel = "nightly-2026-02-10"
+components = ["rust-src", "llvm-tools-preview"]

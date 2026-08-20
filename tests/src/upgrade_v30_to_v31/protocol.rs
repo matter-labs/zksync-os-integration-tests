@@ -26,8 +26,7 @@ use protocol_ops::common::forge::ForgeScriptArgs;
 use protocol_ops::common::{EcosystemArgs, EcosystemChainArgs, SharedRunArgs};
 
 use protocol_ops::common::abi::{
-    BridgehubAbi, IAssetTrackerBaseAbi, IChainAdminAbi, IChainTypeManagerAbi, IL1AssetRouterAbi,
-    IL1NativeTokenVaultAbi, ZkChainAbi,
+    BridgehubAbi, IChainTypeManagerAbi, IL1AssetRouterAbi, IL1NativeTokenVaultAbi, ZkChainAbi,
 };
 
 use crate::eth::{call, provider, send_as_signer};
@@ -74,13 +73,14 @@ pub async fn apply(out_dir: &Path, keys: &[&str], l1_rpc: &str) -> Result<()> {
 // Upgrade steps
 // ---------------------------------------------------------------------------
 
-/// Resolve the chain's base-token asset id plus the NTV and L1AssetTracker
-/// behind the bridgehub's asset router.
+/// Resolve the chain's base-token asset id plus the NTV behind the
+/// bridgehub's asset router. (The atomic-interop contracts removed the
+/// L1AssetTracker this used to resolve as well.)
 async fn resolve_token_contracts(
     l1_rpc: &str,
     bridgehub: Address,
     chain_id: u64,
-) -> Result<(FixedBytes<32>, Address, Address)> {
+) -> Result<(FixedBytes<32>, Address)> {
     let provider = provider(l1_rpc).await?;
     let asset_id = call(
         &provider,
@@ -97,13 +97,7 @@ async fn resolve_token_contracts(
         IL1AssetRouterAbi::nativeTokenVaultCall {},
     )
     .await?;
-    let tracker = call(
-        &provider,
-        ntv,
-        IL1NativeTokenVaultAbi::l1AssetTrackerCall {},
-    )
-    .await?;
-    Ok((asset_id, ntv, tracker))
+    Ok((asset_id, ntv))
 }
 
 /// v31 stage3: register legacy tokens (ETH + the bridged-token list) in the
@@ -123,7 +117,7 @@ pub async fn run_stage3(
     let sender: alloy::signers::local::PrivateKeySigner =
         sender_key.parse().context("parse stage3 sender key")?;
 
-    let (asset_id, ntv, _tracker) = resolve_token_contracts(l1_rpc, bridgehub, chain_id).await?;
+    let (asset_id, ntv) = resolve_token_contracts(l1_rpc, bridgehub, chain_id).await?;
     let provider = provider(l1_rpc).await?;
     let origin = call(
         &provider,
@@ -182,7 +176,9 @@ pub async fn schedule_upgrade_timestamp(
     let ctm = protocol_ops::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, chain_id)
         .await
         .context("resolve CTM")?;
-    let target_pv = call(&provider, ctm, IChainTypeManagerAbi::protocolVersionCall {}).await?;
+    // Liveness check that the CTM proxy resolves; the target protocol version is now derived
+    // internally by `set-upgrade-timestamp` (the era-contracts command dropped its explicit arg).
+    let _target_pv = call(&provider, ctm, IChainTypeManagerAbi::protocolVersionCall {}).await?;
 
     let out_dir = workdir.join("schedule_upgrade");
     std::fs::create_dir_all(&out_dir).context("create out dir")?;
@@ -193,7 +189,6 @@ pub async fn schedule_upgrade_timestamp(
     chain::set_upgrade_timestamp::run(chain::set_upgrade_timestamp::ChainSetUpgradeTimestampArgs {
         topology: chain_args(bridgehub, chain_id),
         access_control_restriction: Address::ZERO,
-        new_protocol_version: target_pv.to_string(),
         upgrade_timestamp: upgrade_timestamp.to_string(),
         shared: shared_args(l1_rpc, &out_dir),
     })
@@ -247,57 +242,20 @@ pub async fn run_chain_upgrade(
 /// TODO(protocol-ops): replace with a `chain set-zkos-pre-v31-total-supply`
 /// command wrapping `SetZkosPreV31TotalSupply.s.sol`.
 pub async fn set_zkos_pre_v31_total_supply(
-    l1_rpc: &str,
-    bridgehub: Address,
-    chain_id: u64,
-    chain_admin_owner_key: &str,
+    _l1_rpc: &str,
+    _bridgehub: Address,
+    _chain_id: u64,
+    _chain_admin_owner_key: &str,
 ) -> Result<()> {
-    use alloy::sol_types::SolCall as _;
-
-    let diamond = protocol_ops::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve diamond")?;
-    let chain_admin =
-        protocol_ops::common::l1_contracts::resolve_chain_admin(l1_rpc, bridgehub, chain_id)
-            .await
-            .context("resolve chain admin")?;
-
-    // Pre-v31 total supply per L1 accounting: the balance registerLegacyToken
-    // migrated into the L1AssetTracker for this chain.
-    let (asset_id, _ntv, tracker) = resolve_token_contracts(l1_rpc, bridgehub, chain_id).await?;
-    let provider = provider(l1_rpc).await?;
-    let pre_v31_supply = call(
-        &provider,
-        tracker,
-        IAssetTrackerBaseAbi::chainBalanceCall {
-            _chainId: U256::from(chain_id),
-            _assetId: asset_id,
-        },
-    )
-    .await?;
-
-    // Owner → ChainAdmin.multicall → diamond.setZKsyncOSPreV31TotalSupply
-    // → L2 service tx.
-    let inner = ZkChainAbi::setZKsyncOSPreV31TotalSupplyCall {
-        _totalSupply: pre_v31_supply,
-    }
-    .abi_encode();
-    send_as_signer(
-        l1_rpc,
-        chain_admin_owner_key,
-        chain_admin,
-        IChainAdminAbi::multicallCall {
-            _calls: vec![IChainAdminAbi::Call {
-                target: diamond,
-                value: U256::ZERO,
-                data: inner.into(),
-            }],
-            _requireSuccess: true,
-        },
-    )
-    .await
-    .context("ChainAdmin.multicall(setZKsyncOSPreV31TotalSupply)")?;
-    Ok(())
+    // The pre-v31 supply used to be read from L1AssetTracker.chainBalance and sent to
+    // the diamond via ChainAdmin.multicall(setZKsyncOSPreV31TotalSupply) — see
+    // SetZkosPreV31TotalSupply.s.sol. The atomic-interop contracts removed the
+    // L1AssetTracker, so the supply has no on-chain source here; the v30->v31 upgrade
+    // test is #[ignore]d on this branch for the same reason.
+    anyhow::bail!(
+        "v30->v31 upgrade flow is not supported on the atomic-interop branch: \
+         the L1AssetTracker (source of the pre-v31 total supply) no longer exists"
+    );
 }
 
 /// Assert the chain diamond's packed protocol version has the expected major.
