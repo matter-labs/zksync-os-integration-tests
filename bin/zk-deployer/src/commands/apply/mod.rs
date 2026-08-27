@@ -159,7 +159,7 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 chain_params,
                 vm_type,
                 l2_da_commitment_scheme: None,
-                with_legacy_bridge: false,
+                register_for_interop: false,
                 create2_factory_salt: None,
                 pause_deposits: false,
                 evm_emulator: false,

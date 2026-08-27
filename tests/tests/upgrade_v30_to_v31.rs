@@ -6,10 +6,10 @@
 /// via [`fixture::start`]; the upgrade steps live in [`protocol`].
 use alloy::primitives::{Address, U256};
 use anyhow::{Context, Result};
-use protocol_ops::commands::ecosystem::upgrade::{
+use protocol_ops_v31::commands::ecosystem::upgrade::{
     run_upgrade_governance, run_upgrade_prepare_all, UpgradeGovernanceArgs, UpgradePrepareAllArgs,
 };
-use protocol_ops::common::forge::scripts::{
+use protocol_ops_v31::common::forge::scripts::{
     CORE_UPGRADE_V31_SCRIPT_PATH, CTM_UPGRADE_V31_SCRIPT_PATH, UPGRADE_V31_CORE_OUTPUT_PATH,
 };
 
@@ -35,9 +35,10 @@ async fn test_v30_to_v31_upgrade() -> Result<()> {
     // doesn't expose the getters protocol-ops would auto-resolve them from.
     let prepare_dir = eco.workdir().join("upgrade_prepare");
     let governance_toml = eco.workdir().join("ecosystem.toml");
-    let ctm = protocol_ops::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve CTM")?;
+    let ctm =
+        protocol_ops_v31::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, chain_id)
+            .await
+            .context("resolve CTM")?;
     run_upgrade_prepare_all(UpgradePrepareAllArgs {
         shared: protocol::shared_args(l1_rpc, &prepare_dir),
         topology: protocol::ecosystem_args(bridgehub),

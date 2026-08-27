@@ -15,7 +15,7 @@ license = "MIT OR Apache-2.0"
 lib-server = { path = "lib/server" }
 zk-deployer = { path = "bin/zk-deployer" }
 
-alloy = { version = "2.0.5", default-features = false }
+alloy = { version = "2.4.1", default-features = false }
 anyhow = "1.0"
 chrono = "0.4"
 clap = "4.5"
@@ -24,9 +24,9 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "draft-v31" }
-reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.3.0" }
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "bc607214f0f4cbf4610b143efeda40c64cf66699" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "bc607214f0f4cbf4610b143efeda40c64cf66699" }
+reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 rstest = "0.26.1"
 serde = "1.0"
 serde_json = "1.0"
@@ -40,8 +40,7 @@ tokio = "1"
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
-zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-server", branch = "main" }
+zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server-private", rev = "423e78b8f69d5684a1369a96413ee0611c51cd43" }
 
 # ── Local path overrides ───────────────────────────────────────────────────────
 # Uncomment to test against a local checkout instead of the pinned git rev.
@@ -52,9 +51,8 @@ zksync_os_state_full_diffs = { git = "https://github.com/matter-labs/zksync-os-s
 # protocol_ops          = { path = "../era-contracts/protocol-ops" }
 # zksync-os-genesis-gen = { path = "../era-contracts/tools/zksync-os-genesis-gen" }
 #
-# [patch."https://github.com/matter-labs/zksync-os-server"]
-# zksync_os_server           = { path = "../zksync-os-server" }
-# zksync_os_state_full_diffs = { path = "../zksync-os-server" }
+# [patch."https://github.com/matter-labs/zksync-os-server-private"]
+# zksync_os_server = { path = "../zksync-os-server-private" }
 
 [profile.release]
 # This is needed for zksync-airbender crates to compile in a reasonable time for x86-64-unknown-linux-gnu

@@ -5,7 +5,6 @@ use reth_tasks::{Runtime, RuntimeBuilder, RuntimeConfig, TokioConfig};
 use smart_config::{ConfigSources, Environment};
 use tokio::runtime::Handle;
 use zksync_os_server::config::{build_external_config, load_config_file_sources, Config};
-use zksync_os_state_full_diffs::FullDiffsState;
 
 use crate::wait::wait_for_rpc_ready;
 
@@ -33,7 +32,7 @@ impl Server {
         .build()
         .expect("failed to build reth runtime");
 
-        zksync_os_server::run::<FullDiffsState>(&runtime, config).await;
+        zksync_os_server::run(&runtime, config).await;
 
         wait_for_rpc_ready(&rpc_url, Duration::from_secs(30))
             .await

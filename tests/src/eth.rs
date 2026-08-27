@@ -1,6 +1,6 @@
 //! Thin typed L1 RPC helpers.
 //!
-//! Contract ABI definitions live in `protocol_ops::common::abi` — add new
+//! Contract ABI definitions live in the version-pinned `protocol_ops` crate — add new
 //! interfaces there, not here.
 
 use alloy::network::{EthereumWallet, TransactionBuilder};

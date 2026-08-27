@@ -20,12 +20,12 @@ use std::path::Path;
 
 use alloy::primitives::{Address, FixedBytes, U256};
 use anyhow::{Context, Result};
-use protocol_ops::commands::chain;
-use protocol_ops::commands::dev::execute_manifest::apply_manifest;
-use protocol_ops::common::forge::ForgeScriptArgs;
-use protocol_ops::common::{EcosystemArgs, EcosystemChainArgs, SharedRunArgs};
+use protocol_ops_v31::commands::chain;
+use protocol_ops_v31::commands::dev::execute_manifest::apply_manifest;
+use protocol_ops_v31::common::forge::ForgeScriptArgs;
+use protocol_ops_v31::common::{EcosystemArgs, EcosystemChainArgs, SharedRunArgs};
 
-use protocol_ops::common::abi::{
+use protocol_ops_v31::common::abi::{
     BridgehubAbi, IAssetTrackerBaseAbi, IChainAdminAbi, IChainTypeManagerAbi, IL1AssetRouterAbi,
     IL1NativeTokenVaultAbi, ZkChainAbi,
 };
@@ -144,8 +144,8 @@ pub async fn run_stage3(
 
     let out_dir = workdir.join("stage3");
     std::fs::create_dir_all(&out_dir).context("create out dir")?;
-    protocol_ops::commands::ecosystem::stage3::run(
-        protocol_ops::commands::ecosystem::stage3::Stage3Args {
+    protocol_ops_v31::commands::ecosystem::stage3::run(
+        protocol_ops_v31::commands::ecosystem::stage3::Stage3Args {
             shared: shared_args(l1_rpc, &out_dir),
             topology: ecosystem_args(bridgehub),
             sender: Some(sender.address()),
@@ -179,9 +179,10 @@ pub async fn schedule_upgrade_timestamp(
         .as_secs()
         .saturating_sub(60);
 
-    let ctm = protocol_ops::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve CTM")?;
+    let ctm =
+        protocol_ops_v31::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, chain_id)
+            .await
+            .context("resolve CTM")?;
     let target_pv = call(&provider, ctm, IChainTypeManagerAbi::protocolVersionCall {}).await?;
 
     let out_dir = workdir.join("schedule_upgrade");
@@ -254,11 +255,12 @@ pub async fn set_zkos_pre_v31_total_supply(
 ) -> Result<()> {
     use alloy::sol_types::SolCall as _;
 
-    let diamond = protocol_ops::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve diamond")?;
+    let diamond =
+        protocol_ops_v31::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
+            .await
+            .context("resolve diamond")?;
     let chain_admin =
-        protocol_ops::common::l1_contracts::resolve_chain_admin(l1_rpc, bridgehub, chain_id)
+        protocol_ops_v31::common::l1_contracts::resolve_chain_admin(l1_rpc, bridgehub, chain_id)
             .await
             .context("resolve chain admin")?;
 
@@ -307,9 +309,10 @@ pub async fn assert_protocol_version(
     chain_id: u64,
     expected_major: u64,
 ) -> Result<()> {
-    let diamond = protocol_ops::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve diamond")?;
+    let diamond =
+        protocol_ops_v31::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
+            .await
+            .context("resolve diamond")?;
     let provider = provider(l1_rpc).await?;
     let packed = call(&provider, diamond, ZkChainAbi::getProtocolVersionCall {}).await?;
     let major = (packed.wrapping_to::<u64>() >> 32) & 0xFFFF;
