@@ -8,7 +8,7 @@ publish = false
 [dependencies]
 lib-server = { workspace = true, features = ["embedded-server"] }
 zk-deployer = { workspace = true }
-protocol_ops = { workspace = true }
+protocol_ops_v31 = { package = "protocol_ops", git = "https://github.com/matter-labs/era-contracts", rev = "e091691063c99a1d0281d6fe42fb0ec4430f3673" }
 
 alloy = { workspace = true, features = [
     "node-bindings",

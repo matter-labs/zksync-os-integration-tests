@@ -8,7 +8,6 @@ license.workspace = true
 default = []
 embedded-server = [
     "dep:zksync_os_server",
-    "dep:zksync_os_state_full_diffs",
     "dep:reth-tasks",
     "dep:smart-config",
 ]
@@ -20,6 +19,5 @@ tokio = { workspace = true, features = ["full"] }
 tracing = { workspace = true }
 
 zksync_os_server = { workspace = true, optional = true }
-zksync_os_state_full_diffs = { workspace = true, optional = true }
 reth-tasks = { workspace = true, optional = true }
 smart-config = { workspace = true, optional = true }

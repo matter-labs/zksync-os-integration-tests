@@ -38,6 +38,10 @@ schema_version: 1
 # Uncomment to target a real network (Sepolia, Mainnet, etc.).
 # l1_rpc_url: "https://..."
 
+# Enable the Airbender + ZiSK multiprover verifier. Before bootstrapping with
+# this enabled, build contracts with `zk-deployer build-contracts --with-zisk`.
+multi_proof_verifier: false
+
 chains:
   - chain_id: 6565
     da_mode: rollup           # rollup, no_da, or avail

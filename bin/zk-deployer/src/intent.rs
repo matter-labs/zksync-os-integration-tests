@@ -48,6 +48,8 @@ pub struct IntentConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub l1_rpc_url: Option<String>,
     #[serde(default)]
+    pub multi_proof_verifier: bool,
+    #[serde(default)]
     pub wallets: WalletsIntent,
     pub chains: Vec<ChainIntent>,
 }
@@ -67,5 +69,32 @@ impl IntentConfig {
             .first()
             .map(|c| c.chain_id)
             .context("intent has no chains")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const MINIMAL_INTENT: &str = r#"
+schema_version: 1
+chains:
+  - chain_id: 6565
+    da_mode: rollup
+"#;
+
+    #[test]
+    fn multiprover_is_opt_in() {
+        let intent: IntentConfig = serde_yaml::from_str(MINIMAL_INTENT).unwrap();
+
+        assert!(!intent.multi_proof_verifier);
+    }
+
+    #[test]
+    fn parses_enabled_multiprover() {
+        let input = MINIMAL_INTENT.replace("chains:", "multi_proof_verifier: true\nchains:");
+        let intent: IntentConfig = serde_yaml::from_str(&input).unwrap();
+
+        assert!(intent.multi_proof_verifier);
     }
 }

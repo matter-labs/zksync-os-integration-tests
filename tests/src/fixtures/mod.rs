@@ -33,7 +33,10 @@ pub async fn ensure_contracts_built() {
     BUILD_CONTRACTS_ONCE
         .get_or_init(|| async {
             zk_deployer::commands::build_contracts::run(
-                zk_deployer::commands::build_contracts::DevBuildContractsArgs { with_l2: false },
+                zk_deployer::commands::build_contracts::DevBuildContractsArgs {
+                    with_l2: false,
+                    with_zisk: false,
+                },
             )
             .await
             .expect("build-contracts failed");

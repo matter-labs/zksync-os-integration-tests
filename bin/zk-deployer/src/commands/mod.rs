@@ -7,3 +7,4 @@ pub mod init;
 pub mod server_config;
 pub mod token;
 pub mod wallets;
+pub mod zisk;
