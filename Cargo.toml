@@ -24,9 +24,8 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-# TODO: re-point at the release branch once the atomic-interop DA work merges.
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "12adca079aa4a5a3f449e8543ab6041c0bd450b0" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "12adca079aa4a5a3f449e8543ab6041c0bd450b0" }
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "release/v0.33.0-atomic-interop" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "release/v0.33.0-atomic-interop" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 rstest = "0.26.1"
 serde = "1.0"
