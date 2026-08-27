@@ -176,7 +176,6 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             era_chain_id: intent.main_chain_id()?,
             vm_type: VMOption::ZKSyncOsVM,
             with_testnet_verifier: true,
-            with_legacy_bridge: false,
             zk_token_asset_id: None,
             create2_factory_salt: None,
         };

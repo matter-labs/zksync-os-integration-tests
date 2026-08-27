@@ -26,11 +26,22 @@ use protocol_ops::common::forge::ForgeScriptArgs;
 use protocol_ops::common::{EcosystemArgs, EcosystemChainArgs, SharedRunArgs};
 
 use protocol_ops::common::abi::{
-    BridgehubAbi, IAssetTrackerBaseAbi, IChainAdminAbi, IChainTypeManagerAbi, IL1AssetRouterAbi,
-    IL1NativeTokenVaultAbi, ZkChainAbi,
+    BridgehubAbi, IChainAdminAbi, IL1AssetRouterAbi, IL1NativeTokenVaultAbi, ZkChainAbi,
 };
 
 use crate::eth::{call, provider, send_as_signer};
+
+// protocol-ops exports ABIs for the current contracts, while this test still
+// calls selectors that only exist during the historical v30→v31 transition.
+alloy::sol! {
+    interface ILegacyL1AssetTracker {
+        function chainBalance(uint256 _chainId, bytes32 _assetId) external view returns (uint256);
+    }
+
+    interface IZKsyncOSV31Admin {
+        function setZKsyncOSPreV31TotalSupply(uint256 _totalSupply) external returns (bytes32);
+    }
+}
 
 // ---------------------------------------------------------------------------
 // protocol-ops invocation glue
@@ -100,7 +111,7 @@ async fn resolve_token_contracts(
     let tracker = call(
         &provider,
         ntv,
-        IL1NativeTokenVaultAbi::l1AssetTrackerCall {},
+        IL1NativeTokenVaultAbi::legacyL1AssetTrackerCall {},
     )
     .await?;
     Ok((asset_id, ntv, tracker))
@@ -171,18 +182,11 @@ pub async fn schedule_upgrade_timestamp(
     bridgehub: Address,
     chain_id: u64,
 ) -> Result<()> {
-    let provider = provider(l1_rpc).await?;
-
     let upgrade_timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs()
         .saturating_sub(60);
-
-    let ctm = protocol_ops::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve CTM")?;
-    let target_pv = call(&provider, ctm, IChainTypeManagerAbi::protocolVersionCall {}).await?;
 
     let out_dir = workdir.join("schedule_upgrade");
     std::fs::create_dir_all(&out_dir).context("create out dir")?;
@@ -193,7 +197,6 @@ pub async fn schedule_upgrade_timestamp(
     chain::set_upgrade_timestamp::run(chain::set_upgrade_timestamp::ChainSetUpgradeTimestampArgs {
         topology: chain_args(bridgehub, chain_id),
         access_control_restriction: Address::ZERO,
-        new_protocol_version: target_pv.to_string(),
         upgrade_timestamp: upgrade_timestamp.to_string(),
         shared: shared_args(l1_rpc, &out_dir),
     })
@@ -269,7 +272,7 @@ pub async fn set_zkos_pre_v31_total_supply(
     let pre_v31_supply = call(
         &provider,
         tracker,
-        IAssetTrackerBaseAbi::chainBalanceCall {
+        ILegacyL1AssetTracker::chainBalanceCall {
             _chainId: U256::from(chain_id),
             _assetId: asset_id,
         },
@@ -278,7 +281,7 @@ pub async fn set_zkos_pre_v31_total_supply(
 
     // Owner → ChainAdmin.multicall → diamond.setZKsyncOSPreV31TotalSupply
     // → L2 service tx.
-    let inner = ZkChainAbi::setZKsyncOSPreV31TotalSupplyCall {
+    let inner = IZKsyncOSV31Admin::setZKsyncOSPreV31TotalSupplyCall {
         _totalSupply: pre_v31_supply,
     }
     .abi_encode();
