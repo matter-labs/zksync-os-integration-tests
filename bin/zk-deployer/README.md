@@ -12,6 +12,12 @@ No setup required. `zk-deployer` manages Anvil automatically when `l1_rpc_url` i
 zk-deployer build-contracts
 ```
 
+For a multiprover deployment, generate and build the ZiSK verifier as well:
+
+```bash
+zk-deployer build-contracts --with-zisk
+```
+
 ### 2. Generate intent.yaml
 
 ```bash
@@ -26,6 +32,8 @@ schema_version: 1
 # l1_rpc_url is commented out → Anvil starts automatically
 # l1_rpc_url: "https://..."
 
+multi_proof_verifier: false
+
 chains:
   - chain_id: 6565
     da_mode: rollup     # rollup, no_da, or avail
@@ -33,6 +41,11 @@ chains:
 
 Declare more entries under `chains:` to deploy multiple L1-settling chains on
 the same L1.
+
+Set `multi_proof_verifier: true` to deploy the Airbender + ZiSK verifier set.
+`bootstrap` deploys the generated ZiSK Plonk verifier directly, then passes its
+address into the CTM deployment. This requires artifacts built with
+`build-contracts --with-zisk`.
 
 ### 3. Bootstrap the ecosystem
 
@@ -147,7 +160,7 @@ zk-deployer token deploy \
 | Command | Purpose |
 |---------|---------|
 | `zk-deployer init` | Generate a starter `intent.yaml` |
-| `zk-deployer build-contracts` | Build Forge contract artifacts |
+| `zk-deployer build-contracts` | Build Forge contract artifacts (`--with-zisk` generates the ZiSK verifier first) |
 | `zk-deployer bootstrap` | Wallets → genesis → ecosystem L1 init |
 | `zk-deployer apply` | Chain registration, operator setup, default L2 dev-wallet funding |
 | `zk-deployer server-config` | Generate server YAML from state (`--chain <chain_id>`) |

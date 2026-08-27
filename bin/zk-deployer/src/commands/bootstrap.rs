@@ -7,10 +7,11 @@ use crate::commands::execute_manifest::apply_manifest;
 use crate::commands::genesis::{self, GenesisCommands, GenesisGenerateArgs};
 use crate::commands::token::deploy::{deploy as token_deploy, TokenDeployArgs};
 use crate::commands::wallets::generate::generate_wallets_yaml;
+use crate::commands::zisk::deploy_plonk_verifier;
 use crate::intent::IntentConfig;
 use crate::state::{
     EcosystemInitOutput, GenesisGeneratedOutput, State, StepKey, TokenDeployedOutput,
-    WalletsGeneratedOutput,
+    WalletsGeneratedOutput, ZiskPlonkVerifierDeployedOutput,
 };
 use protocol_ops::commands::ecosystem::init::{ecosystem_init, EcosystemInitInput};
 use protocol_ops::common::output::write_output_if_requested;
@@ -86,6 +87,12 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
     preflight::check_required_artifacts()?;
 
     let mut state = State::load_or_new(&args.state)?;
+    anyhow::ensure!(
+        !intent.multi_proof_verifier
+            || !state.is_done(StepKey::EcosystemInit)
+            || state.is_done(StepKey::ZiskPlonkVerifierDeploy),
+        "state contains ecosystem.init without the ZiSK Plonk deployment; delete state.json and rerun bootstrap"
+    );
 
     let deployer_address = pk_to_address(args.private_key.expose())?;
     logger::info(format!("Deployer: {deployer_address:#x}"));
@@ -155,7 +162,31 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         state.save(&args.state)?;
     }
 
-    // --- Step 3: Ecosystem init -------------------------------------------
+    // --- Step 3: Deploy ZiSK Plonk verifier (opt-in) -----------------------
+    let zisk_plonk_verifier_addr = if intent.multi_proof_verifier {
+        let output = if state.is_done(StepKey::ZiskPlonkVerifierDeploy) {
+            logger::info("Skipping zisk.plonk_verifier.deploy (already done)");
+            state.get_output::<ZiskPlonkVerifierDeployedOutput>(StepKey::ZiskPlonkVerifierDeploy)?
+        } else {
+            logger::step("Deploying ZiSK Plonk verifier...");
+            let verifier_address = deploy_plonk_verifier(
+                &l1_rpc_url,
+                &args.private_key,
+                &protocol_ops::common::paths::resolve_l1_contracts_path()?.join("out"),
+            )
+            .await?;
+            let output = ZiskPlonkVerifierDeployedOutput { verifier_address };
+            state.mark_done(StepKey::ZiskPlonkVerifierDeploy, &output)?;
+            state.save(&args.state)?;
+            logger::info(format!("ZiSK Plonk verifier: {verifier_address:#x}"));
+            output
+        };
+        Some(output.verifier_address)
+    } else {
+        None
+    };
+
+    // --- Step 4: Ecosystem init -------------------------------------------
     if state.is_done(StepKey::EcosystemInit) {
         logger::info("Skipping ecosystem.init (already done)");
     } else {
@@ -176,7 +207,9 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             era_chain_id: intent.main_chain_id()?,
             vm_type: VMOption::ZKSyncOsVM,
             with_testnet_verifier: true,
-            with_legacy_bridge: false,
+            multi_proof_verifier: intent.multi_proof_verifier,
+            zisk_plonk_verifier_addr,
+            zisk_range_verifier_addr: None,
             zk_token_asset_id: None,
             create2_factory_salt: None,
         };
@@ -219,7 +252,7 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         state.save(&args.state)?;
     }
 
-    // --- Step 4: Broadcast ecosystem Safe bundles (opt-in) ---------------
+    // --- Step 5: Broadcast ecosystem Safe bundles (opt-in) ---------------
     if state.is_done(StepKey::EcosystemBundlesApply) {
         logger::info("Skipping ecosystem.bundles.apply (already done)");
     } else if args.broadcast && args.out.join("manifest.json").exists() {
@@ -239,7 +272,7 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         state.save(&args.state)?;
     }
 
-    // --- Step 5: Deploy custom base token (if any chain needs one) --------
+    // --- Step 6: Deploy custom base token (if any chain needs one) --------
     // Collect all chains that need a token deployed (base_token present, no address).
     // At most one distinct token may be deployed per ecosystem; if two chains declare
     // different symbols with no address, fail early rather than silently using the

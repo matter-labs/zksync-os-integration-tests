@@ -34,6 +34,7 @@ pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
     let mut intent = IntentConfig {
         schema_version: 1,
         l1_rpc_url: None,
+        multi_proof_verifier: false,
         wallets: WalletsIntent {
             ecosystem_seed: Some("test-ecosystem".to_string()),
             path: None,

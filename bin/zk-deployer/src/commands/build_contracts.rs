@@ -15,36 +15,105 @@ pub struct DevBuildContractsArgs {
     /// Also build `l2-contracts/`.
     #[arg(long, default_value = "false")]
     pub with_l2: bool,
+
+    /// Generate and build the standalone ZiSK Plonk verifier.
+    #[arg(long, default_value = "false")]
+    pub with_zisk: bool,
 }
 
-/// Run `yarn install --frozen-lockfile` in `dir` if `node_modules/` is absent.
+fn run_command(
+    dir: &std::path::Path,
+    program: &str,
+    args: &[&str],
+    description: &str,
+) -> Result<()> {
+    let mut command = std::process::Command::new(program);
+    command.args(args).current_dir(dir);
+    if program == "cargo" {
+        // `cargo run` exports its own override to child processes; removing it
+        // lets verifier-gen honor its older, boojum-compatible rust-toolchain.
+        command.env_remove("RUSTUP_TOOLCHAIN");
+    }
+    let status = command
+        .status()
+        .with_context(|| format!("failed to spawn {description} in {}", dir.display()))?;
+    anyhow::ensure!(
+        status.success(),
+        "{description} failed in {} (exit {})",
+        dir.display(),
+        status.code().unwrap_or(-1)
+    );
+    Ok(())
+}
+
+fn generate_zisk_verifier(root: &std::path::Path) -> Result<()> {
+    let generator = root.join("tools/verifier-gen");
+    if !generator.exists() {
+        bail!(
+            "Directory not found: {}\nEnsure PROTOCOL_CONTRACTS_ROOT points to the protocol-contracts repository root.",
+            generator.display()
+        );
+    }
+
+    logger::step("Generating ZiSK Plonk verifier...");
+    run_command(&generator, "npm", &["ci"], "`npm ci`")?;
+    run_command(
+        &generator,
+        "node",
+        &[
+            "render_plonk_verifier.js",
+            "data/ZiSK_plonk_verification_key.json",
+            "data/PlonkVerifier.sol",
+        ],
+        "ZiSK snarkJS verifier rendering",
+    )?;
+    run_command(
+        &generator,
+        "cargo",
+        &[
+            "run",
+            "--",
+            "--variant",
+            "zisk",
+            "--zisk_vk_path",
+            "data/ZiSK_vk.json",
+            "--zisk_output_path",
+            "../../l1-contracts/contracts/state-transition/verifiers/ZiskVerifier.sol",
+            "--zisk_plonk_input_path",
+            "data/PlonkVerifier.sol",
+        ],
+        "ZiSK verifier generation",
+    )
+}
+
+/// Run `yarn install --frozen-lockfile` at the workspace root if `node_modules/` is absent.
 ///
 /// Forge deployment scripts invoke node scripts via FFI (e.g. `blake2s256.js`).
 /// Those scripts require npm dependencies that are not committed to the repo.
 /// No-op when `node_modules/` already exists (fast path for repeat runs).
-fn yarn_install_if_needed(dir: &std::path::Path) -> Result<()> {
-    if dir.join("node_modules").exists() {
+fn yarn_install_if_needed(root: &std::path::Path) -> Result<()> {
+    if root.join("node_modules").exists() {
         return Ok(());
     }
     eprintln!(
         "zk-deployer: installing yarn dependencies in {} ...",
-        dir.display()
+        root.display()
     );
     let status = std::process::Command::new("yarn")
         .arg("install")
         .arg("--frozen-lockfile")
-        .current_dir(dir)
+        .current_dir(root)
         .status()
         .with_context(|| {
             format!(
                 "failed to spawn `yarn install` in {} — is yarn installed?",
-                dir.display()
+                root.display()
             )
         })?;
     anyhow::ensure!(
         status.success(),
         "`yarn install` failed in {} (exit {})",
-        dir.display(),
+        root.display(),
         status.code().unwrap_or(-1)
     );
     Ok(())
@@ -53,11 +122,16 @@ fn yarn_install_if_needed(dir: &std::path::Path) -> Result<()> {
 pub async fn run(args: DevBuildContractsArgs) -> Result<()> {
     let root = contracts_root();
 
+    if args.with_zisk {
+        generate_zisk_verifier(&root)?;
+    }
+
     let mut dirs = vec![root.join("l1-contracts"), root.join("da-contracts")];
     if args.with_l2 {
         dirs.push(root.join("l2-contracts"));
     }
 
+    yarn_install_if_needed(&root)?;
     for dir in &dirs {
         if !dir.exists() {
             bail!(
@@ -66,7 +140,6 @@ pub async fn run(args: DevBuildContractsArgs) -> Result<()> {
                 dir.display()
             );
         }
-        yarn_install_if_needed(dir)?;
         preflight::forge_build(dir)?;
     }
 

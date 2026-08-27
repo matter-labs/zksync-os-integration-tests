@@ -8,7 +8,7 @@ against it. No Docker required.
 
 ## Prerequisites
 
-- **Rust** nightly-2026-01-22 (pinned in `rust-toolchain.toml`)
+- **Rust** nightly-2026-08-09 (pinned in `rust-toolchain.toml`)
 - **Foundry** (`anvil`, `forge`, `cast`)
 - **Yarn** (forge deployment scripts call node helpers via FFI)
 
@@ -25,6 +25,15 @@ cargo test -p tests --release --test l1 chain_executes_a_batch
 
 Contracts are compiled automatically on first use (`forge build` inside the
 era-contracts checkout that the `protocol_ops` dependency pins).
+
+To generate the ZiSK verifier and build the multiprover artifacts explicitly:
+
+```bash
+cargo run -p zk-deployer -- build-contracts --with-zisk
+```
+
+The generated GPL-licensed verifier sources remain ignored in the contracts
+checkout; the deployer consumes their Foundry artifacts.
 
 ## Project structure
 
@@ -44,14 +53,11 @@ for the standalone CLI.
 
 ## Version pinning
 
-`era-contracts` (via the `protocol_ops` library crate) and `zksync-os-server`
-are git dependencies in `Cargo.toml`; the exact revisions are pinned by
-`Cargo.lock`. To test against a different revision:
-
-```bash
-cargo update -p protocol_ops          # or: --precise <rev>
-cargo update -p zksync_os_server
-```
+`era-contracts` (via the `protocol_ops` library crate) and
+`zksync-os-server-private` are pinned to exact revisions in `Cargo.toml`.
+Update the relevant `rev`, then run `cargo check` to refresh `Cargo.lock`.
+The v30-to-v31 upgrade harness separately pins its historical `protocol_ops`
+revision in `tests/Cargo.toml`.
 
 ## Local development
 
@@ -71,9 +77,9 @@ cargo update -p zksync_os_server
    ignores local Solidity edits — the env var switches it to a content hash so any
    edit correctly invalidates the cached deployment.
 
-### Server (`zksync-os-server`)
+### Server (`zksync-os-server-private`)
 
-Uncomment the `[patch."https://github.com/matter-labs/zksync-os-server"]` block
+Uncomment the `[patch."https://github.com/matter-labs/zksync-os-server-private"]` block
 in `Cargo.toml` and point it at your local checkout. No env var needed — server
 code is deliberately excluded from the cache key, so local server builds still
 get cache hits on the deployment half (contracts, wallet deposits) and only pay

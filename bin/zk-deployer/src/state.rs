@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 pub enum StepKey {
     WalletsGenerate,
     GenesisGenerate,
+    ZiskPlonkVerifierDeploy,
     EcosystemInit,
     EcosystemBundlesApply,
     EcosystemTokenDeploy,
@@ -33,6 +34,7 @@ impl fmt::Display for StepKey {
         match self {
             Self::WalletsGenerate => write!(f, "wallets.generate"),
             Self::GenesisGenerate => write!(f, "genesis.generate"),
+            Self::ZiskPlonkVerifierDeploy => write!(f, "zisk.plonk_verifier.deploy"),
             Self::EcosystemInit => write!(f, "ecosystem.init"),
             Self::EcosystemBundlesApply => write!(f, "ecosystem.bundles.apply"),
             Self::EcosystemTokenDeploy => write!(f, "ecosystem.token_deploy"),
@@ -170,6 +172,11 @@ pub struct WalletsGeneratedOutput {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZiskPlonkVerifierDeployedOutput {
+    pub verifier_address: Address,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EcosystemInitOutput {
     pub bridgehub_proxy: Address,
     pub ctm_proxy: Address,
@@ -221,5 +228,13 @@ mod tests {
             .unwrap();
         let out: Out = state.get_output(StepKey::WalletsGenerate).unwrap();
         assert_eq!(out, Out { val: 7 });
+    }
+
+    #[test]
+    fn zisk_plonk_deployment_has_a_stable_step_key() {
+        assert_eq!(
+            StepKey::ZiskPlonkVerifierDeploy.to_string(),
+            "zisk.plonk_verifier.deploy"
+        );
     }
 }
