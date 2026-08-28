@@ -4,11 +4,18 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// What the chain does with its pubdata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DaMode {
+    /// Publishes the whole pubdata on L1, through blobs.
     Rollup,
-    NoDa,
+    /// Publishes only the mandatory L2->L1 log region on L1 — including the interop commitment tree
+    /// leaves, which is what keeps the chain interop-capable — and drops the state diffs and the
+    /// message preimages. That region still goes into blobs, so such a chain runs the same L1 DA
+    /// validator a rollup does and differs from it only in its `PubdataContent`.
+    LogsOnlyValidium,
+    /// Hands the full pubdata to Avail.
     Avail,
 }
 

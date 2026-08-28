@@ -22,7 +22,7 @@ use protocol_ops::common::{
     wallets::load_wallets,
     PrivateKey,
 };
-use protocol_ops::types::{DAValidatorType, L2ChainId, VMOption};
+use protocol_ops::types::{DAValidatorType, L2ChainId, PubdataContent, VMOption};
 
 #[derive(Parser, Debug)]
 pub struct ApplyArgs {
@@ -159,7 +159,12 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 chain_params,
                 vm_type,
                 l2_da_commitment_scheme: None,
+                pubdata_content: Some(resolve_pubdata_content(chain)),
                 with_legacy_bridge: false,
+                // Every chain in one intent is meant to interop with the others, and each chain is
+                // registered as it is created (pairs whose counterpart does not exist yet get picked
+                // up when that chain runs this step).
+                register_for_interop: true,
                 create2_factory_salt: None,
                 pause_deposits: false,
                 evm_emulator: false,
@@ -349,26 +354,90 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
 /// Protocol sentinel address used for an ETH base token.
 const ETH_BASE_TOKEN: Address = address!("0x0000000000000000000000000000000000000001");
 
+/// Which part of the pubdata the chain's batches commit to.
+///
+/// A rollup commits and publishes everything; a `logs_only_validium` commits exactly the region its
+/// name says, which is what keeps its interop-commitment (IMT) leaves reconstructible from L1. A
+/// custom-DA chain (`avail`) hands the *full* pubdata to its DA layer and commits a hash over it, so
+/// it stays `FullPubdata`.
+///
+/// The value is part of the batch public input (through the ZKsync OS chain config hash), so it must
+/// match what the chain's server and prover run with. The server derives it from L1 state
+/// (matter-labs/zksync-os-server#1530); a `logs_only_validium` chain needs a server carrying that
+/// change, since older ones prove `FullPubdata` unconditionally, plus
+/// matter-labs/zksync-os-server#1551 so the node stops requiring a hand-configured pubdata mode.
+fn resolve_pubdata_content(chain: &ChainIntent) -> PubdataContent {
+    match chain.da_mode {
+        DaMode::LogsOnlyValidium => PubdataContent::LogsOnly,
+        DaMode::Rollup | DaMode::Avail => PubdataContent::FullPubdata,
+    }
+}
+
 fn resolve_da(
     chain: &ChainIntent,
     vm_type: VMOption,
     eco: &ResolvedEcosystem,
 ) -> anyhow::Result<(DAValidatorType, Address)> {
+    // A ZKsync OS chain — rollup or logs-only validium — publishes its pubdata through blobs and
+    // therefore runs the same L1 DA validator. A logs-only validium publishes *less* pubdata, not
+    // none: it drops the state diffs and message preimages (`PubdataContent::LogsOnly`, see
+    // `resolve_pubdata_content`) and keeps publishing the L2->L1 log region, which carries the
+    // interop commitment tree leaves.
+    let blobs_validator = || {
+        eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
+            anyhow::anyhow!(
+                "blobs_zksync_os_l1_da_validator not found in state — \
+                 re-run bootstrap to populate it"
+            )
+        })
+    };
+
     Ok(match chain.da_mode {
         DaMode::Rollup => {
             let validator = if vm_type == VMOption::ZKSyncOsVM {
-                eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "blobs_zksync_os_l1_da_validator not found in state — \
-                         re-run bootstrap to populate it"
-                    )
-                })?
+                blobs_validator()?
             } else {
                 eco.rollup_l1_da_validator
             };
             (DAValidatorType::Rollup, validator)
         }
-        DaMode::NoDa => (DAValidatorType::NoDA, eco.no_da_l1_validator),
+        DaMode::LogsOnlyValidium => {
+            let validator = if vm_type == VMOption::ZKSyncOsVM {
+                blobs_validator()?
+            } else {
+                eco.no_da_l1_validator
+            };
+            (DAValidatorType::LogsOnlyValidium, validator)
+        }
         DaMode::Avail => (DAValidatorType::Avail, eco.avail_l1_da_validator),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn chain(da_mode: DaMode) -> ChainIntent {
+        ChainIntent {
+            chain_id: 6565,
+            base_token: None,
+            da_mode,
+        }
+    }
+
+    #[test]
+    fn pubdata_content_follows_the_da_mode() {
+        assert_eq!(
+            resolve_pubdata_content(&chain(DaMode::Rollup)),
+            PubdataContent::FullPubdata
+        );
+        assert_eq!(
+            resolve_pubdata_content(&chain(DaMode::Avail)),
+            PubdataContent::FullPubdata
+        );
+        assert_eq!(
+            resolve_pubdata_content(&chain(DaMode::LogsOnlyValidium)),
+            PubdataContent::LogsOnly
+        );
+    }
 }

@@ -4,7 +4,7 @@ use alloy::primitives::Address;
 use anyhow::{Context as _, Result};
 use clap::Parser;
 
-use crate::intent::{ChainIntent, DaMode, IntentConfig};
+use crate::intent::{ChainIntent, IntentConfig};
 use crate::state::{
     ChainInitPreparedOutput, EcosystemInitOutput, State, StepKey, TokenDeployedOutput,
 };
@@ -203,11 +203,18 @@ pub(crate) fn resolve_base_token_addr(
     }
 }
 
-pub(crate) fn resolve_pubdata_mode(chain: &ChainIntent) -> &'static str {
-    match chain.da_mode {
-        DaMode::NoDa => "RelayedL2Calldata",
-        _ => "Blobs",
-    }
+/// The DA *mechanism* the server publishes each batch's pubdata with — the server's `PubdataMode`,
+/// whose only variants are `Blobs`, `Calldata` and `Validium`.
+///
+/// Every ZKsync OS chain deployed here publishes through blobs, including a logs-only validium: such
+/// a chain differs in how *much* pubdata it produces (`PubdataContent::LogsOnly`, applied on L1 by
+/// `apply`), not in how that pubdata reaches L1 — which for all of them is `BLOBS_ZKSYNC_OS`.
+///
+/// The value is written out only because the server still requires it. matter-labs/zksync-os-server#1551
+/// derives the mode from that same L1 scheme, so once it lands on the server `main` this workspace
+/// pins, this whole function can go.
+pub(crate) fn resolve_pubdata_mode(_chain: &ChainIntent) -> &'static str {
+    "Blobs"
 }
 
 fn pick_chain(intent: &IntentConfig, chain_id: Option<u64>) -> Result<&ChainIntent> {

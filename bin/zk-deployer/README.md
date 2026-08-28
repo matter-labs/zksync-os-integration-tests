@@ -28,7 +28,7 @@ schema_version: 1
 
 chains:
   - chain_id: 6565
-    da_mode: rollup     # rollup, no_da, or avail
+    da_mode: rollup     # rollup, logs_only_validium, or avail
 ```
 
 Declare more entries under `chains:` to deploy multiple L1-settling chains on
