@@ -29,7 +29,9 @@ jobs:
       - name: Run cargo audit
         # RUSTSEC-2025-0055: tracing-subscriber 0.2.x pulled in by ark-relations
         # (transitive dep of zksync-os); not fixable from this repo.
-        run: cargo audit --ignore RUSTSEC-2025-0055
+        # RUSTSEC-2026-0235: rkyv 0.7.46 is an unused optional dependency of
+        # rust_decimal; no enabled feature in this workspace compiles it.
+        run: cargo audit --ignore RUSTSEC-2025-0055 --ignore RUSTSEC-2026-0235
 
   cargo-deny:
     runs-on: ubuntu-latest
