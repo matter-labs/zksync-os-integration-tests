@@ -33,9 +33,8 @@ era-contracts checkout that the `protocol_ops` dependency pins).
 ├── bin/zk-deployer/    # Deployment engine + CLI: intent.yaml → bootstrap → apply
 ├── lib/server/         # In-process zksync-os-server wrapper + RPC wait helpers
 ├── tests/              # Test framework (rstest fixtures) + integration tests
-│   ├── src/fixtures/   #   ecosystem (N L1-settling chains), v30_chain (frozen fixture)
-│   ├── tests/          #   l1.rs, upgrade_v30_to_v31.rs
-│   └── local-chains/   #   committed v30.2 frozen state for upgrade tests
+│   ├── src/fixtures/   #   ecosystem setup, snapshot restore, and deployment cache
+│   └── tests/          #   l1.rs
 └── .zkos-test-cache/   # Deployment snapshot cache (gitignored)
 ```
 

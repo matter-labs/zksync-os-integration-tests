@@ -23,7 +23,6 @@ pub mod eth;
 pub mod fixtures;
 pub mod locked_port;
 pub mod server_runtime;
-pub mod upgrade_v30_to_v31;
 pub(crate) mod workdir;
 
 // Types available via `use tests::*`.
