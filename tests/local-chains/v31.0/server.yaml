@@ -1,0 +1,16 @@
+# Frozen v31.0 single-chain fixture (chain 506, L1-settling), deployed from
+# era-contracts e09169106 with zk-deployer. Ported from the zksync-os-server
+# repo's `local-chains/v31.0` preset, whose `versions.yaml` records the exact
+# revisions the state was generated from.
+#
+# genesis_input_path is injected at runtime via a per-test override layer.
+genesis:
+  bridgehub_address: "0x70fe0ddb82adf1fe9ae7afe3047e1cbf6db7cfd1"
+  bytecode_supplier_address: "0xabab98ff0241f2414ce36378e5f2383c07488200"
+  chain_id: 506
+
+l1_sender:
+  pubdata_mode: Blobs
+  operator_commit_sk: "0xc78123547577c67de697c0e80911cb913d2be569d182ed2d42bd7cd30851948c"
+  operator_prove_sk: "0x1ed8abac5f8143e0f37cc4da4655cb14c82473c1254da12683956749b0cca5bd"
+  operator_execute_sk: "0x7a2f70531f7ba8a79e74c2be455eb7dfa0526f2e802ab9d7132959f040acafc5"

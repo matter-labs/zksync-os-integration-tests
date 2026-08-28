@@ -1,0 +1,15 @@
+# Provenance of this frozen fixture: the revisions the snapshot was generated
+# from (ported verbatim from the zksync-os-server repo's `local-chains/v31.0`
+# preset). Regenerate with those revisions if the fixture ever needs rebuilding.
+general:
+  protocol_version: "v31.0"
+  verification_key: "0x23156cf220288cd1e436dccfc09aa4883ea8288da61aa69e2c7251b0c0c44ccd"
+
+era-contracts:
+  sha: "e091691063c99a1d0281d6fe42fb0ec4430f3673"
+
+zksync-os-integration-tests:
+  sha: "a54ca34d4cf8d0320649a9fa4322874a03ce805e"
+
+zksync-os-server:
+  sha: "61c5a3f5a2797009418b96f93086681902000855"
