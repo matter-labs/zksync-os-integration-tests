@@ -18,7 +18,7 @@ use protocol_ops::commands::ecosystem::upgrade::{
 };
 use protocol_ops::common::abi::ZkChainAbi;
 use protocol_ops::common::forge::scripts::{
-    CORE_UPGRADE_V31_SCRIPT_PATH, CTM_UPGRADE_V31_SCRIPT_PATH, UPGRADE_V31_CORE_OUTPUT_PATH,
+    CORE_UPGRADE_V33_SCRIPT_PATH, CTM_UPGRADE_V33_SCRIPT_PATH, UPGRADE_V33_CORE_OUTPUT_PATH,
 };
 
 use tests::eth::{call, provider};
@@ -52,9 +52,11 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
 
     // ── ecosystem upgrade-prepare (deployer) ─────────────────────────────────
     //
-    // The v31 CTM exposes the getters protocol-ops resolves the bytecodes
-    // supplier and rollup DA manager from, so unlike the v30 fixture no
-    // pre-v31 override addresses are needed.
+    // Driven through the v33 scripts (`deploy-scripts/upgrade/v33/`), which extend the
+    // Default* bases directly: the v31 flow's stage-2 legacy-Gateway decommission and
+    // stage-3 token migration are one-time v30->v31 work and must not be replayed here.
+    // The v31 CTM exposes the getters protocol-ops resolves the bytecodes supplier and
+    // rollup DA manager from, so no pre-v31 override addresses are needed.
     let prepare_dir = eco.workdir().join("upgrade_prepare");
     let governance_toml = eco.workdir().join("ecosystem.toml");
     run_upgrade_prepare_all(UpgradePrepareAllArgs {
@@ -67,10 +69,10 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
         rollup_da_manager_address: None,
         is_zk_sync_os: Some(true),
         create2_factory_salt: None,
-        upgrade_input_path: fixture::V31_UPGRADE_INPUT_PATH.to_string(),
-        core_output_path: UPGRADE_V31_CORE_OUTPUT_PATH.to_string(),
-        core_script_path: CORE_UPGRADE_V31_SCRIPT_PATH.to_string(),
-        ctm_script_path: CTM_UPGRADE_V31_SCRIPT_PATH.to_string(),
+        upgrade_input_path: fixture::UPGRADE_INPUT_PATH.to_string(),
+        core_output_path: UPGRADE_V33_CORE_OUTPUT_PATH.to_string(),
+        core_script_path: CORE_UPGRADE_V33_SCRIPT_PATH.to_string(),
+        ctm_script_path: CTM_UPGRADE_V33_SCRIPT_PATH.to_string(),
     })
     .await
     .context("upgrade-prepare")?;

@@ -32,24 +32,23 @@ pub const CHAIN_ADMIN_OWNER_KEY: &str =
 /// Upgrade-env input for local anvil fixtures, committed in era-contracts under
 /// `l1-contracts/`.
 ///
-/// Value-for-value a copy of `upgrade-envs/v0.31.0-interopB/local.toml` (only
-/// the comment headers differ). It exists as a separate file purely to select a
-/// different *permanent-values* file: `CoreUpgrade_v31` pairs the two by
-/// basename (`_permanentValuesPathFromV31Input`), so this input resolves to
-/// `upgrade-envs/permanent-values/zksync-os-integration-test.toml`, where
-/// passing `local.toml` would resolve to `upgrade-envs/permanent-values/local.toml`.
+/// Value-for-value a copy of `upgrade-envs/v0.33.0-atomic-interop/local.toml`. It exists
+/// under its own basename purely to select a different *permanent-values* file:
+/// `CoreUpgrade_v33` pairs the two by basename, so this input resolves to
+/// `upgrade-envs/permanent-values/zksync-os-integration-test.toml` while `local.toml`
+/// would resolve to `upgrade-envs/permanent-values/local.toml`.
 ///
-/// Those two permanent-values files differ in exactly one thing: the `local.toml`
-/// one carries a `[legacy_gateway] chain_id = 506` section and this one does not.
-/// This fixture never had a gateway chain — and 506 is the chain being upgraded —
-/// so the stage-2 decommission calls generated from that section would target the
-/// chain itself and revert with `SettlementLayersMustSettleOnL1()`.
+/// Under the v31 flow that separation was load-bearing: `permanent-values/local.toml`
+/// declares `[legacy_gateway] chain_id = 506`, which on this fixture is the chain being
+/// upgraded, so stage 2 would have emitted decommission calls against it. v33 has no
+/// stage-2 decommission step and never reads that section, so the pairing is now only
+/// about keeping the fixture's permanent values addressable on their own.
 ///
 /// The leading `/` is the protocol-ops path convention, not an absolute path:
 /// protocol-ops resolves it as `contracts_root/l1-contracts/<path>` after
-/// `trim_start_matches('/')` (see `v31_upgrade_inner.rs`).
-pub const V31_UPGRADE_INPUT_PATH: &str =
-    "/upgrade-envs/v0.31.0-interopB/zksync-os-integration-test.toml";
+/// `trim_start_matches('/')`.
+pub const UPGRADE_INPUT_PATH: &str =
+    "/upgrade-envs/v0.33.0-atomic-interop/zksync-os-integration-test.toml";
 
 /// Start the v31.0 fixture by restoring the committed snapshot.
 ///
