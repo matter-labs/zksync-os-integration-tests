@@ -97,9 +97,16 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
     //
     // Recorded before the upgrade is scheduled so it lands in its own
     // transaction, as V32UpgradeZKsyncOS requires.
-    protocol::record_priority_op_lower_bound(l1_rpc, bridgehub, chain_id, ctm, DEPLOYER_KEY)
-        .await
-        .context("record priority-op lower bound")?;
+    protocol::record_priority_op_lower_bound(
+        l1_rpc,
+        eco.workdir(),
+        bridgehub,
+        chain_id,
+        ctm,
+        DEPLOYER_KEY,
+    )
+    .await
+    .context("record priority-op lower bound")?;
     protocol::wait_for_priority_ops_processed(
         l1_rpc,
         bridgehub,

@@ -16,7 +16,8 @@
 //! 5. [`run_chain_upgrade`] — diamond cut, L1 protocolVersion → v33
 //!
 //! Steps 1, 2, 4 and 5 go through protocol-ops commands and [`apply`]; step 3
-//! is a direct L1 call (see [`record_priority_op_lower_bound`]).
+//! goes through `chain record-priority-op-lower-bound`, which broadcasts rather
+//! than emitting a bundle (see [`record_priority_op_lower_bound`]).
 //!
 //! The target version is not spelled anywhere in this test: the upgrade scripts
 //! read it out of the contracts' own genesis config
@@ -41,18 +42,13 @@ use protocol_ops::common::forge::ForgeScriptArgs;
 use protocol_ops::common::{EcosystemArgs, EcosystemChainArgs, SharedRunArgs};
 use serde::Deserialize;
 
-use crate::eth::{call, provider, send_as_signer};
+use crate::eth::{call, provider};
 
 alloy::sol! {
-    /// Standalone registry the upgrade reads the per-chain priority-op bound
-    /// from. Local because protocol-ops has no command wrapping
-    /// `RecordPriorityOpLowerBound.s.sol` yet.
-    /// TODO(protocol-ops): drop in favour of `protocol_ops::common::abi` once
-    /// the registry gets one.
+    /// Read-only view of the registry, used to poll the bound the upgrade waits on.
+    /// Recording it goes through `chain record-priority-op-lower-bound`.
     interface IPriorityOpLowerBound {
-        function lowerBoundPriorityOp(address chain) external;
         function lowerBound(address chain) external view returns (uint256);
-        function recorded(address chain) external view returns (bool);
     }
 }
 
@@ -111,12 +107,12 @@ struct CtmStateTransition {
 }
 
 /// Where `ecosystem upgrade-prepare-all` writes the per-CTM output
-/// (`v31_upgrade_inner.rs` builds the same path).
+/// (`upgrade_inner.rs` builds the same path).
 fn ctm_upgrade_output_path(ctm: Address) -> PathBuf {
     protocol_ops::common::paths::contracts_root()
         .join("l1-contracts")
         .join("script-out")
-        .join(format!("v31-upgrade-ctm-{ctm:#x}.toml"))
+        .join(format!("v33-upgrade-ctm-{ctm:#x}.toml"))
 }
 
 /// Read the `PriorityOpLowerBound` registry address out of the CTM prepare
@@ -128,48 +124,49 @@ pub fn priority_op_lower_bound_registry(ctm: Address) -> Result<Address> {
     Ok(output.state_transition.priority_op_lower_bound_addr)
 }
 
-/// Pin the chain's priority-op count in the registry (`lowerBoundPriorityOp`).
+/// Pin the chain's priority-op count in the registry, via
+/// `protocol-ops chain record-priority-op-lower-bound`.
 ///
 /// `V32UpgradeZKsyncOS` — the per-chain upgrade this release stores as the CTM's
 /// default upgrade — requires a recorded bound plus every priority op below it
-/// processed, which together prove the v31 base-token supply backfill executed
-/// on L2 before this release removes its entry point. The call is permissionless
-/// and idempotent — the same contract call `RecordPriorityOpLowerBound.s.sol`
-/// broadcasts.
+/// processed, which together prove the v31 base-token supply backfill executed on
+/// L2 before this release removed its entry point.
 ///
-/// It must land in its own transaction, well before the diamond cut: the
-/// upgrade reads the bound before the chain's facets are replaced.
-///
-/// TODO(protocol-ops): replace with a command wrapping the era-contracts script.
+/// Like every protocol-ops forge command this only *prepares* — `ForgeRunner` runs
+/// the script against a throwaway anvil fork — so the emitted bundle is applied here.
+/// It stays a bundle of its own rather than joining the governance one: the call is
+/// permissionless and must land in a separate, earlier transaction, since the upgrade
+/// reads the bound before the chain's facets are replaced. Idempotent — the script
+/// no-ops when a bound is already recorded.
 pub async fn record_priority_op_lower_bound(
     l1_rpc: &str,
+    workdir: &Path,
     bridgehub: Address,
     chain_id: u64,
     ctm: Address,
     sender_key: &str,
 ) -> Result<()> {
     let registry = priority_op_lower_bound_registry(ctm)?;
-    let diamond = protocol_ops::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
-        .await
-        .context("resolve diamond")?;
-    let provider = provider(l1_rpc).await?;
+    let out_dir = workdir.join("record_priority_op_lower_bound");
+    std::fs::create_dir_all(&out_dir).context("create out dir")?;
 
-    if !call(
-        &provider,
-        registry,
-        IPriorityOpLowerBound::recordedCall { chain: diamond },
+    chain::record_priority_op_lower_bound::run(
+        chain::record_priority_op_lower_bound::ChainRecordPriorityOpLowerBoundArgs {
+            topology: chain_args(bridgehub, chain_id),
+            priority_op_lower_bound: registry,
+            sender: sender_key
+                .parse::<alloy::signers::local::PrivateKeySigner>()
+                .context("parse sender key")?
+                .address(),
+            shared: shared_args(l1_rpc, &out_dir),
+        },
     )
-    .await?
-    {
-        send_as_signer(
-            l1_rpc,
-            sender_key,
-            registry,
-            IPriorityOpLowerBound::lowerBoundPriorityOpCall { chain: diamond },
-        )
+    .await
+    .context("chain record-priority-op-lower-bound")?;
+    apply(&out_dir, &[sender_key], l1_rpc)
         .await
-        .context("PriorityOpLowerBound.lowerBoundPriorityOp")?;
-    }
+        .context("apply record-priority-op-lower-bound")?;
+
     Ok(())
 }
 
