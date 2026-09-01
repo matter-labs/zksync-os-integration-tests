@@ -24,8 +24,13 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "release/v0.33.0-atomic-interop" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "release/v0.33.0-atomic-interop" }
+# TODO: repoint both at `matter-labs/era-contracts` `release/v0.33.0-atomic-interop` once
+# matter-labs/era-contracts#2449 lands. This suite needs the v33 upgrade flow it adds
+# (`deploy-scripts/upgrade/v33/*`, `chain record-priority-op-lower-bound`, the
+# `CORE_UPGRADE_V33_*` constants), none of which exist on the release branch yet, so the
+# pin has to name the PR's branch for this to build at all.
+protocol_ops = { git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v33-upgrade-flow" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v33-upgrade-flow" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 rstest = "0.26.1"
 serde = "1.0"

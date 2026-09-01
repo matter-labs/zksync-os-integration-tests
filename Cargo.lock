@@ -153,7 +153,7 @@ dependencies = [
 [[package]]
 name = "add_sub_lui_auipc_mop"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -165,7 +165,7 @@ dependencies = [
 [[package]]
 name = "add_sub_lui_auipc_mop_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -1518,7 +1518,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1529,7 +1529,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2848,6 +2848,24 @@ dependencies = [
 [[package]]
 name = "basic_bootloader"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "arrayvec",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "cfg-if",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "paste",
+ "ruint",
+ "strum_macros 0.27.2",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+]
+
+[[package]]
+name = "basic_bootloader"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "arrayvec",
@@ -2959,6 +2977,28 @@ dependencies = [
 [[package]]
 name = "basic_system"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "arrayvec",
+ "cfg-if",
+ "const-hex",
+ "const_for",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "either",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "modexp 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "paste",
+ "ruint",
+ "storage_models 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "strum_macros 0.27.2",
+ "zerocopy",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+]
+
+[[package]]
+name = "basic_system"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "arrayvec",
@@ -3047,7 +3087,7 @@ dependencies = [
 [[package]]
 name = "bigint_with_control"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -3079,7 +3119,7 @@ dependencies = [
 [[package]]
 name = "bigint_with_control_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -3263,7 +3303,7 @@ dependencies = [
 [[package]]
 name = "blake2_with_compression"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -3295,7 +3335,7 @@ dependencies = [
 [[package]]
 name = "blake2_with_compression_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -3329,7 +3369,7 @@ dependencies = [
 [[package]]
 name = "blake2s_u32"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "unroll",
 ]
@@ -3717,6 +3757,23 @@ dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3-2026-02-10)",
  "ruint",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
+]
+
+[[package]]
+name = "callable_oracles"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "alloy-consensus 1.8.3",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "c-kzg",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "num-bigint 0.5.1",
+ "num-traits",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3-2026-02-10)",
+ "ruint",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
 ]
 
 [[package]]
@@ -4168,7 +4225,7 @@ dependencies = [
 [[package]]
 name = "common_constants"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "seq-macro",
 ]
@@ -4553,6 +4610,33 @@ dependencies = [
 [[package]]
 name = "crypto"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "ark-bls12-381 0.5.0",
+ "ark-bn254 0.5.0",
+ "ark-ec 0.5.0",
+ "ark-ff 0.5.0",
+ "ark-serialize 0.5.0",
+ "ark-std 0.5.0",
+ "blake2",
+ "cfg-if",
+ "const_for",
+ "educe",
+ "itertools 0.14.0",
+ "k256",
+ "num-bigint 0.4.8",
+ "num-traits",
+ "p256",
+ "ripemd 0.1.3",
+ "ruint",
+ "sha2 0.10.9",
+ "sha3 0.10.9",
+ "zeroize",
+]
+
+[[package]]
+name = "crypto"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "ark-bls12-381 0.5.0",
@@ -4690,7 +4774,7 @@ dependencies = [
 [[package]]
 name = "cs"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "bincode 1.3.3",
  "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -4778,6 +4862,11 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1
 name = "cycle_marker"
 version = "0.0.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10#a3c35981830bd5499f24fafb1c10b2ec56d48770"
+
+[[package]]
+name = "cycle_marker"
+version = "0.0.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
 
 [[package]]
 name = "cycle_marker"
@@ -5421,7 +5510,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -5489,6 +5578,22 @@ dependencies = [
  "ruint",
  "strum_macros 0.27.2",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
+ "zksync_os_evm_errors 0.1.3",
+]
+
+[[package]]
+name = "evm_interpreter"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "arrayvec",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "either",
+ "paste",
+ "ruint",
+ "strum_macros 0.27.2",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
  "zksync_os_evm_errors 0.1.3",
 ]
 
@@ -5574,7 +5679,7 @@ dependencies = [
 [[package]]
 name = "execution_utils"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "clap 4.6.6",
  "full_statement_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -5697,7 +5802,7 @@ dependencies = [
 [[package]]
 name = "fft"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "seq-macro",
@@ -5746,7 +5851,7 @@ dependencies = [
 [[package]]
 name = "field"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "rand 0.9.5",
  "seq-macro",
@@ -6078,6 +6183,31 @@ dependencies = [
 [[package]]
 name = "forward_system"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "alloy",
+ "arrayvec",
+ "basic_bootloader 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "basic_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "bincode 1.3.3",
+ "callable_oracles 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "hex",
+ "oracle_provider 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "paste",
+ "ruint",
+ "serde",
+ "strum_macros 0.27.2",
+ "system_hooks 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "zksync_os_evm_errors 0.1.3",
+ "zksync_os_interface 0.1.3",
+ "zksync_os_runner 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+]
+
+[[package]]
+name = "forward_system"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "alloy",
@@ -6181,7 +6311,7 @@ dependencies = [
 [[package]]
 name = "full_statement_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "add_sub_lui_auipc_mop_verifier",
  "bigint_with_control_verifier 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -7587,7 +7717,7 @@ dependencies = [
 [[package]]
 name = "inits_and_teardowns"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -7599,7 +7729,7 @@ dependencies = [
 [[package]]
 name = "inits_and_teardowns_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -8079,7 +8209,7 @@ dependencies = [
 [[package]]
 name = "jump_branch_slt"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -8091,7 +8221,7 @@ dependencies = [
 [[package]]
 name = "jump_branch_slt_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -8145,7 +8275,7 @@ dependencies = [
 [[package]]
 name = "keccak_special5"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -8157,7 +8287,7 @@ dependencies = [
 [[package]]
 name = "keccak_special5_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -8353,7 +8483,7 @@ checksum = "47d9d19d1d6efa0109d2f65ff4c85cddd50bd572e5a00127ab10987290bcefae"
 [[package]]
 name = "load_store_subword_only"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -8365,7 +8495,7 @@ dependencies = [
 [[package]]
 name = "load_store_subword_only_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -8375,7 +8505,7 @@ dependencies = [
 [[package]]
 name = "load_store_word_only"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -8387,7 +8517,7 @@ dependencies = [
 [[package]]
 name = "load_store_word_only_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -8672,6 +8802,11 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.
 [[package]]
 name = "modexp"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+
+[[package]]
+name = "modexp"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 
 [[package]]
@@ -8726,7 +8861,7 @@ checksum = "1fafa6961cabd9c63bcd77a45d7e3b7f3b552b70417831fb0f56db717e72407e"
 [[package]]
 name = "mul_div"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -8738,7 +8873,7 @@ dependencies = [
 [[package]]
 name = "mul_div_unsigned"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -8750,7 +8885,7 @@ dependencies = [
 [[package]]
 name = "mul_div_unsigned_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -8760,7 +8895,7 @@ dependencies = [
 [[package]]
 name = "mul_div_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -8890,7 +9025,7 @@ source = "git+https://github.com/matter-labs/zksync-airbender-private.git?tag=v0
 [[package]]
 name = "non_determinism_source"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 
 [[package]]
 name = "nonmax"
@@ -8949,7 +9084,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -9613,6 +9748,15 @@ dependencies = [
 [[package]]
 name = "oracle_provider"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3-2026-02-10)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+]
+
+[[package]]
+name = "oracle_provider"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.5.2-2026-02-10)",
@@ -10254,7 +10398,7 @@ dependencies = [
 [[package]]
 name = "protocol_ops"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?branch=release%2Fv0.33.0-atomic-interop#3408903ed8296714813b9fab4fd0abf30091168a"
+source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v33-upgrade-flow#54431151614ef2d32688638b804d8334a98ec730"
 dependencies = [
  "alloy",
  "anyhow",
@@ -10365,7 +10509,7 @@ dependencies = [
 [[package]]
 name = "prover"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "common_constants",
@@ -10422,7 +10566,7 @@ dependencies = [
 [[package]]
 name = "prover_examples"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "bincode 1.3.3",
  "common_constants",
@@ -10540,7 +10684,7 @@ dependencies = [
  "once_cell",
  "socket2",
  "tracing",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -10733,7 +10877,7 @@ dependencies = [
 [[package]]
 name = "reduced_keccak"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 
 [[package]]
 name = "reduced_risc_v_log_23_machine"
@@ -12660,7 +12804,7 @@ checksum = "68b59d645e392e041ad18f5e529ed13242d8405c66bb192f59703ea2137017d0"
 [[package]]
 name = "riscv_common"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "seq-macro",
@@ -12669,7 +12813,7 @@ dependencies = [
 [[package]]
 name = "riscv_transpiler"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "capstone",
@@ -12941,7 +13085,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13021,7 +13165,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs 1.0.9",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -13708,7 +13852,7 @@ dependencies = [
 [[package]]
 name = "setups"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "add_sub_lui_auipc_mop",
  "bigint_with_control 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -13831,7 +13975,7 @@ dependencies = [
 [[package]]
 name = "shift_binary_csr"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -13843,7 +13987,7 @@ dependencies = [
 [[package]]
 name = "shift_binary_csr_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -14029,7 +14173,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d1e2c7f27f8d4cb10542a02c49005dbd6e93095799d6f3be745fae9f8fedd4"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -14116,6 +14260,15 @@ source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.
 dependencies = [
  "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
  "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
+]
+
+[[package]]
+name = "storage_models"
+version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
 ]
 
 [[package]]
@@ -14419,6 +14572,20 @@ dependencies = [
 [[package]]
 name = "system_hooks"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "arrayvec",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "evm_interpreter 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "paste",
+ "ruint",
+ "strum_macros 0.27.2",
+ "zk_ee 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+]
+
+[[package]]
+name = "system_hooks"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "arrayvec",
@@ -14483,7 +14650,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -14493,7 +14660,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -15052,7 +15219,7 @@ dependencies = [
 [[package]]
 name = "trace_and_split"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -15093,7 +15260,7 @@ dependencies = [
 [[package]]
 name = "trace_holder"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "worker 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -15313,7 +15480,7 @@ dependencies = [
 [[package]]
 name = "transcript"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -15577,7 +15744,7 @@ checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 [[package]]
 name = "unified_reduced_machine"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "common_constants",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -15589,7 +15756,7 @@ dependencies = [
 [[package]]
 name = "unified_reduced_machine_verifier"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "field 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "unroll",
@@ -15814,7 +15981,7 @@ dependencies = [
 [[package]]
 name = "verifier_common"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "blake2s_u32 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
  "cs 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -15871,7 +16038,7 @@ dependencies = [
 [[package]]
 name = "verifier_generator"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "proc-macro2",
  "prover 0.1.0 (git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev)",
@@ -16149,7 +16316,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -16564,7 +16731,7 @@ dependencies = [
 [[package]]
 name = "worker"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#af42767a2835411ba18a0f45a4e435d692faa8bf"
+source = "git+https://github.com/matter-labs/zksync-airbender-private.git?branch=di%2Ffix%2F87680-fri-fix-dev#dd88c25a631445140ccf8b8819e34267781ada20"
 dependencies = [
  "num_cpus",
  "rayon",
@@ -16837,6 +17004,22 @@ dependencies = [
 [[package]]
 name = "zk_ee"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "arrayvec",
+ "bitflags 2.13.1",
+ "cfg-if",
+ "crypto 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "paste",
+ "ruint",
+ "strum_macros 0.27.2",
+ "zksync_os_evm_errors 0.1.3",
+]
+
+[[package]]
+name = "zk_ee"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "arrayvec",
@@ -16869,7 +17052,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-genesis-gen"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?branch=release%2Fv0.33.0-atomic-interop#3408903ed8296714813b9fab4fd0abf30091168a"
+source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v33-upgrade-flow#54431151614ef2d32688638b804d8334a98ec730"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16887,7 +17070,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-revm"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/zksync-os-revm?tag=v0.2.0#f4ed208451d2d67b2fc1d1db3b5d22ee66196d65"
+source = "git+https://github.com/matter-labs/zksync-os-revm?tag=v0.3.0#32872310b862e98bfa00a2f7c7ac701b83621066"
 dependencies = [
  "auto_impl",
  "revm",
@@ -16896,8 +17079,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_alloy_ext"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "serde",
@@ -16946,8 +17129,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_backpressure"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "futures",
  "reth-tasks",
@@ -16963,8 +17146,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_base_token_adjuster"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16982,8 +17165,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_types"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17003,12 +17186,13 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batch_verification"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "reth-tasks",
  "secrecy",
  "thiserror 2.0.20",
  "tokio",
@@ -17029,16 +17213,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_batcher_metrics"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "vise",
 ]
 
 [[package]]
 name = "zksync_os_config_validation_macros"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -17047,8 +17231,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_consensus_types"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "openraft",
  "reth-network-peers",
@@ -17057,8 +17241,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_contract_interface"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17074,8 +17258,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_crypto"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "blake2",
@@ -17096,8 +17280,8 @@ checksum = "d9dfbba34ae7617db056b0e3a74a67c9cab1c93457f6b1cfbf7cee3ff34db01e"
 
 [[package]]
 name = "zksync_os_external_price_api"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17116,8 +17300,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_gas_adjuster"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17132,8 +17316,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_genesis"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17177,8 +17361,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_internal_config"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17189,8 +17373,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_sender"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17214,8 +17398,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_l1_watcher"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17238,8 +17422,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_mempool"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17277,8 +17461,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17294,8 +17478,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_merkle_tree_api"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17305,16 +17489,16 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_metadata"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "semver 1.0.28",
 ]
 
 [[package]]
 name = "zksync_os_mini_merkle_tree"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "once_cell",
@@ -17324,8 +17508,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_multivm"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17333,6 +17517,7 @@ dependencies = [
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.0.30-interface-v0.1.3)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.1.2-interface-v0.1.3-2026-02-10)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-interface-v0.1.3-2026-02-10)",
+ "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3)",
  "forward_system 0.1.0 (git+https://github.com/matter-labs/zksync-os.git?tag=v0.5.3-private)",
  "reqwest 0.12.28",
@@ -17345,8 +17530,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_native_pig"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17364,8 +17549,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_network"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -17400,8 +17585,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_observability"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -17430,8 +17615,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_operator_signer"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "alloy-signer",
@@ -17450,8 +17635,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_pipeline"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -17466,8 +17651,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_priority_tree"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17489,8 +17674,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_provider"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17505,8 +17690,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_raft"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -17531,8 +17716,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_replay_archive"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "age",
  "age-core",
@@ -17563,8 +17748,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_reth_compat"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "reth-chainspec",
@@ -17575,13 +17760,15 @@ dependencies = [
  "reth-storage-api",
  "reth-trie-common",
  "zksync_os_api 0.1.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3)",
+ "zksync_os_interface 0.1.3",
  "zksync_os_storage_api",
+ "zksync_os_types",
 ]
 
 [[package]]
 name = "zksync_os_revm_consistency_checker"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17617,8 +17804,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rocksdb"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "num_cpus",
  "once_cell",
@@ -17630,8 +17817,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17687,8 +17874,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_rpc_api"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -17738,6 +17925,17 @@ dependencies = [
 [[package]]
 name = "zksync_os_runner"
 version = "0.1.0"
+source = "git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10#2b7bde28a273cf09ffde7df5ecdbd3434bf974a7"
+dependencies = [
+ "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.2.10-simulation-only-interface-v0.1.3-2026-02-10)",
+ "execution_utils 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3-2026-02-10)",
+ "prover_examples 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3-2026-02-10)",
+ "risc_v_simulator 0.1.0 (git+https://github.com/matter-labs/zksync-airbender?tag=v0.4.3-2026-02-10)",
+]
+
+[[package]]
+name = "zksync_os_runner"
+version = "0.1.0"
 source = "git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3#b76084f3e93b23c13f4f2506cb46f0da1497a4b8"
 dependencies = [
  "cycle_marker 0.0.0 (git+https://github.com/matter-labs/zksync-os?tag=v0.3.2-interface-v0.1.3)",
@@ -17748,8 +17946,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_sequencer"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17783,8 +17981,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_server"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17877,8 +18075,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_state_full_diffs"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17895,8 +18093,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_status_server"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "anyhow",
  "axum",
@@ -17911,15 +18109,18 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
  "bincode 2.0.1",
  "dashmap 6.2.1",
  "roaring",
+ "semver 1.0.28",
+ "serde",
  "serde_json",
+ "serde_with",
  "tokio",
  "tracing",
  "vise",
@@ -17934,8 +18135,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_storage_api"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "alloy-rlp",
@@ -17964,8 +18165,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_tx_validators"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17984,8 +18185,8 @@ dependencies = [
 
 [[package]]
 name = "zksync_os_types"
-version = "0.23.0"
-source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#5ecf76b0cd341f11e8985333e0507adebe836fa7"
+version = "0.23.1"
+source = "git+https://github.com/matter-labs/zksync-os-server-private?branch=main#dc6c0198284a03d2538440a64a66a598a3a50cb5"
 dependencies = [
  "alloy",
  "alloy-rlp",
