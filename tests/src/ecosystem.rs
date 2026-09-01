@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::activity::{max_activity_chains, ActivityConfig, ACTIVITY_WALLET_KEYS};
 use crate::chain::Chain;
 use crate::server_runtime::ChainRuntime;
 use crate::workdir::WorkDir;
@@ -9,6 +10,12 @@ use alloy::primitives::Address;
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use lib_server::{load_config_from_yaml, Server};
+
+/// How long [`Ecosystem::start_activity`] waits for each enabled flow
+/// to produce its first successful tick before giving up. Generous: the first
+/// L1→L2 deposit needs an L1 tx plus its receipt, and tests run several servers
+/// on one machine.
+const ACTIVITY_WARMUP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 /// A fully-resolved description of one chain to bring up: its identity, the
 /// deployment-slice config layers to load (`[base, deployment.yaml]`), the
@@ -33,9 +40,10 @@ pub(crate) struct ChainSpec {
 /// Obtain via the `ecosystem` fixture (fresh deploy) or `fixtures::restore`
 /// (committed snapshot).
 pub struct Ecosystem {
+    // Drop order matters (Rust drops fields top-to-bottom): chains first — each
+    // owns its background-activity tasks, which must abort before the servers
+    // they talk to — then servers, then Anvil, then workdir.
     chains: Vec<Chain>,
-
-    // Drop order matters: servers first, then Anvil, then workdir.
     _servers: Vec<Server>,
     _anvil: AnvilInstance,
     _workdir: Arc<WorkDir>,
@@ -53,7 +61,7 @@ impl Ecosystem {
         let l1_rpc = anvil.endpoint();
         let mut chains = Vec::with_capacity(specs.len());
         let mut servers = Vec::with_capacity(specs.len());
-        for spec in specs {
+        for (i, spec) in specs.into_iter().enumerate() {
             // Load the deployment-slice layers into the typed Config, then apply
             // this run's runtime values (ports/paths/L1 URL/genesis) on top.
             let mut config = load_config_from_yaml(&spec.config_paths).await;
@@ -68,6 +76,7 @@ impl Ecosystem {
                 l1_rpc.clone(),
                 spec.runtime.l2_rpc_url(),
                 spec.wallets,
+                i,
             ));
             servers.push(server);
         }
@@ -99,5 +108,62 @@ impl Ecosystem {
     /// The workdir backing this ecosystem (forge IO, fixture outputs).
     pub fn workdir(&self) -> &Path {
         self._workdir.path()
+    }
+
+    /// Start background activity on every chain in this ecosystem and wait until
+    /// each enabled flow has produced its first successful submission. Each chain
+    /// owns its run (aborted, no verdict, when the ecosystem drops) — this is the
+    /// "noise while a test runs" use case. For an explicit pass/fail verdict,
+    /// drive a single chain via [`Chain::start_activity`] +
+    /// [`Chain::finish_activity`].
+    ///
+    /// The warm-up wait matters: a fixture-driven test does not take the verdict
+    /// itself, so without it a silently-dead noise loop would let a test pass
+    /// against an idle chain. Panics if a flow fails or never ticks within
+    /// [`ACTIVITY_WARMUP_TIMEOUT`].
+    ///
+    /// Panics if there are more chains than the activity-wallet pool can serve
+    /// ([`max_activity_chains`]), since each chain needs its own two wallets.
+    pub async fn start_activity(&self, config: ActivityConfig) {
+        let max_chains = max_activity_chains(ACTIVITY_WALLET_KEYS.len());
+        assert!(
+            self.chains.len() <= max_chains,
+            "cannot run background activity on {} chains — the wallet pool serves at most {}",
+            self.chains.len(),
+            max_chains
+        );
+
+        for chain in &self.chains {
+            chain.start_activity(config.clone());
+        }
+
+        // Fail fast at fixture time if a flow can't get going.
+        let deadline = std::time::Instant::now() + ACTIVITY_WARMUP_TIMEOUT;
+        for chain in &self.chains {
+            loop {
+                assert!(
+                    !chain.activity_failed(),
+                    "background activity on chain {} failed during warm-up",
+                    chain.chain_id()
+                );
+                let l2_ready =
+                    config.l2_transfers.is_none() || chain.activity_transfers_submitted() >= 1;
+                let l1_ready =
+                    config.l1_deposits.is_none() || chain.activity_deposits_submitted() >= 1;
+                if l2_ready && l1_ready {
+                    break;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "background activity on chain {} produced no first tick within {:?} \
+                     (transfers={}, deposits={})",
+                    chain.chain_id(),
+                    ACTIVITY_WARMUP_TIMEOUT,
+                    chain.activity_transfers_submitted(),
+                    chain.activity_deposits_submitted()
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+        }
     }
 }

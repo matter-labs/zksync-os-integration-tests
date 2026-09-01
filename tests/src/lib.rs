@@ -17,6 +17,7 @@
 //!
 //! See `tests/README.md` for the full API reference.
 
+pub mod activity;
 pub mod chain;
 pub mod ecosystem;
 pub mod eth;
@@ -26,6 +27,7 @@ pub mod server_runtime;
 pub(crate) mod workdir;
 
 // Types available via `use tests::*`.
+pub use activity::{ActivityConfig, ActivityReport, FlowConfig, Target};
 pub use chain::{Chain, WALLET_KEYS};
 pub use ecosystem::Ecosystem;
 // Fixture functions are in `tests::fixtures`. Import them explicitly:

@@ -23,6 +23,9 @@ pub fn default_builder() -> Anvil {
         .block_time_f64(0.25)
         .arg("--mixed-mining")
         .args(["--slots-in-an-epoch", "2"])
+        // 20 accounts so HD accounts #10–#19 (the activity wallet pool) are
+        // pre-funded with ETH on L1; default is 10 (only #0–#9).
+        .args(["--accounts", "20"])
 }
 
 pub async fn spawn(builder: Anvil) -> Result<AnvilInstance> {

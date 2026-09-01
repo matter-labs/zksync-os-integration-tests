@@ -1,3 +1,4 @@
+use std::sync::Mutex;
 use std::time::Duration;
 
 use alloy::eips::BlockNumberOrTag;
@@ -7,6 +8,11 @@ use alloy::providers::{Provider, ProviderBuilder};
 use alloy::rpc::types::{TransactionReceipt, TransactionRequest};
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context as _, Result};
+
+use crate::activity::{
+    deposit_wallet_index, run_l1_deposits, run_l2_transfers, self_transfer, transfer_wallet_index,
+    ActivityConfig, ActivityHandle, ActivityReport, ActivityState, ACTIVITY_WALLET_KEYS,
+};
 
 /// Pre-funded test wallets, each rich on L2 after setup. These are the same
 /// well-known dev accounts that `zk-deployer` funds by default on local/Anvil
@@ -47,6 +53,16 @@ pub struct Chain {
     pub(crate) l1_rpc: String,
     pub(crate) l2_rpc: String,
     pub(crate) wallets: Vec<PrivateKeySigner>,
+    /// This chain's position in its ecosystem. Selects the chain's two dedicated
+    /// activity wallets from `activity::ACTIVITY_WALLET_KEYS` (transfer wallet at
+    /// `2*pos`, deposit wallet at `2*pos+1`). Set by `Ecosystem::assemble`; 0 for
+    /// chains built outside an ecosystem.
+    pub(crate) activity_chain_index: usize,
+    /// The background activity currently running on this chain, if any. `Some`
+    /// while activity runs; `finish_activity`/`stop_activity` take it out (and
+    /// return the verdict), and chain teardown drops it (aborting the loops).
+    /// Acts as the single-run guard: starting while it is `Some` panics.
+    pub(crate) running_activity: Mutex<Option<ActivityHandle>>,
 }
 
 impl Chain {
@@ -58,6 +74,7 @@ impl Chain {
         l1_rpc: String,
         l2_rpc: String,
         wallets: Vec<PrivateKeySigner>,
+        activity_chain_index: usize,
     ) -> Self {
         Self {
             chain_id,
@@ -65,6 +82,8 @@ impl Chain {
             l1_rpc,
             l2_rpc,
             wallets,
+            activity_chain_index,
+            running_activity: Mutex::new(None),
         }
     }
 
@@ -161,8 +180,150 @@ impl Chain {
 
     /// 1 wei self-transfer from `wallet(0)` — gives the sequencer work to seal a batch.
     pub async fn ping(&self) -> Result<TxHash> {
-        let addr = self.wallet(0).address();
-        self.transfer(addr, U256::from(1u64)).await
+        self_transfer(&self.l2_rpc, &self.wallet(0).clone()).await
+    }
+
+    /// Start background activity ("noise") on this chain per `config`.
+    ///
+    /// Spawns one tokio task per enabled flow; the chain owns the run. Control it
+    /// with [`pause_activity`](Self::pause_activity) /
+    /// [`resume_activity`](Self::resume_activity) and end it with a
+    /// finalized-or-fail verdict via [`finish_activity`](Self::finish_activity)
+    /// (waits for the configured targets) or [`stop_activity`](Self::stop_activity)
+    /// (ends early). Each chain uses its own two activity wallets (transfer +
+    /// deposit), so flows never race on nonces.
+    ///
+    /// Panics if activity is already running on this chain — two loops would race
+    /// on the same activity wallets. End the existing run first.
+    pub fn start_activity(&self, config: ActivityConfig) {
+        let mut slot = self.running_activity.lock().unwrap();
+        if slot.is_some() {
+            panic!(
+                "background activity already running on chain {} — \
+                 finish_activity/stop_activity before starting again",
+                self.chain_id
+            );
+        }
+
+        let state = ActivityState::new();
+        let mut tasks = Vec::new();
+
+        if let Some(flow) = config.l2_transfers {
+            let key = ACTIVITY_WALLET_KEYS[transfer_wallet_index(self.activity_chain_index)];
+            let signer: PrivateKeySigner = key.parse().expect("parse transfer wallet key");
+            tasks.push(tokio::spawn(run_l2_transfers(
+                self.l2_rpc.clone(),
+                signer,
+                flow,
+                state.clone(),
+            )));
+        }
+
+        let deposit_recipient = config.l1_deposits.map(|flow| {
+            let depositor_sk =
+                ACTIVITY_WALLET_KEYS[deposit_wallet_index(self.activity_chain_index)].to_string();
+            let recipient = depositor_sk
+                .parse::<PrivateKeySigner>()
+                .expect("parse deposit wallet key")
+                .address();
+            tasks.push(tokio::spawn(run_l1_deposits(
+                self.l1_rpc.clone(),
+                self.l2_rpc.clone(),
+                self.bridgehub_addr,
+                self.chain_id,
+                depositor_sk,
+                recipient,
+                flow,
+                state.clone(),
+            )));
+            recipient
+        });
+
+        *slot = Some(ActivityHandle::new(
+            state,
+            tasks,
+            self.l2_rpc.clone(),
+            deposit_recipient,
+        ));
+    }
+
+    /// Pause submissions from the running activity. Panics if none is running.
+    pub fn pause_activity(&self) {
+        self.running_activity
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("no background activity running on this chain")
+            .pause();
+    }
+
+    /// Resume after [`pause_activity`](Self::pause_activity). Panics if none is
+    /// running.
+    pub fn resume_activity(&self) {
+        self.running_activity
+            .lock()
+            .unwrap()
+            .as_ref()
+            .expect("no background activity running on this chain")
+            .resume();
+    }
+
+    /// Wait for every flow to reach its target, then verify finalization and
+    /// return the verdict. For bounded configs (`Count`/`Duration`); for an
+    /// `Unbounded` flow use [`stop_activity`](Self::stop_activity).
+    ///
+    /// `Err` if any submitted transaction failed to finalize (revert, drop,
+    /// timeout) or a loop died. Errors if no activity is running.
+    pub async fn finish_activity(&self) -> Result<ActivityReport> {
+        // Take the handle out before awaiting — a std Mutex guard cannot be held
+        // across .await, and removing it here also clears the single-run guard.
+        let handle = self
+            .running_activity
+            .lock()
+            .unwrap()
+            .take()
+            .context("no background activity running on this chain")?;
+        handle.await_done().await
+    }
+
+    /// Stop all flows now, then verify finalization of everything submitted so
+    /// far and return the verdict. Use for `Unbounded` configs or to end early.
+    /// Errors if no activity is running.
+    pub async fn stop_activity(&self) -> Result<ActivityReport> {
+        let handle = self
+            .running_activity
+            .lock()
+            .unwrap()
+            .take()
+            .context("no background activity running on this chain")?;
+        handle.stop().await
+    }
+
+    /// L2 self-transfers submitted by the running activity so far (0 if none).
+    pub(crate) fn activity_transfers_submitted(&self) -> u64 {
+        self.running_activity
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(0, |h| h.transfers_submitted())
+    }
+
+    /// L1→L2 deposits submitted by the running activity so far (0 if none).
+    pub(crate) fn activity_deposits_submitted(&self) -> u64 {
+        self.running_activity
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map_or(0, |h| h.deposits_submitted())
+    }
+
+    /// True if the running activity has given up after repeated errors.
+    pub(crate) fn activity_failed(&self) -> bool {
+        self.running_activity
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|h| h.failed())
     }
 
     /// L2 ETH balance of `addr`.
