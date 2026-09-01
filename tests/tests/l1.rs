@@ -3,7 +3,7 @@ use alloy::primitives::U256;
 use alloy::rpc::types::TransactionRequest;
 use anyhow::Result;
 use rstest::rstest;
-use tests::fixtures::{ecosystem, ChainDef, ValidiumDa};
+use tests::fixtures::{ecosystem, ChainDef};
 use tests::Ecosystem;
 
 /// Verify the full commit → prove → execute → finalize pipeline.
@@ -39,18 +39,16 @@ async fn two_chains_settle_on_l1(
     Ok(())
 }
 
-/// The calldata and no-DA validium flavors commit/prove/execute on L1. (The blobs
-/// flavor is covered end-to-end by the atomic-swap test.) Calldata exercises the
-/// rollup DA validator's `PUBDATA_SOURCE_CALLDATA` branch with the explicit
-/// `BlobsAndPubdataKeccak256` scheme override; no-DA exercises the
-/// `PubdataPricingMode.Validium` + `EmptyNoDA` registration.
+/// A logs-only validium commits/proves/executes on L1 alongside a rollup: it registers with
+/// the same blobs DA validator and rollup pricing mode, and differs only in the pubdata
+/// content its diamond was initialized with.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
-async fn validium_da_flavors_settle_on_l1(
+async fn logs_only_validium_settles_on_l1(
     #[future]
     #[with(vec![
-        ChainDef::validium(6565, ValidiumDa::Calldata),
-        ChainDef::validium(6566, ValidiumDa::NoDa),
+        ChainDef::logs_only_validium(6565),
+        ChainDef::rollup(6566),
     ])]
     ecosystem: Ecosystem,
 ) -> Result<()> {

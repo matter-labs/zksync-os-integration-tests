@@ -42,7 +42,7 @@ use rstest::rstest;
 use serde::Deserialize;
 use tokio::time::sleep;
 
-use tests::fixtures::{ecosystem, ChainDef, ValidiumDa};
+use tests::fixtures::{ecosystem, ChainDef};
 use tests::Ecosystem;
 
 // ── Canonical L2 built-in addresses (mirror contracts/common/l2-helpers/L2ContractAddresses.sol) ──
@@ -655,7 +655,7 @@ async fn atomic_swap_l1_settled(
     #[future]
     #[with(vec![
         ChainDef::rollup(6565),
-        ChainDef::validium(6566, ValidiumDa::Blobs)
+        ChainDef::logs_only_validium(6566)
     ])]
     ecosystem: Ecosystem,
 ) -> Result<()> {

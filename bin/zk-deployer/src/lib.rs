@@ -5,8 +5,6 @@ pub mod funding;
 pub mod identity;
 pub mod intent;
 pub mod l1_l2_deposit;
-pub(crate) mod pubdata;
-
 // Deployment internals (step journal, resolved addresses). Consumers go
 // through `deployed::DeployedEcosystem` instead.
 pub(crate) mod resolved;
