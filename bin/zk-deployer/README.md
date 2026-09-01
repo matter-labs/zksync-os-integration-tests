@@ -28,11 +28,26 @@ schema_version: 1
 
 chains:
   - chain_id: 6565
-    da_mode: rollup     # rollup, logs_only_validium, or avail
+    da_mode: rollup     # rollup, avail, or a validium (see below)
 ```
 
 Declare more entries under `chains:` to deploy multiple L1-settling chains on
 the same L1.
+
+A validium chain's pubdata carries only the mandatory L2→L1 log region
+(`PubdataContent.LOGS_ONLY`) — state diffs stay private. The validium picks
+where that logs-only pubdata goes (serde_yaml tagged syntax):
+
+```yaml
+    da_mode: !validium blobs      # EIP-4844 blobs, like a rollup
+    da_mode: !validium calldata   # commit-tx calldata
+    da_mode: !validium no_da      # nothing posted (EmptyNoDA)
+```
+
+`blobs`/`calldata` keep the on-chain `PubdataPricingMode` at `Rollup` (the
+server refuses to post pubdata for a `Validium`-priced chain) and keep interop
+(IMT) data reconstructible from L1; `no_da` is the only flavor that registers
+with `PubdataPricingMode.Validium`. See `DaMode::Validium` in `src/intent.rs`.
 
 ### 3. Bootstrap the ecosystem
 

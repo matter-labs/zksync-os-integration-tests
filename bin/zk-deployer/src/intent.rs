@@ -10,13 +10,32 @@ use serde::{Deserialize, Serialize};
 pub enum DaMode {
     /// Publishes the whole pubdata on L1, through blobs.
     Rollup,
-    /// Publishes only the mandatory L2->L1 log region on L1 — including the interop commitment tree
-    /// leaves, which is what keeps the chain interop-capable — and drops the state diffs and the
-    /// message preimages. That region still goes into blobs, so such a chain runs the same L1 DA
-    /// validator a rollup does and differs from it only in its `PubdataContent`.
-    LogsOnlyValidium,
-    /// Hands the full pubdata to Avail.
     Avail,
+    /// Validium: the chain's pubdata carries only the mandatory L2->L1 log region
+    /// (`PubdataContent.LOGS_ONLY`) — state diffs are never published. The payload
+    /// picks where that logs-only pubdata goes.
+    ///
+    /// YAML syntax (serde_yaml tagged enum): `da_mode: !validium blobs`.
+    Validium(ValidiumDa),
+}
+
+/// Where a validium chain posts its logs-only pubdata.
+///
+/// `Blobs`/`Calldata` keep the on-chain `PubdataPricingMode` at `Rollup`: the server
+/// refuses to start when posting pubdata for a `Validium`-priced chain, and interop
+/// (IMT) data stays reconstructible from L1 — the atomic-interop participant
+/// configurations. `NoDa` posts nothing and is the only flavor that sets the
+/// pricing mode to `Validium`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidiumDa {
+    /// EIP-4844 blobs, via the ZKsync OS blobs DA validator (like a rollup).
+    Blobs,
+    /// Commit-tx calldata, via the standard rollup DA validator
+    /// (`BlobsAndPubdataKeccak256` commitment scheme).
+    Calldata,
+    /// Nothing posted (`EmptyNoDA` scheme, no-DA validator).
+    NoDa,
 }
 
 /// A custom (non-ETH) base token. If `address` is absent the token is deployed
@@ -74,5 +93,31 @@ impl IntentConfig {
             .first()
             .map(|c| c.chain_id)
             .context("intent has no chains")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Locks the intent-YAML shape of `da_mode`, including serde_yaml's tagged
+    /// syntax for the validium payload — hand-written intents depend on it, and
+    /// the test-cache key hashes the serialized form.
+    #[test]
+    fn da_mode_yaml_roundtrip() {
+        for (mode, yaml) in [
+            (DaMode::Rollup, "rollup\n"),
+            (DaMode::Avail, "avail\n"),
+            (DaMode::Validium(ValidiumDa::Blobs), "!validium blobs\n"),
+            (
+                DaMode::Validium(ValidiumDa::Calldata),
+                "!validium calldata\n",
+            ),
+            (DaMode::Validium(ValidiumDa::NoDa), "!validium no_da\n"),
+        ] {
+            assert_eq!(serde_yaml::to_string(&mode).unwrap(), yaml);
+            let parsed: DaMode = serde_yaml::from_str(yaml).unwrap();
+            assert_eq!(serde_yaml::to_string(&parsed).unwrap(), yaml);
+        }
     }
 }

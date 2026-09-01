@@ -4,7 +4,7 @@ use rstest::fixture;
 use zk_deployer::commands::apply::ApplyArgs;
 use zk_deployer::commands::bootstrap::BootstrapArgs;
 use zk_deployer::deployed::DeployedEcosystem;
-use zk_deployer::intent::{ChainIntent, DaMode, IntentConfig, WalletsIntent};
+use zk_deployer::intent::{ChainIntent, DaMode, IntentConfig, ValidiumDa, WalletsIntent};
 
 use crate::chain::WALLET_KEYS;
 use crate::ecosystem::{ChainSpec, Ecosystem};
@@ -14,6 +14,32 @@ use zk_deployer::anvil::{default_builder, save_state, spawn, spawn_from_file};
 
 use super::cache;
 
+/// Per-chain deployment shape for the [`ecosystem`] fixture.
+#[derive(Debug, Clone)]
+pub struct ChainDef {
+    pub chain_id: u64,
+    pub da_mode: DaMode,
+}
+
+impl ChainDef {
+    pub fn rollup(chain_id: u64) -> Self {
+        Self {
+            chain_id,
+            da_mode: DaMode::Rollup,
+        }
+    }
+
+    /// Validium (LOGS_ONLY pubdata) posting via the chosen DA — see
+    /// [`ValidiumDa`] for the flavors and their on-chain pricing-mode
+    /// consequences.
+    pub fn validium(chain_id: u64, da: ValidiumDa) -> Self {
+        Self {
+            chain_id,
+            da_mode: DaMode::Validium(da),
+        }
+    }
+}
+
 /// Full setup for N L1-settling chains on one Anvil L1: bootstrap + apply
 /// (which funds every [`WALLET_KEYS`] wallet on each chain via L1→L2 deposits)
 /// + one server per chain.
@@ -21,8 +47,8 @@ use super::cache;
 /// The deployment half (everything `apply` does, including the deposits) is
 /// cached on disk under `.zkos-test-cache/` — see [`cache`] for the key
 /// inputs and the `ZKOS_CACHE` knob. Servers always start fresh.
-pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
-    assert!(!chain_ids.is_empty(), "need at least one chain");
+pub(super) async fn setup_l1_chains(chains: &[ChainDef]) -> Ecosystem {
+    assert!(!chains.is_empty(), "need at least one chain");
     super::init_logging();
 
     let workdir = Arc::new(WorkDir::new().expect("create workdir"));
@@ -38,12 +64,12 @@ pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
             ecosystem_seed: Some("test-ecosystem".to_string()),
             path: None,
         },
-        chains: chain_ids
+        chains: chains
             .iter()
-            .map(|&chain_id| ChainIntent {
-                chain_id,
+            .map(|def| ChainIntent {
+                chain_id: def.chain_id,
                 base_token: None,
-                da_mode: DaMode::Rollup,
+                da_mode: def.da_mode.clone(),
             })
             .collect(),
     };
@@ -135,9 +161,9 @@ pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
 
     let genesis_path = ecosystem_dir.join("genesis.json");
 
-    let mut specs: Vec<ChainSpec> = Vec::with_capacity(chain_ids.len());
+    let mut specs: Vec<ChainSpec> = Vec::with_capacity(chains.len());
 
-    for &chain_id in chain_ids {
+    for &ChainDef { chain_id, .. } in chains {
         let rt = ChainRuntime::allocate(workdir.path(), &chain_id.to_string());
         // Deployment slice only — ports/paths/L1 URL are applied onto the typed
         // Config by `rt` during `Ecosystem::assemble`.
@@ -183,15 +209,16 @@ pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
 /// N L1-settling chains on one Anvil L1, each fully bootstrapped with three
 /// pre-funded wallets.
 ///
-/// **Default**: a single chain with ID 6565. Override with `#[with(vec![...])]`
-/// to choose how many chains and their IDs:
+/// **Default**: a single rollup chain with ID 6565. Override with
+/// `#[with(vec![...])]` to choose how many chains, their IDs, and their shape
+/// (see [`ChainDef`]):
 ///
 /// ```ignore
 /// #[rstest]
 /// #[tokio::test(flavor = "multi_thread")]
 /// async fn two_chains(
 ///     #[future]
-///     #[with(vec![6565, 6566])]
+///     #[with(vec![ChainDef::rollup(6565), ChainDef::validium(6566, ValidiumDa::Blobs)])]
 ///     ecosystem: Ecosystem,
 /// ) -> anyhow::Result<()> {
 ///     let eco = ecosystem.await;
@@ -206,6 +233,8 @@ pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
 /// Batch 1 is already finalized on every chain when the fixture returns —
 /// wallets are funded and the chains are ready for test operations.
 #[fixture]
-pub async fn ecosystem(#[default(vec![super::TEST_CHAIN_ID])] chains: Vec<u64>) -> Ecosystem {
+pub async fn ecosystem(
+    #[default(vec![ChainDef::rollup(super::TEST_CHAIN_ID)])] chains: Vec<ChainDef>,
+) -> Ecosystem {
     setup_l1_chains(&chains).await
 }

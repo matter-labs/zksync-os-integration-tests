@@ -1,6 +1,9 @@
+use alloy::network::TransactionBuilder;
+use alloy::primitives::U256;
+use alloy::rpc::types::TransactionRequest;
 use anyhow::Result;
 use rstest::rstest;
-use tests::fixtures::ecosystem;
+use tests::fixtures::{ecosystem, ChainDef, ValidiumDa};
 use tests::Ecosystem;
 
 /// Verify the full commit → prove → execute → finalize pipeline.
@@ -18,7 +21,7 @@ async fn chain_executes_a_batch(#[future] ecosystem: Ecosystem) -> Result<()> {
 #[tokio::test(flavor = "multi_thread")]
 async fn two_chains_settle_on_l1(
     #[future]
-    #[with(vec![6565, 6566])]
+    #[with(vec![ChainDef::rollup(6565), ChainDef::rollup(6566)])]
     ecosystem: Ecosystem,
 ) -> Result<()> {
     let eco = ecosystem.await;
@@ -29,6 +32,42 @@ async fn two_chains_settle_on_l1(
     let mut pings = Vec::new();
     for chain in eco.chains() {
         pings.push(chain.ping().await?);
+    }
+    for (chain, hash) in eco.chains().zip(pings) {
+        chain.wait_for_tx_finalized(hash).await?;
+    }
+    Ok(())
+}
+
+/// The calldata and no-DA validium flavors commit/prove/execute on L1. (The blobs
+/// flavor is covered end-to-end by the atomic-swap test.) Calldata exercises the
+/// rollup DA validator's `PUBDATA_SOURCE_CALLDATA` branch with the explicit
+/// `BlobsAndPubdataKeccak256` scheme override; no-DA exercises the
+/// `PubdataPricingMode.Validium` + `EmptyNoDA` registration.
+#[rstest]
+#[tokio::test(flavor = "multi_thread")]
+async fn validium_da_flavors_settle_on_l1(
+    #[future]
+    #[with(vec![
+        ChainDef::validium(6565, ValidiumDa::Calldata),
+        ChainDef::validium(6566, ValidiumDa::NoDa),
+    ])]
+    ecosystem: Ecosystem,
+) -> Result<()> {
+    let eco = ecosystem.await;
+
+    let mut pings = Vec::new();
+    for chain in eco.chains() {
+        // Explicit gas limit instead of ping()'s eth_estimateGas: on a calldata-priced
+        // chain (pubdata ~17 gwei vs ~0.1 gwei basefee) estimation-sized transfers are
+        // currently rejected by the pool as "intrinsic gas too low" — a server-side
+        // estimation/validation mismatch, orthogonal to the DA settlement this test covers.
+        let self_addr = chain.wallet(0).address();
+        let tx = TransactionRequest::default()
+            .with_to(self_addr)
+            .with_value(U256::from(1u64))
+            .with_gas_limit(1_000_000);
+        pings.push(chain.send_tx(tx).await?);
     }
     for (chain, hash) in eco.chains().zip(pings) {
         chain.wait_for_tx_finalized(hash).await?;

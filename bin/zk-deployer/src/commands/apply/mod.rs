@@ -8,7 +8,7 @@ use protocol_ops::commands::chain::init::{chain_init, ChainInitInput, ChainInitO
 
 use crate::commands::execute_manifest::{apply_manifest_from, count_manifest_bundles};
 use crate::commands::server_config::resolve_base_token_addr;
-use crate::intent::{ChainIntent, DaMode, IntentConfig};
+use crate::intent::{ChainIntent, DaMode, IntentConfig, ValidiumDa};
 use crate::resolved::ResolvedEcosystem;
 use crate::state::{ChainInitPreparedOutput, State, StepKey};
 use protocol_ops::common::forge::scripts::register_chain::NewChainParams;
@@ -22,7 +22,7 @@ use protocol_ops::common::{
     wallets::load_wallets,
     PrivateKey,
 };
-use protocol_ops::types::{DAValidatorType, L2ChainId, PubdataContent, VMOption};
+use protocol_ops::types::{DAValidatorType, L2ChainId, L2DACommitmentScheme, VMOption};
 
 #[derive(Parser, Debug)]
 pub struct ApplyArgs {
@@ -134,7 +134,8 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
             // ETH base token (intent has no `base_token`) registers as the protocol
             // sentinel address; a custom token resolves to its deployed/declared addr.
             let base_token_addr = resolve_base_token_addr(chain, &state)?.unwrap_or(ETH_BASE_TOKEN);
-            let (da_type, l1_da_validator) = resolve_da(chain, vm_type, &eco)?;
+            let (da_type, l1_da_validator, l2_da_commitment_scheme) =
+                resolve_da(chain, vm_type, &eco)?;
 
             let chain_id = L2ChainId::new(chain.chain_id).map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -158,13 +159,8 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 l1_da_validator,
                 chain_params,
                 vm_type,
-                l2_da_commitment_scheme: None,
-                pubdata_content: Some(resolve_pubdata_content(chain)),
-                with_legacy_bridge: false,
-                // Every chain in one intent is meant to interop with the others, and each chain is
-                // registered as it is created (pairs whose counterpart does not exist yet get picked
-                // up when that chain runs this step).
-                register_for_interop: true,
+                l2_da_commitment_scheme,
+                register_for_interop: false,
                 create2_factory_salt: None,
                 pause_deposits: false,
                 evm_emulator: false,
@@ -263,6 +259,52 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
             state.save(&args.state)?;
         }
 
+        // Validium chains: flip the diamond from the FULL_PUBDATA default to
+        // LOGS_ONLY. Must happen before the chain commits its first batch (the
+        // server reads getPubdataContent() at startup and the Executor pins it
+        // into every batch proof), which holds here: servers only start after
+        // apply completes.
+        let pubdata_key = StepKey::ChainPubdataContentSet(chain.chain_id);
+        if matches!(chain.da_mode, DaMode::Validium(_))
+            && state.is_done(&applied_key)
+            && !state.is_done(&pubdata_key)
+        {
+            logger::step(format!(
+                "Setting LOGS_ONLY pubdata content for chain {}...",
+                chain.chain_id
+            ));
+            let prepared: ChainInitPreparedOutput = state
+                .get_output(&prepared_key)
+                .with_context(|| format!("{} not found in state", prepared_key))?;
+            let chain_wallets = wallets
+                .chains
+                .get(&chain.chain_id.to_string())
+                .with_context(|| format!("chain {} not found in wallets.yaml", chain.chain_id))?;
+            let owner = chain_wallets.owner.private_key.as_ref().with_context(|| {
+                format!(
+                    "owner wallet for chain {} has no private key in wallets.yaml — \
+                     required to set the pubdata content via ChainAdmin",
+                    chain.chain_id
+                )
+            })?;
+            if preflight::is_local_rpc(&l1_rpc_url) {
+                crate::funding::fund(&l1_rpc_url, &deployer_key, chain_wallets.owner.address)
+                    .await
+                    .context("funding chain owner for setPubdataContent")?;
+            }
+            crate::pubdata::set_logs_only_pubdata_content(
+                &l1_rpc_url,
+                owner,
+                prepared.chain_admin,
+                prepared.diamond_proxy,
+            )
+            .await
+            .with_context(|| format!("setting LOGS_ONLY on chain {}", chain.chain_id))?;
+
+            state.mark_done(&pubdata_key, &serde_json::json!({}))?;
+            state.save(&args.state)?;
+        }
+
         // Fund the well-known dev wallets on L2 so the chain is ready to
         // operate. Deposits are L1 priority txs (no server needed) processed in
         // the chain's first batch. Local/Anvil only, and requires the chain to
@@ -354,62 +396,42 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
 /// Protocol sentinel address used for an ETH base token.
 const ETH_BASE_TOKEN: Address = address!("0x0000000000000000000000000000000000000001");
 
-/// Which part of the pubdata the chain's batches commit to.
+/// Resolve a chain's DA registration inputs: the `DAValidatorType` passed to
+/// `register_chain` (which derives the on-chain `PubdataPricingMode` from
+/// `!= Rollup`), the L1 DA validator, and an optional L2 commitment-scheme
+/// override for cases the default `da_type + vm_type` derivation gets wrong.
 ///
-/// A rollup commits and publishes everything; a `logs_only_validium` commits exactly the region its
-/// name says, which is what keeps its interop-commitment (IMT) leaves reconstructible from L1. A
-/// custom-DA chain (`avail`) hands the *full* pubdata to its DA layer and commits a hash over it, so
-/// it stays `FullPubdata`.
-///
-/// The value is part of the batch public input (through the ZKsync OS chain config hash), so it must
-/// match what the chain's server and prover run with. The server derives it from L1 state
-/// (matter-labs/zksync-os-server#1530); a `logs_only_validium` chain needs a server carrying that
-/// change, since older ones prove `FullPubdata` unconditionally, plus
-/// matter-labs/zksync-os-server#1551 so the node stops requiring a hand-configured pubdata mode.
-fn resolve_pubdata_content(chain: &ChainIntent) -> PubdataContent {
-    match chain.da_mode {
-        DaMode::LogsOnlyValidium => PubdataContent::LogsOnly,
-        DaMode::Rollup | DaMode::Avail => PubdataContent::FullPubdata,
-    }
-}
-
+/// What makes a chain a validium is NOT this registration shape — it is the
+/// LOGS_ONLY pubdata content set on the diamond as a post-init step. Blobs and
+/// calldata validiums register exactly like rollups (Rollup pricing mode); only
+/// the no-DA flavor registers as `Validium`-priced.
 fn resolve_da(
     chain: &ChainIntent,
     vm_type: VMOption,
     eco: &ResolvedEcosystem,
-) -> anyhow::Result<(DAValidatorType, Address)> {
-    // A ZKsync OS chain — rollup or logs-only validium — publishes its pubdata through blobs and
-    // therefore runs the same L1 DA validator. A logs-only validium publishes *less* pubdata, not
-    // none: it drops the state diffs and message preimages (`PubdataContent::LogsOnly`, see
-    // `resolve_pubdata_content`) and keeps publishing the L2->L1 log region, which carries the
-    // interop commitment tree leaves.
-    let blobs_validator = || {
-        eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
-            anyhow::anyhow!(
-                "blobs_zksync_os_l1_da_validator not found in state — \
-                 re-run bootstrap to populate it"
-            )
-        })
-    };
-
+) -> anyhow::Result<(DAValidatorType, Address, Option<L2DACommitmentScheme>)> {
     Ok(match chain.da_mode {
-        DaMode::Rollup => {
+        DaMode::Rollup | DaMode::Validium(ValidiumDa::Blobs) => {
             let validator = if vm_type == VMOption::ZKSyncOsVM {
                 blobs_validator()?
             } else {
                 eco.rollup_l1_da_validator
             };
-            (DAValidatorType::Rollup, validator)
+            (DAValidatorType::Rollup, validator, None)
         }
-        DaMode::LogsOnlyValidium => {
-            let validator = if vm_type == VMOption::ZKSyncOsVM {
-                blobs_validator()?
-            } else {
-                eco.no_da_l1_validator
-            };
-            (DAValidatorType::LogsOnlyValidium, validator)
-        }
-        DaMode::Avail => (DAValidatorType::Avail, eco.avail_l1_da_validator),
+        // Calldata pubdata goes through the standard rollup DA validator
+        // (`PUBDATA_SOURCE_CALLDATA` branch). The scheme derived for
+        // Rollup + ZKsync OS would be BlobsZKSyncOS (blobs-only), so the
+        // calldata scheme is overridden explicitly — it must match the
+        // server's `pubdata_mode: Calldata` wire or every commit reverts
+        // with MismatchL2DACommitmentScheme.
+        DaMode::Validium(ValidiumDa::Calldata) => (
+            DAValidatorType::Rollup,
+            eco.rollup_l1_da_validator,
+            Some(L2DACommitmentScheme::BlobsAndPubdataKeccak256),
+        ),
+        DaMode::Validium(ValidiumDa::NoDa) => (DAValidatorType::NoDA, eco.no_da_l1_validator, None),
+        DaMode::Avail => (DAValidatorType::Avail, eco.avail_l1_da_validator, None),
     })
 }
 

@@ -35,7 +35,6 @@ Declare as `#[future] name: Type` parameters on your test function. Import from
 | Fixture | Type | Description |
 |---------|------|-------------|
 | `ecosystem` | `Ecosystem` | N L1-settling ZKsync OS chains on one Anvil L1 (default: one chain, ID 6565), 10 wallets pre-funded with 100 ETH each per chain |
-| `v30_chain::start()` | `Ecosystem` | Frozen v30.2 chain restored from a committed snapshot via `restore()`; used by the protocol-upgrade test. The chain has no test wallets (driven through governor/deployer L1 keys, which are pre-funded in the committed `l1-state`). |
 
 **Restoring a fixed chain:** `fixtures::restore::restore(dir)` brings up an
 `Ecosystem` from a committed snapshot directory (`l1-state.json.gz` +
@@ -238,14 +237,6 @@ async fn transfer_between_wallets(#[future] ecosystem: Ecosystem) {
     assert!(chain.balance(to).await > U256::from(1_000_000_000_000_000_000u128));
 }
 ```
-
-### Example: protocol upgrade
-
-See `tests/tests/upgrade_v30_to_v31.rs` — starts the frozen v30.2 fixture
-(`fixtures::v30_chain`), drives the real upgrade runbook steps
-(`tests::protocol_upgrade`), and verifies post-upgrade deposits.
-
----
 
 ## Deployment Cache
 

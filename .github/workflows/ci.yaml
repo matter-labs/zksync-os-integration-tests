@@ -26,6 +26,8 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
+        with:
+          github_token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Check formatting
         run: cargo fmt --all --check
