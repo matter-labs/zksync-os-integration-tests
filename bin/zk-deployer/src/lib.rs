@@ -1,3 +1,4 @@
+pub mod adopt;
 pub mod anvil;
 pub mod commands;
 pub mod deployed;

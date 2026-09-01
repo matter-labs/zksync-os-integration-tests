@@ -17,6 +17,7 @@
 //!
 //! See `tests/README.md` for the full API reference.
 
+pub mod atomic_swap;
 pub mod chain;
 pub mod ecosystem;
 pub mod eth;

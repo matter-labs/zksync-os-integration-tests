@@ -34,11 +34,14 @@ pub(crate) struct ChainSpec {
 /// (committed snapshot).
 pub struct Ecosystem {
     chains: Vec<Chain>,
+    /// Kept so chains can be added to a running ecosystem (see [`Ecosystem::add_chain`]).
+    specs: Vec<ChainSpec>,
+    l1_rpc: String,
 
     // Drop order matters: servers first, then Anvil, then workdir.
-    _servers: Vec<Server>,
+    servers: Vec<Server>,
     _anvil: AnvilInstance,
-    _workdir: Arc<WorkDir>,
+    workdir: Arc<WorkDir>,
 }
 
 impl Ecosystem {
@@ -53,7 +56,7 @@ impl Ecosystem {
         let l1_rpc = anvil.endpoint();
         let mut chains = Vec::with_capacity(specs.len());
         let mut servers = Vec::with_capacity(specs.len());
-        for spec in specs {
+        for spec in &specs {
             // Load the deployment-slice layers into the typed Config, then apply
             // this run's runtime values (ports/paths/L1 URL/genesis) on top.
             let mut config = load_config_from_yaml(&spec.config_paths).await;
@@ -67,7 +70,7 @@ impl Ecosystem {
                 spec.bridgehub,
                 l1_rpc.clone(),
                 spec.runtime.l2_rpc_url(),
-                spec.wallets,
+                spec.wallets.clone(),
             ));
             servers.push(server);
         }
@@ -78,10 +81,54 @@ impl Ecosystem {
         );
         Ok(Self {
             chains,
-            _servers: servers,
+            specs,
+            l1_rpc,
+            servers,
             _anvil: anvil,
-            _workdir: workdir,
+            workdir,
         })
+    }
+
+    /// Bring up one more chain in this running ecosystem: start a server for the
+    /// already-registered `chain_id` and hand back its [`Chain`] handle.
+    ///
+    /// The chain must already exist on L1 (registered and initialized) — this only adds the node
+    /// side, which is what a test that grows an ecosystem after a protocol upgrade needs.
+    pub async fn add_chain(
+        &mut self,
+        chain_id: u64,
+        bridgehub: Address,
+        server_config: PathBuf,
+        genesis_path: PathBuf,
+        wallets: Vec<PrivateKeySigner>,
+    ) -> Result<()> {
+        let runtime = ChainRuntime::allocate(self.workdir(), &chain_id.to_string());
+        let spec = ChainSpec {
+            chain_id,
+            bridgehub,
+            config_paths: vec![server_config],
+            runtime,
+            genesis_path,
+            wallets,
+        };
+
+        let mut config = load_config_from_yaml(&spec.config_paths).await;
+        spec.runtime
+            .apply_to(&mut config, &self.l1_rpc, &spec.genesis_path);
+        let server = Server::start(config)
+            .await
+            .with_context(|| format!("start server for chain {chain_id}"))?;
+
+        self.chains.push(Chain::new(
+            spec.chain_id,
+            spec.bridgehub,
+            self.l1_rpc.clone(),
+            spec.runtime.l2_rpc_url(),
+            spec.wallets.clone(),
+        ));
+        self.servers.push(server);
+        self.specs.push(spec);
+        Ok(())
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
@@ -98,6 +145,6 @@ impl Ecosystem {
 
     /// The workdir backing this ecosystem (forge IO, fixture outputs).
     pub fn workdir(&self) -> &Path {
-        self._workdir.path()
+        self.workdir.path()
     }
 }
