@@ -35,6 +35,7 @@ Declare as `#[future] name: Type` parameters on your test function. Import from
 | Fixture | Type | Description |
 |---------|------|-------------|
 | `ecosystem` | `Ecosystem` | N L1-settling ZKsync OS chains on one Anvil L1 (default: one chain, ID 6565), 10 wallets pre-funded with 100 ETH each per chain |
+| `upgrade_v31_to_v33::fixture::start()` | `Ecosystem` | Frozen v31.0 chain (chain 506) restored from a committed snapshot via `restore()`; used by the protocol-upgrade test. It has no test wallets — every step is driven through the L1 keys in its `wallets.yaml`, where anvil account #0 owns the Governance contract and chain 506's `owner` owns the ChainAdmin. |
 
 **Restoring a fixed chain:** `fixtures::restore::restore(dir)` brings up an
 `Ecosystem` from a committed snapshot directory (`l1-state.json.gz` +
@@ -237,6 +238,16 @@ async fn transfer_between_wallets(#[future] ecosystem: Ecosystem) {
     assert!(chain.balance(to).await > U256::from(1_000_000_000_000_000_000u128));
 }
 ```
+
+### Example: protocol upgrade
+
+See `tests/tests/upgrade_v31_to_v33.rs` — starts the frozen v31.0 fixture
+(`upgrade_v31_to_v33::fixture`), drives the real upgrade runbook steps
+(`upgrade_v31_to_v33::protocol`), and verifies post-upgrade deposits. The
+version it upgrades *to* is whatever the pinned era-contracts revision's
+genesis config says, so the runbook itself is version-agnostic.
+
+---
 
 ## Deployment Cache
 
