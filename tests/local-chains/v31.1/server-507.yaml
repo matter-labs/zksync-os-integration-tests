@@ -1,0 +1,15 @@
+# Frozen v31.1 fixture, chain 507 (no-DA validium). `genesis_input_path` is injected at runtime by
+# `fixtures::restore`.
+# `pubdata_mode: Validium` is the server's name for the no-DA mode this chain was registered
+# with (`EmptyNoDA` commitment scheme + `PubdataPricingMode::Validium`); the deployer that wrote
+# this fixture emitted a name the server no longer knows.
+genesis:
+  bridgehub_address: "0x92d69ba9e6e492abc2ae791d93924dcf894956ae"
+  bytecode_supplier_address: "0x6b80712774d3e393d98c5200d0f3cc765c5ac082"
+  chain_id: 507
+
+l1_sender:
+  pubdata_mode: Validium
+  operator_commit_sk: "0xf7c0b0406c4e5520544791a1486fbe53c9c666467333a34d95d3b65503a4a185"
+  operator_prove_sk: "0x06b47a0328c04ed0d871ad9fb01ef70662f6f9b3cfedbebfb430ae4ec572420b"
+  operator_execute_sk: "0x2f990213c434912caa7bad3050551abc7564c6502de7005c34c623efe5c78bca"

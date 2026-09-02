@@ -1,0 +1,42 @@
+ecosystem:
+  owner:
+    address: '0xc52637a21922fecf1396097191ae3e89d338a049'
+    private_key: '0xba9b4b54cdc6c31eea405d59ea94b14fc55efe86eea43a389713b9d2af1bd76f'
+  governor:
+    address: '0x6847443cff471f3d846e8c1075e73b17bcead6e6'
+    private_key: '0xfbc3803fb19424226e4ea30be5316d765373d90cdad523d0f06e5186345a364e'
+  token_multiplier_setter:
+    address: '0xb226f700392264417ed07b3ac921414957a83e8e'
+    private_key: '0x876f82dcfbc27a6c8b42249d790b7fa6bca189f1a5bfc14a4d5152fb4cf6536a'
+506:
+  owner:
+    address: '0x7516d4b6e1c6a342772735071c5e4806a6dcb14b'
+    private_key: '0x17c15e218e597be033bed93a4b051dfe42400a06cc568216125085b667fbed40'
+  fee_account:
+    address: '0x77a26c5474bb15be3f92f58cbed81c2434f854fd'
+    private_key: '0xcfbe81c59488b8010194470d59df6d1036094099c1c71042775376e50a3e365b'
+  operator_commit_sk:
+    address: '0xc5178628efdf82c5821109dd19d48f0412531a9c'
+    private_key: '0xc78123547577c67de697c0e80911cb913d2be569d182ed2d42bd7cd30851948c'
+  operator_prove_sk:
+    address: '0x4fe99c3a871960be8aa243aa7ccab16e0ef30e8d'
+    private_key: '0x1ed8abac5f8143e0f37cc4da4655cb14c82473c1254da12683956749b0cca5bd'
+  operator_execute_sk:
+    address: '0xde4603bcef5d32e13f98309592a77502c48fd107'
+    private_key: '0x7a2f70531f7ba8a79e74c2be455eb7dfa0526f2e802ab9d7132959f040acafc5'
+507:
+  owner:
+    address: '0x992a371cb7bbecede8f6cd11f76707dec6bca97e'
+    private_key: '0x82197630a78960071d4f9b5c1936147e1bd89e83e1cc01d8dc31c377ee1f836c'
+  fee_account:
+    address: '0x9460ae657a069d6164d7f22ff2768042acee6ed3'
+    private_key: '0x8d803f34ac8b0e1c738ba1726390bbcc8b8e56b166b66739c47323ceab30efb4'
+  operator_commit_sk:
+    address: '0x0790e5e548378ee20c61285201314f90416b712c'
+    private_key: '0xf7c0b0406c4e5520544791a1486fbe53c9c666467333a34d95d3b65503a4a185'
+  operator_prove_sk:
+    address: '0x128a859f9c288851335c469810fe0c21febe2356'
+    private_key: '0x06b47a0328c04ed0d871ad9fb01ef70662f6f9b3cfedbebfb430ae4ec572420b'
+  operator_execute_sk:
+    address: '0xb391031979386ad47afe6f5531f7e5e40161b23e'
+    private_key: '0x2f990213c434912caa7bad3050551abc7564c6502de7005c34c623efe5c78bca'

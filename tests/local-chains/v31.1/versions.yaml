@@ -1,0 +1,17 @@
+# Provenance of this frozen fixture — the revisions it was generated from, and the only
+# combination it is reproducible with (see `tests/README.md`, "Regenerating the v31 fixture").
+#
+# Two chains on one L1, both at protocol v31.1, so an upgrade test can take a rollup and a
+# validium across the same protocol boundary:
+#   506 — rollup   (blobs DA validator, `BlobsZKSyncOS`, PubdataPricingMode::Rollup)
+#   507 — validium (no-DA validator,   `EmptyNoDA`,      PubdataPricingMode::Validium)
+general:
+  protocol_version: "v31.1"
+
+era-contracts:
+  sha: "360da20c8256d1bb6bbe9d0189aee657101d3af3"
+
+zksync-os-integration-tests:
+  # The zk-deployer revision that built it: the last one whose intent schema and protocol-ops API
+  # match those contracts (`DaMode::{Rollup, NoDa, Avail}`, no pubdata content).
+  sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"

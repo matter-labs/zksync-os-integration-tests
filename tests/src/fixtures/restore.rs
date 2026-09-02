@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::chain::WALLET_KEYS;
 use crate::ecosystem::{ChainSpec, Ecosystem};
 use crate::server_runtime::ChainRuntime;
 use crate::workdir::WorkDir;
@@ -74,7 +75,14 @@ pub async fn restore(dir: &Path) -> Result<Ecosystem> {
             config_paths: vec![server_config],
             runtime: rt,
             genesis_path: genesis_dst.clone(),
-            wallets: vec![],
+            // `apply` funds the well-known dev wallets on every chain it initializes, and a
+            // snapshot is taken after that, so a restored chain has them too — tests that send L2
+            // traffic (the atomic swap) need the signers attached.
+            wallets: WALLET_KEYS
+                .iter()
+                .enumerate()
+                .map(|(i, k)| k.parse().unwrap_or_else(|_| panic!("wallet {i}")))
+                .collect(),
         });
     }
     anyhow::ensure!(

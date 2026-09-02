@@ -34,11 +34,15 @@ pub(crate) struct ChainSpec {
 /// (committed snapshot).
 pub struct Ecosystem {
     chains: Vec<Chain>,
+    /// Kept so a chain's server can be restarted with an extra config layer (see
+    /// [`Ecosystem::restart_chain_with_config`]).
+    specs: Vec<ChainSpec>,
+    l1_rpc: String,
 
     // Drop order matters: servers first, then Anvil, then workdir.
-    _servers: Vec<Server>,
+    servers: Vec<Server>,
     _anvil: AnvilInstance,
-    _workdir: Arc<WorkDir>,
+    workdir: Arc<WorkDir>,
 }
 
 impl Ecosystem {
@@ -53,7 +57,7 @@ impl Ecosystem {
         let l1_rpc = anvil.endpoint();
         let mut chains = Vec::with_capacity(specs.len());
         let mut servers = Vec::with_capacity(specs.len());
-        for spec in specs {
+        for spec in &specs {
             // Load the deployment-slice layers into the typed Config, then apply
             // this run's runtime values (ports/paths/L1 URL/genesis) on top.
             let mut config = load_config_from_yaml(&spec.config_paths).await;
@@ -67,7 +71,7 @@ impl Ecosystem {
                 spec.bridgehub,
                 l1_rpc.clone(),
                 spec.runtime.l2_rpc_url(),
-                spec.wallets,
+                spec.wallets.clone(),
             ));
             servers.push(server);
         }
@@ -78,10 +82,53 @@ impl Ecosystem {
         );
         Ok(Self {
             chains,
-            _servers: servers,
+            specs,
+            l1_rpc,
+            servers,
             _anvil: anvil,
-            _workdir: workdir,
+            workdir,
         })
+    }
+
+    /// Restart one chain's server with `overlay_yaml` merged on top of its config layers — the
+    /// config edit an operator makes before restarting.
+    ///
+    /// The chain keeps its ports and its RocksDB/state directories, so the new server resumes from
+    /// the persisted state rather than re-genesising. The layer is kept for later restarts.
+    pub async fn restart_chain_with_config(
+        &mut self,
+        chain_id: u64,
+        overlay_yaml: &str,
+    ) -> Result<()> {
+        let idx = self
+            .specs
+            .iter()
+            .position(|s| s.chain_id == chain_id)
+            .with_context(|| format!("chain {chain_id} is not part of this ecosystem"))?;
+
+        // The overlay goes in the workdir, never next to the config layer it extends: for a
+        // restored fixture that layer is the committed file inside the repository.
+        let overlay = self.workdir().join(format!(
+            "overlay-{chain_id}-{}.yaml",
+            self.specs[idx].config_paths.len()
+        ));
+        std::fs::write(&overlay, overlay_yaml)
+            .with_context(|| format!("write {}", overlay.display()))?;
+        self.specs[idx].config_paths.push(overlay);
+        let spec = &self.specs[idx];
+
+        let mut config = load_config_from_yaml(&spec.config_paths).await;
+        spec.runtime
+            .apply_to(&mut config, &self.l1_rpc, &spec.genesis_path);
+
+        // Drop the old server first: it holds the RocksDB lock and the RPC port the restarted one
+        // rebinds. `Server::drop` shuts it down gracefully.
+        drop(self.servers.remove(idx));
+        let server = Server::start(config)
+            .await
+            .with_context(|| format!("restart server for chain {chain_id}"))?;
+        self.servers.insert(idx, server);
+        Ok(())
     }
 
     // ── Accessors ─────────────────────────────────────────────────────────────
@@ -98,6 +145,6 @@ impl Ecosystem {
 
     /// The workdir backing this ecosystem (forge IO, fixture outputs).
     pub fn workdir(&self) -> &Path {
-        self._workdir.path()
+        self.workdir.path()
     }
 }
