@@ -24,10 +24,28 @@ use protocol_ops::common::abi::ZkChainAbi;
 
 /// Restart `chain_id`'s server with `pubdata_mode: Blobs` — the config change an operator makes
 /// before the chain reaches v33. Until then the server keeps committing the empty no-DA scheme.
+///
+/// Settles one batch afterwards to prove exactly that: the restarted server still commits, proves
+/// and executes on a chain that is on the old protocol version and validium-priced on L1, with the
+/// new setting already in its config.
 pub async fn prepare_server_for_blobs(eco: &mut Ecosystem, chain_id: u64) -> Result<()> {
     eco.restart_chain_with_config(chain_id, "l1_sender:\n  pubdata_mode: Blobs\n")
         .await
-        .with_context(|| format!("restart chain {chain_id}'s server in Blobs pubdata mode"))
+        .with_context(|| format!("restart chain {chain_id}'s server in Blobs pubdata mode"))?;
+
+    let chain = eco
+        .chains()
+        .find(|c| c.chain_id() == chain_id)
+        .with_context(|| format!("chain {chain_id} is not part of this ecosystem"))?;
+    let hash = chain
+        .ping()
+        .await
+        .with_context(|| format!("send an L2 transaction on chain {chain_id} after the restart"))?;
+    chain
+        .wait_for_tx_finalized(hash)
+        .await
+        .with_context(|| format!("settle a batch on chain {chain_id} after the restart"))?;
+    Ok(())
 }
 
 /// The blobs DA validator to move onto: the one the ecosystem's rollup chain commits with. The
