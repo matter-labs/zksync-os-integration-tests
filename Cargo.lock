@@ -10398,7 +10398,7 @@ dependencies = [
 [[package]]
 name = "protocol_ops"
 version = "0.1.0"
-source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v32-chain-creation-scripts#dc1190916db90646e2a531a8138a1339f6f9ef14"
+source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v32-chain-creation-scripts#8d53ec193ecb8d1e2ffc107f21f4cdb22e8708e7"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17052,7 +17052,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-genesis-gen"
 version = "0.1.0"
-source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v32-chain-creation-scripts#dc1190916db90646e2a531a8138a1339f6f9ef14"
+source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v32-chain-creation-scripts#8d53ec193ecb8d1e2ffc107f21f4cdb22e8708e7"
 dependencies = [
  "alloy",
  "anyhow",
