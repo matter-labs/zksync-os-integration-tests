@@ -38,8 +38,7 @@ pub enum ValidiumDa {
     /// Nothing published (`EmptyNoDA` scheme, no-DA validator).
     ///
     /// Discouraged, hence the name: what the chain committed is unavailable from L1, its interop
-    /// (IMT) leaves included, so it cannot take part in atomic interop — and from protocol v33 its
-    /// batches no longer prove.
+    /// (IMT) leaves included, so it cannot take part in atomic interop.
     DiscouragedNoDa,
 }
 

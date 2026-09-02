@@ -75,8 +75,8 @@ async fn blobs_validium_settles_on_l1(
 
 /// The other two places a validium's pubdata can go: commit-tx calldata (the rollup DA validator's
 /// `PUBDATA_SOURCE_CALLDATA` branch with the explicit `BlobsAndPubdataKeccak256` scheme) and
-/// nowhere at all (`PubdataPricingMode.Validium` + `EmptyNoDA`). Both still settle on L1 — the
-/// no-DA one only up to v33, which is why it is the discouraged flavor.
+/// nowhere at all (`PubdataPricingMode.Validium` + `EmptyNoDA`). Both settle on L1; what makes the
+/// second one discouraged is that nothing it commits can be read back from L1.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
 async fn validium_da_flavors_settle_on_l1(

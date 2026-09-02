@@ -48,8 +48,7 @@ where that logs-only pubdata goes (serde_yaml tagged syntax):
 interop (IMT) data reconstructible from L1. `discouraged_no_da` is the only
 flavor that registers with `PubdataPricingMode.Validium`, and is named for what
 it costs: nothing the chain commits is available from L1, so it cannot take part
-in atomic interop, and from protocol v33 its batches no longer prove. See
-`DaMode::Validium` in `src/intent.rs`.
+in atomic interop. See `DaMode::Validium` in `src/intent.rs`.
 
 ### 3. Bootstrap the ecosystem
 
