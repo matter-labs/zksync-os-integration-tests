@@ -48,7 +48,7 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
         // The v33 diamond answers `getPubdataContent()`, whose value the Executor folds into
         // every batch's chain-config hash and the server discovers from L1. The rollup keeps the
         // FULL_PUBDATA the upgrade leaves untouched; the validium is LOGS_ONLY, because moving it
-        // off no-DA is part of taking it to v33.
+        // onto blobs is part of taking it to v33, so that its interop data reaches L1.
         let diamond =
             protocol_ops::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
                 .await

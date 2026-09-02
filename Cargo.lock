@@ -10398,7 +10398,7 @@ dependencies = [
 [[package]]
 name = "protocol_ops"
 version = "0.1.0"
-source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v33-upgrade-with-da#ad719b2d8da373fc54aa0b01770d0ba78a93f714"
+source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v33-upgrade-with-da#79ed1f46fdc26b2e05d5a0d99e7e96e8164cdf09"
 dependencies = [
  "alloy",
  "anyhow",
@@ -17052,7 +17052,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-genesis-gen"
 version = "0.1.0"
-source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v33-upgrade-with-da#ad719b2d8da373fc54aa0b01770d0ba78a93f714"
+source = "git+https://github.com/StanislavBreadfulAI/era-contracts?branch=sb-v33-upgrade-with-da#79ed1f46fdc26b2e05d5a0d99e7e96e8164cdf09"
 dependencies = [
  "alloy",
  "anyhow",

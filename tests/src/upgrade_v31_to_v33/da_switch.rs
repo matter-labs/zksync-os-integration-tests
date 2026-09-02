@@ -3,8 +3,9 @@
 //! A no-DA validium publishes nothing to L1, so the interop commitment tree leaves its
 //! `L2InteropCommitmentTree` records are unreachable from L1 and the chain cannot take part in
 //! atomic interop. v33 is the first version where a validium-priced chain may publish through
-//! blobs, so the move is part of taking such a chain to v33 — in two halves that must not be
-//! interleaved:
+//! blobs, which is what this moves it onto. (Such a chain can stay on no-DA past v33 — it only
+//! has to commit `LOGS_ONLY` rather than the version's `FULL_PUBDATA` default — but then its
+//! interop data still never reaches L1.) The move has two halves, in this order:
 //!
 //!   1. the server starts posting through blobs ([`prepare_server_for_blobs`]), which it does
 //!      only from v33 onward — `PubdataMode::adapt_for_protocol_version` keeps sealing pre-v33

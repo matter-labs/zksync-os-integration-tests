@@ -93,9 +93,12 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
 
     // ── Per chain: DA prep, bound, drain, schedule, cut ──────────────────────
     //
-    // A validium-priced chain has to leave no-DA behind as part of this upgrade: its first v33
-    // batch does not settle while it publishes nothing (`proveBatches` reverts `InvalidProof`),
-    // and until it publishes its log region its interop (IMT) leaves are unreachable from L1.
+    // A validium-priced chain has to have its pubdata dealt with as part of this upgrade: v33
+    // gives it a `PubdataContent` of `FULL_PUBDATA` by default, and committing full pubdata it
+    // never publishes is what stops its batches proving (`InvalidProof`). Committing `LOGS_ONLY`
+    // would be enough for that; the runbook moves the chain onto blobs as well, because only
+    // publishing that log region puts its interop (IMT) leaves within reach of L1 — which is what
+    // the swap running afterwards needs.
     let validium_chains = validium_priced_chains(l1_rpc, bridgehub, eco).await?;
     let blobs_validator = if validium_chains.is_empty() {
         None
@@ -111,11 +114,11 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
             // already be doing so when the chain gets there. Pre-v33 batches keep committing
             // no-DA regardless of this setting.
             da_switch::prepare_server_for_blobs(eco, chain_id).await?;
-            // Both DA axes at once: the pubdata goes to L1 through the rollup validator's blobs
-            // from here on, and only the log region is committed.
+            // A logs-only validium delivering through blobs: the kind gives it the LOGS_ONLY
+            // content, and blobs is the delivery that kind defaults to.
             Some(protocol::DaMove {
                 l1_da_validator: blobs_validator.expect("resolved for validium chains"),
-                da_mode: protocol_ops::types::DAValidatorType::Rollup,
+                da_mode: protocol_ops::types::DAValidatorType::LogsOnlyValidium,
                 pubdata_content: protocol_ops::types::PubdataContent::LogsOnly,
             })
         } else {
@@ -198,7 +201,7 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
 }
 
 /// The chains of `eco` whose on-chain pricing mode is `Validium` — the ones that were registered
-/// with the no-DA validator and have to move off it.
+/// with the no-DA validator, and whose pubdata this upgrade therefore has to deal with.
 async fn validium_priced_chains(
     l1_rpc: &str,
     bridgehub: alloy::primitives::Address,

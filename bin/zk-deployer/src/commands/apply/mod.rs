@@ -362,47 +362,49 @@ fn resolve_pubdata_content(chain: &ChainIntent) -> PubdataContent {
     }
 }
 
-/// Resolve a chain's DA registration inputs: the `DAValidatorType` passed to
-/// `register_chain` (which derives the on-chain `PubdataPricingMode` from
-/// `!= Rollup`), the L1 DA validator, and an optional L2 commitment-scheme
-/// override for cases the default `da_type + vm_type` derivation gets wrong.
+/// Resolve a chain's DA registration inputs: the `DAValidatorType` passed to `register_chain`
+/// (which derives the on-chain `PubdataPricingMode` from `!= Rollup`), the L1 DA validator, and
+/// the L2 commitment scheme when the chain's delivery is not the blobs its kind defaults to.
 ///
-/// This is the *where*, not the *how much*: a blobs or calldata validium registers exactly like a
-/// rollup (`PubdataPricingMode::Rollup`) and differs from it only in the pubdata content
-/// [`resolve_pubdata_content`] gives it. Only the no-DA flavor registers as `Validium`-priced.
+/// This is the *delivery* axis. What the chain commits is [`resolve_pubdata_content`], and every
+/// validium here commits the same logs-only region however it delivers it.
 fn resolve_da(
     chain: &ChainIntent,
     vm_type: VMOption,
     eco: &ResolvedEcosystem,
 ) -> anyhow::Result<(DAValidatorType, Address, Option<L2DACommitmentScheme>)> {
-    Ok(match chain.da_mode {
-        DaMode::Rollup | DaMode::Validium(ValidiumDa::Blobs) => {
-            let validator = if vm_type == VMOption::ZKSyncOsVM {
-                eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "ecosystem has no ZKsync OS blobs L1 DA validator — \
-                         redeploy with a build that has one"
-                    )
-                })?
-            } else {
-                eco.rollup_l1_da_validator
-            };
-            (DAValidatorType::Rollup, validator, None)
+    let blobs_validator = || -> anyhow::Result<Address> {
+        if vm_type == VMOption::ZKSyncOsVM {
+            eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "ecosystem has no ZKsync OS blobs L1 DA validator — \
+                     redeploy with a build that has one"
+                )
+            })
+        } else {
+            Ok(eco.rollup_l1_da_validator)
         }
-        // Calldata pubdata goes through the standard rollup DA validator
-        // (`PUBDATA_SOURCE_CALLDATA` branch). The scheme derived for Rollup + ZKsync OS would be
-        // BlobsZKSyncOS (blobs-only), so the calldata scheme is named explicitly — it must match
-        // the server's `pubdata_mode: Calldata` wire or every commit reverts with
+    };
+
+    Ok(match chain.da_mode {
+        DaMode::Rollup => (DAValidatorType::Rollup, blobs_validator()?, None),
+        // The default delivery for every kind: blobs, through the same validator a rollup uses.
+        DaMode::Validium(ValidiumDa::Blobs) => {
+            (DAValidatorType::LogsOnlyValidium, blobs_validator()?, None)
+        }
+        // Calldata goes through the standard rollup DA validator (`PUBDATA_SOURCE_CALLDATA`
+        // branch). The derived scheme would be blobs, so the calldata one is named explicitly — it
+        // must match the server's `pubdata_mode: Calldata` wire or every commit reverts with
         // MismatchL2DACommitmentScheme.
         DaMode::Validium(ValidiumDa::Calldata) => (
-            DAValidatorType::Rollup,
+            DAValidatorType::LogsOnlyValidium,
             eco.rollup_l1_da_validator,
             Some(L2DACommitmentScheme::BlobsAndPubdataKeccak256),
         ),
         DaMode::Validium(ValidiumDa::DiscouragedNoDa) => (
-            DAValidatorType::DiscouragedNoDa,
+            DAValidatorType::LogsOnlyValidium,
             eco.no_da_l1_validator,
-            None,
+            Some(L2DACommitmentScheme::EmptyNoDA),
         ),
         DaMode::Avail => (DAValidatorType::Avail, eco.avail_l1_da_validator, None),
     })

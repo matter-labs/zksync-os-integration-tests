@@ -21,12 +21,9 @@ pub enum DaMode {
     Validium(ValidiumDa),
 }
 
-/// Where a validium chain publishes its logs-only pubdata.
-///
-/// `Blobs`/`Calldata` keep the on-chain `PubdataPricingMode` at `Rollup`: the pubdata reaches L1,
-/// so interop (IMT) data stays reconstructible from it — the atomic-interop participant
-/// configurations. `DiscouragedNoDa` publishes nothing and is the only flavor that sets the
-/// pricing mode to `Validium`.
+/// How a validium delivers its logs-only pubdata to L1 — the chain's `L2DACommitmentScheme`. What
+/// it commits is the same either way; only `Blobs` and `Calldata` actually deliver it, which is
+/// what keeps interop (IMT) data reconstructible from L1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidiumDa {
