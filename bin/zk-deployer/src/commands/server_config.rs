@@ -4,7 +4,7 @@ use alloy::primitives::Address;
 use anyhow::{Context as _, Result};
 use clap::Parser;
 
-use crate::intent::{ChainIntent, DaMode, IntentConfig, ValidiumDa};
+use crate::intent::{ChainIntent, IntentConfig};
 use crate::state::{
     ChainInitPreparedOutput, EcosystemInitOutput, State, StepKey, TokenDeployedOutput,
 };
@@ -203,14 +203,12 @@ pub(crate) fn resolve_base_token_addr(
     }
 }
 
-pub(crate) fn resolve_pubdata_mode(chain: &ChainIntent) -> &'static str {
-    match chain.da_mode {
-        DaMode::Rollup | DaMode::Avail | DaMode::Validium(ValidiumDa::Blobs) => "Blobs",
-        DaMode::Validium(ValidiumDa::Calldata) => "Calldata",
-        // `Validium` is the server's post-nothing mode and the only one its
-        // startup check accepts for a chain whose pricing mode is Validium.
-        DaMode::Validium(ValidiumDa::NoDa) => "Validium",
-    }
+/// The DA *mechanism* the server publishes each batch's pubdata with — the server's
+/// `PubdataMode`. Every chain deployed here publishes through blobs, a logs-only validium
+/// included: such a chain differs in how *much* pubdata it produces
+/// (`PubdataContent::LogsOnly`, set at chain init), not in how that pubdata reaches L1.
+pub(crate) fn resolve_pubdata_mode(_chain: &ChainIntent) -> &'static str {
+    "Blobs"
 }
 
 fn pick_chain(intent: &IntentConfig, chain_id: Option<u64>) -> Result<&ChainIntent> {

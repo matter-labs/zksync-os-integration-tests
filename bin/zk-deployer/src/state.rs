@@ -26,8 +26,6 @@ pub enum StepKey {
     ChainInitApplied(u64),
     /// `chain.fund_l2.<chain_id>` — default dev wallets funded via L1→L2 deposits
     ChainL2Funded(u64),
-    /// `chain.pubdata_content.<chain_id>` — `LOGS_ONLY` pubdata content set on the diamond
-    ChainPubdataContentSet(u64),
 }
 
 impl fmt::Display for StepKey {
@@ -41,7 +39,6 @@ impl fmt::Display for StepKey {
             Self::ChainInitPrepared(id) => write!(f, "chain.init.{id}.prepared"),
             Self::ChainInitApplied(id) => write!(f, "chain.init.{id}.applied"),
             Self::ChainL2Funded(id) => write!(f, "chain.fund_l2.{id}"),
-            Self::ChainPubdataContentSet(id) => write!(f, "chain.pubdata_content.{id}"),
         }
     }
 }

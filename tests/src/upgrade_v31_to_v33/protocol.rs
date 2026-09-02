@@ -338,7 +338,7 @@ pub async fn set_da_validator_pair(
     bridgehub: Address,
     chain_id: u64,
     l1_da_validator: Address,
-    l2_da_commitment_scheme: protocol_ops::types::L2DACommitmentScheme,
+    da_mode: protocol_ops::types::DAValidatorType,
     keys: &[&str],
 ) -> Result<()> {
     let out_dir = workdir.join(format!("set_da_validator_pair_{chain_id}"));
@@ -348,7 +348,10 @@ pub async fn set_da_validator_pair(
         topology: chain_args(bridgehub, chain_id),
         access_control_restriction: Address::ZERO,
         l1_da_validator,
-        l2_da_commitment_scheme,
+        da_mode,
+        // The scheme follows from `da_mode` and the chain's VM; the override exists for
+        // gateway-settling chains, which this fixture has none of.
+        l2_da_commitment_scheme: None,
         shared: shared_args(l1_rpc, &out_dir),
     })
     .await

@@ -670,6 +670,13 @@ pub async fn run(ca: &Chain, cb: &Chain) -> Result<()> {
         .interopProtocolFee()
         .call()
         .await?;
+    // The fee is passed as `msg.value` on every `sendBundle` below, so a non-zero one would have
+    // to be funded per leg. Nothing sets it on a freshly deployed chain, and the upgrade does not
+    // introduce one either — assert that rather than silently paying whatever it returns.
+    ensure!(
+        fee.is_zero(),
+        "expected a zero interop protocol fee, got {fee}"
+    );
 
     println!("[atomic-swap] registering chains for interop...");
     register_chains_for_interop(ca.l1_rpc_url(), ca.bridgehub_addr(), &a, &b).await?;

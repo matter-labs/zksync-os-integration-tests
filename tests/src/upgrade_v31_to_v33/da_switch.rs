@@ -26,7 +26,7 @@ use alloy::primitives::{Address, Bytes, U256};
 use alloy::sol_types::SolCall;
 use anyhow::{Context, Result};
 use protocol_ops::common::abi::{IChainAdminAbi, ZkChainAbi};
-use protocol_ops::types::L2DACommitmentScheme;
+use protocol_ops::types::DAValidatorType;
 
 use super::fixture::{CHAIN_SIGNING_KEYS, VALIDIUM_CHAIN_ADMIN_OWNER_KEY};
 use super::protocol;
@@ -65,9 +65,9 @@ pub async fn to_logs_only_blobs(eco: &Ecosystem, chain_id: u64) -> Result<()> {
         bridgehub,
         chain_id,
         blobs_validator,
-        // The scheme the rollup's blobs validator accepts on ZKsync OS. It has to match what the
-        // server sends, or every commit reverts with `MismatchL2DACommitmentScheme`.
-        L2DACommitmentScheme::BlobsZKSyncOS,
+        // Logs-only over blobs: the scheme follows from the mode and the chain's VM, so the
+        // command cannot be asked for a pair whose halves disagree.
+        DAValidatorType::LogsOnlyValidium,
         CHAIN_SIGNING_KEYS,
     )
     .await

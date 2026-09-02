@@ -40,5 +40,5 @@ schema_version: 1
 
 chains:
   - chain_id: 6565
-    da_mode: rollup           # rollup, no_da, or avail
+    da_mode: rollup           # rollup, logs_only_validium, or avail
 "#;

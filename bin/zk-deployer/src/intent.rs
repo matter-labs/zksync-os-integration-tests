@@ -4,36 +4,26 @@ use alloy::primitives::Address;
 use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DaMode {
-    Rollup,
-    Avail,
-    /// Validium: the chain's pubdata carries only the mandatory L2->L1 log region
-    /// (`PubdataContent.LOGS_ONLY`) — state diffs are never published. The payload
-    /// picks where that logs-only pubdata goes.
-    ///
-    /// YAML syntax (serde_yaml tagged enum): `da_mode: !validium blobs`.
-    Validium(ValidiumDa),
-}
-
-/// Where a validium chain posts its logs-only pubdata.
+/// What the chain does with its pubdata.
 ///
-/// `Blobs`/`Calldata` keep the on-chain `PubdataPricingMode` at `Rollup`: the server
-/// refuses to start when posting pubdata for a `Validium`-priced chain, and interop
-/// (IMT) data stays reconstructible from L1 — the atomic-interop participant
-/// configurations. `NoDa` posts nothing and is the only flavor that sets the
-/// pricing mode to `Validium`.
+/// There is no knob for "validium, but full pubdata" or "validium, but nothing posted": a
+/// validium here always commits the logs-only region and always posts it through blobs. Both
+/// were configurable once and both are footguns — full pubdata makes the "validium" pay
+/// rollup DA costs, and posting nothing puts the chain's interop (IMT) leaves out of reach of
+/// L1, which silently breaks atomic interop for it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ValidiumDa {
-    /// EIP-4844 blobs, via the ZKsync OS blobs DA validator (like a rollup).
-    Blobs,
-    /// Commit-tx calldata, via the standard rollup DA validator
-    /// (`BlobsAndPubdataKeccak256` commitment scheme).
-    Calldata,
-    /// Nothing posted (`EmptyNoDA` scheme, no-DA validator).
-    NoDa,
+pub enum DaMode {
+    /// Publishes the whole pubdata on L1, through blobs.
+    Rollup,
+    /// Publishes only the mandatory L2->L1 log region on L1 — including the interop commitment
+    /// tree leaves, which is what keeps the chain interop-capable — and drops the state diffs
+    /// and message preimages. That region still goes through blobs, so the chain runs the same
+    /// L1 DA validator and `PubdataPricingMode::Rollup` a rollup does; it differs from a rollup
+    /// only in its `PubdataContent`.
+    LogsOnlyValidium,
+    /// Hands the full pubdata to Avail.
+    Avail,
 }
 
 /// A custom (non-ETH) base token. If `address` is absent the token is deployed
@@ -98,20 +88,14 @@ impl IntentConfig {
 mod tests {
     use super::*;
 
-    /// Locks the intent-YAML shape of `da_mode`, including serde_yaml's tagged
-    /// syntax for the validium payload — hand-written intents depend on it, and
-    /// the test-cache key hashes the serialized form.
+    /// Locks the intent-YAML shape of `da_mode` — hand-written intents depend on it, and the
+    /// test-cache key hashes the serialized form.
     #[test]
     fn da_mode_yaml_roundtrip() {
         for (mode, yaml) in [
             (DaMode::Rollup, "rollup\n"),
+            (DaMode::LogsOnlyValidium, "logs_only_validium\n"),
             (DaMode::Avail, "avail\n"),
-            (DaMode::Validium(ValidiumDa::Blobs), "!validium blobs\n"),
-            (
-                DaMode::Validium(ValidiumDa::Calldata),
-                "!validium calldata\n",
-            ),
-            (DaMode::Validium(ValidiumDa::NoDa), "!validium no_da\n"),
         ] {
             assert_eq!(serde_yaml::to_string(&mode).unwrap(), yaml);
             let parsed: DaMode = serde_yaml::from_str(yaml).unwrap();
