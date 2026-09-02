@@ -8,7 +8,7 @@ use protocol_ops::commands::chain::init::{chain_init, ChainInitInput, ChainInitO
 
 use crate::commands::execute_manifest::{apply_manifest_from, count_manifest_bundles};
 use crate::commands::server_config::resolve_base_token_addr;
-use crate::intent::{ChainIntent, DaMode, IntentConfig};
+use crate::intent::{ChainIntent, DaMode, IntentConfig, ValidiumDa};
 use crate::resolved::ResolvedEcosystem;
 use crate::state::{ChainInitPreparedOutput, State, StepKey};
 use protocol_ops::common::forge::scripts::register_chain::NewChainParams;
@@ -353,12 +353,11 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
 /// Protocol sentinel address used for an ETH base token.
 const ETH_BASE_TOKEN: Address = address!("0x0000000000000000000000000000000000000001");
 
-/// The pubdata content the chain's diamond is initialized with. A validium is logs-only by
-/// construction here — there is no way to ask for a validium that publishes full pubdata,
-/// which would pay rollup DA costs for nothing.
+/// How much pubdata the chain's diamond is initialized to commit. A validium commits the
+/// logs-only region whichever way it publishes it; where that pubdata goes is [`resolve_da`].
 fn resolve_pubdata_content(chain: &ChainIntent) -> PubdataContent {
     match chain.da_mode {
-        DaMode::LogsOnlyValidium => PubdataContent::LogsOnly,
+        DaMode::Validium(_) => PubdataContent::LogsOnly,
         DaMode::Rollup | DaMode::Avail => PubdataContent::FullPubdata,
     }
 }
@@ -368,22 +367,21 @@ fn resolve_pubdata_content(chain: &ChainIntent) -> PubdataContent {
 /// `!= Rollup`), the L1 DA validator, and an optional L2 commitment-scheme
 /// override for cases the default `da_type + vm_type` derivation gets wrong.
 ///
-/// What makes a chain a validium is not this registration shape — it
-/// is the LOGS_ONLY pubdata content it is initialized with. A logs-only validium registers
-/// exactly like a rollup (blobs DA validator, `PubdataPricingMode::Rollup`), because it does
-/// publish its logs region to L1.
+/// This is the *where*, not the *how much*: a blobs or calldata validium registers exactly like a
+/// rollup (`PubdataPricingMode::Rollup`) and differs from it only in the pubdata content
+/// [`resolve_pubdata_content`] gives it. Only the no-DA flavor registers as `Validium`-priced.
 fn resolve_da(
     chain: &ChainIntent,
     vm_type: VMOption,
     eco: &ResolvedEcosystem,
 ) -> anyhow::Result<(DAValidatorType, Address, Option<L2DACommitmentScheme>)> {
     Ok(match chain.da_mode {
-        DaMode::Rollup | DaMode::LogsOnlyValidium => {
+        DaMode::Rollup | DaMode::Validium(ValidiumDa::Blobs) => {
             let validator = if vm_type == VMOption::ZKSyncOsVM {
                 eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
                     anyhow::anyhow!(
-                        "blobs_zksync_os_l1_da_validator not found in state — \
-                         re-run bootstrap to populate it"
+                        "ecosystem has no ZKsync OS blobs L1 DA validator — \
+                         redeploy with a build that has one"
                     )
                 })?
             } else {
@@ -391,6 +389,21 @@ fn resolve_da(
             };
             (DAValidatorType::Rollup, validator, None)
         }
+        // Calldata pubdata goes through the standard rollup DA validator
+        // (`PUBDATA_SOURCE_CALLDATA` branch). The scheme derived for Rollup + ZKsync OS would be
+        // BlobsZKSyncOS (blobs-only), so the calldata scheme is named explicitly — it must match
+        // the server's `pubdata_mode: Calldata` wire or every commit reverts with
+        // MismatchL2DACommitmentScheme.
+        DaMode::Validium(ValidiumDa::Calldata) => (
+            DAValidatorType::Rollup,
+            eco.rollup_l1_da_validator,
+            Some(L2DACommitmentScheme::BlobsAndPubdataKeccak256),
+        ),
+        DaMode::Validium(ValidiumDa::DiscouragedNoDa) => (
+            DAValidatorType::DiscouragedNoDa,
+            eco.no_da_l1_validator,
+            None,
+        ),
         DaMode::Avail => (DAValidatorType::Avail, eco.avail_l1_da_validator, None),
     })
 }
@@ -417,9 +430,15 @@ mod tests {
             resolve_pubdata_content(&chain(DaMode::Avail)),
             PubdataContent::FullPubdata
         );
-        assert_eq!(
-            resolve_pubdata_content(&chain(DaMode::LogsOnlyValidium)),
-            PubdataContent::LogsOnly
-        );
+        for da in [
+            ValidiumDa::Blobs,
+            ValidiumDa::Calldata,
+            ValidiumDa::DiscouragedNoDa,
+        ] {
+            assert_eq!(
+                resolve_pubdata_content(&chain(DaMode::Validium(da))),
+                PubdataContent::LogsOnly
+            );
+        }
     }
 }

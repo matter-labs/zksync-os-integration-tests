@@ -4,7 +4,7 @@ use rstest::fixture;
 use zk_deployer::commands::apply::ApplyArgs;
 use zk_deployer::commands::bootstrap::BootstrapArgs;
 use zk_deployer::deployed::DeployedEcosystem;
-use zk_deployer::intent::{ChainIntent, DaMode, IntentConfig, WalletsIntent};
+use zk_deployer::intent::{ChainIntent, DaMode, IntentConfig, ValidiumDa, WalletsIntent};
 
 use crate::chain::WALLET_KEYS;
 use crate::ecosystem::{ChainSpec, Ecosystem};
@@ -29,11 +29,11 @@ impl ChainDef {
         }
     }
 
-    /// A validium: logs-only pubdata, posted through blobs like a rollup's.
-    pub fn logs_only_validium(chain_id: u64) -> Self {
+    /// A validium — logs-only pubdata — publishing it the way `da` says. See [`ValidiumDa`].
+    pub fn validium(chain_id: u64, da: ValidiumDa) -> Self {
         Self {
             chain_id,
-            da_mode: DaMode::LogsOnlyValidium,
+            da_mode: DaMode::Validium(da),
         }
     }
 }
@@ -216,7 +216,7 @@ pub(super) async fn setup_l1_chains(chains: &[ChainDef]) -> Ecosystem {
 /// #[tokio::test(flavor = "multi_thread")]
 /// async fn two_chains(
 ///     #[future]
-///     #[with(vec![ChainDef::rollup(6565), ChainDef::logs_only_validium(6566)])]
+///     #[with(vec![ChainDef::rollup(6565), ChainDef::validium(6566, ValidiumDa::Blobs)])]
 ///     ecosystem: Ecosystem,
 /// ) -> anyhow::Result<()> {
 ///     let eco = ecosystem.await;

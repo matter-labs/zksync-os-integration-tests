@@ -120,7 +120,8 @@ chains:
   - chain_id: 506
     da_mode: rollup
   - chain_id: 507
-    da_mode: no_da
+    da_mode: no_da   # the schema of the deployer revision above; today it is
+                     # `!validium discouraged_no_da`
 YAML
 export PROTOCOL_CONTRACTS_ROOT=$PWD/../ec-v31
 ZKD=../it-v31gen/target/release/zk-deployer

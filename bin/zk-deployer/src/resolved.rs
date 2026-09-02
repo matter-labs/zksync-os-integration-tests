@@ -12,10 +12,6 @@ pub struct ResolvedEcosystem {
     pub bridgehub: Address,
     pub ctm_proxy: Address,
     pub rollup_l1_da_validator: Address,
-    /// Deployed by the ecosystem bootstrap and recorded for completeness; no chain this
-    /// deployer creates registers against it, because a validium here is logs-only and posts
-    /// through blobs.
-    #[allow(dead_code)]
     pub no_da_l1_validator: Address,
     pub avail_l1_da_validator: Address,
     pub blobs_zksync_os_l1_da_validator: Option<Address>,

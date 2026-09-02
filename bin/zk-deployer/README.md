@@ -41,13 +41,15 @@ where that logs-only pubdata goes (serde_yaml tagged syntax):
 ```yaml
     da_mode: !validium blobs      # EIP-4844 blobs, like a rollup
     da_mode: !validium calldata   # commit-tx calldata
-    da_mode: !validium no_da      # nothing posted (EmptyNoDA)
+    da_mode: !validium discouraged_no_da   # nothing published (EmptyNoDA)
 ```
 
-`blobs`/`calldata` keep the on-chain `PubdataPricingMode` at `Rollup` (the
-server refuses to post pubdata for a `Validium`-priced chain) and keep interop
-(IMT) data reconstructible from L1; `no_da` is the only flavor that registers
-with `PubdataPricingMode.Validium`. See `DaMode::Validium` in `src/intent.rs`.
+`blobs`/`calldata` keep the on-chain `PubdataPricingMode` at `Rollup` and keep
+interop (IMT) data reconstructible from L1. `discouraged_no_da` is the only
+flavor that registers with `PubdataPricingMode.Validium`, and is named for what
+it costs: nothing the chain commits is available from L1, so it cannot take part
+in atomic interop, and from protocol v33 its batches no longer prove. See
+`DaMode::Validium` in `src/intent.rs`.
 
 ### 3. Bootstrap the ecosystem
 

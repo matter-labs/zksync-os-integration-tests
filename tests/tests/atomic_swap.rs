@@ -6,11 +6,12 @@
 use anyhow::{Context, Result};
 use rstest::rstest;
 
-use tests::fixtures::{ecosystem, ChainDef};
+use tests::fixtures::{ecosystem, ChainDef, ValidiumDa};
 use tests::upgrade_v31_to_v33::{fixture, runbook};
 use tests::Ecosystem;
 
-/// Fresh ecosystem: chain 6565 is a rollup, chain 6566 a logs-only validium, so the swap is
+/// Fresh ecosystem: chain 6565 is a rollup, chain 6566 a validium publishing its logs-only
+/// pubdata through blobs — the atomic-interop participant configuration — so the swap is
 /// exercised across heterogeneous pubdata shapes.
 #[rstest]
 #[tokio::test(flavor = "multi_thread")]
@@ -18,7 +19,7 @@ async fn atomic_swap_l1_settled(
     #[future]
     #[with(vec![
         ChainDef::rollup(6565),
-        ChainDef::logs_only_validium(6566)
+        ChainDef::validium(6566, ValidiumDa::Blobs)
     ])]
     ecosystem: Ecosystem,
 ) -> Result<()> {

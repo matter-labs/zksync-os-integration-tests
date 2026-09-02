@@ -272,16 +272,25 @@ pub async fn schedule_upgrade_timestamp(
 /// unblocking the server's upgrade_gatekeeper.
 /// `keys` must cover every signer the emitted bundle targets (see
 /// [`schedule_upgrade_timestamp`]).
-/// `da_move` is `Some((validator, mode))` for a chain whose DA setup the upgrade has to move —
-/// the DA validator pair and the pubdata content then go out in the same `ChainAdmin.multicall`
-/// as the diamond cut.
+/// The DA setup an upgrade moves a chain to: both axes, named rather than derived, plus the L1 DA
+/// validator to register with.
+#[derive(Clone, Copy, Debug)]
+pub struct DaMove {
+    pub l1_da_validator: Address,
+    pub da_mode: protocol_ops::types::DAValidatorType,
+    pub pubdata_content: protocol_ops::types::PubdataContent,
+}
+
+/// `da_move` describes where a chain's pubdata should go after the upgrade, for a chain whose DA
+/// setup has to move with it — the DA validator pair and the pubdata content then go out in the
+/// same `ChainAdmin.multicall` as the diamond cut. `None` leaves the DA setup alone.
 pub async fn run_chain_upgrade(
     l1_rpc: &str,
     workdir: &Path,
     keys: &[&str],
     bridgehub: Address,
     chain_id: u64,
-    da_move: Option<(Address, protocol_ops::types::DAValidatorType)>,
+    da_move: Option<DaMove>,
 ) -> Result<()> {
     let out_dir = workdir.join(format!("chain_upgrade_{chain_id}"));
     std::fs::create_dir_all(&out_dir).context("create out dir")?;
@@ -290,12 +299,14 @@ pub async fn run_chain_upgrade(
         topology: ecosystem_args(bridgehub),
         chain_id: Some(chain_id),
         access_control_restriction: Address::ZERO,
-        l1_da_validator: da_move.map(|(validator, _)| validator),
-        da_mode: da_move.map(|(_, mode)| mode),
-        // Both follow from the mode and the chain's VM; the overrides exist for gateway-settling
-        // chains, which this fixture has none of.
+        l1_da_validator: da_move.map(|m| m.l1_da_validator),
+        da_mode: da_move.map(|m| m.da_mode),
+        // The scheme follows from the DA validator type and the chain's VM; the override is for
+        // gateway-settling chains, which this fixture has none of.
         l2_da_commitment_scheme: None,
-        pubdata_content: None,
+        // The other axis, named explicitly: `--da-mode rollup` alone would default the chain to
+        // full pubdata, which is not what a validium moving onto blobs wants.
+        pubdata_content: da_move.map(|m| m.pubdata_content),
         keep_da_setup: false,
         shared: shared_args(l1_rpc, &out_dir),
     })

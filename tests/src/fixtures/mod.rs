@@ -8,6 +8,7 @@ mod l1;
 pub mod restore;
 
 pub use l1::{ecosystem, ChainDef};
+pub use zk_deployer::intent::ValidiumDa;
 
 /// Deployer key (Anvil account #0) — used only for ecosystem setup, never as a test wallet.
 const DEPLOYER_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";

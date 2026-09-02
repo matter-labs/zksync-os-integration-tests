@@ -111,10 +111,13 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
             // already be doing so when the chain gets there. Pre-v33 batches keep committing
             // no-DA regardless of this setting.
             da_switch::prepare_server_for_blobs(eco, chain_id).await?;
-            Some((
-                blobs_validator.expect("resolved for validium chains"),
-                protocol_ops::types::DAValidatorType::LogsOnlyValidium,
-            ))
+            // Both DA axes at once: the pubdata goes to L1 through the rollup validator's blobs
+            // from here on, and only the log region is committed.
+            Some(protocol::DaMove {
+                l1_da_validator: blobs_validator.expect("resolved for validium chains"),
+                da_mode: protocol_ops::types::DAValidatorType::Rollup,
+                pubdata_content: protocol_ops::types::PubdataContent::LogsOnly,
+            })
         } else {
             None
         };
