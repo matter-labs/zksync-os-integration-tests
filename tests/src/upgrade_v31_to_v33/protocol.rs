@@ -297,22 +297,35 @@ pub async fn run_chain_upgrade(
     Ok(())
 }
 
-/// Assert the chain diamond's packed protocol version has the expected major.
+/// Assert the chain diamond's protocol version, as the full semver triple it reports — a chain
+/// left on the wrong patch is as wrong as one left on the wrong minor, and the packed value the
+/// other getter returns hides the patch.
 pub async fn assert_protocol_version(
     l1_rpc: &str,
     bridgehub: Address,
     chain_id: u64,
-    expected_major: u64,
+    expected: (u32, u32, u32),
 ) -> Result<()> {
     let diamond = protocol_ops::common::l1_contracts::resolve_zk_chain(l1_rpc, bridgehub, chain_id)
         .await
         .context("resolve diamond")?;
     let provider = provider(l1_rpc).await?;
-    let packed = call(&provider, diamond, ZkChainAbi::getProtocolVersionCall {}).await?;
-    let major = (packed.wrapping_to::<u64>() >> 32) & 0xFFFF;
+    let semver = call(
+        &provider,
+        diamond,
+        ZkChainAbi::getSemverProtocolVersionCall {},
+    )
+    .await?;
+    let actual = (semver._0, semver._1, semver._2);
     anyhow::ensure!(
-        major == expected_major,
-        "expected protocol version {expected_major}, got {major}"
+        actual == expected,
+        "expected protocol version v{}.{}.{} on chain {chain_id}, got v{}.{}.{}",
+        expected.0,
+        expected.1,
+        expected.2,
+        actual.0,
+        actual.1,
+        actual.2
     );
     Ok(())
 }

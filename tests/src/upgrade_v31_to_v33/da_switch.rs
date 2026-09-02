@@ -3,17 +3,22 @@
 //! A no-DA validium publishes nothing to L1, so the interop commitment tree leaves its
 //! `L2InteropCommitmentTree` records are unreachable from L1 and the chain cannot take part in
 //! atomic interop. v33 is the first version where a validium-priced chain may publish through
-//! blobs (`ProtocolSemanticVersion::MIN_VERSION_WITH_VALIDIUM_DA`), so this is the migration an
-//! operator runs right after the upgrade:
+//! blobs (`ProtocolSemanticVersion::MIN_VERSION_WITH_VALIDIUM_DA`), so the move is part of taking
+//! such a chain to v33 — in two halves, in this order:
 //!
-//!   1. `setDAValidatorPair` — blobs validator + `BlobsZKSyncOS`, through the ChainAdmin;
-//!   2. `setPubdataContent(LOGS_ONLY)` — the chain publishes its log region and nothing else;
-//!   3. restart the server in `Blobs` pubdata mode, which is where it picks the new scheme and
-//!      the new content up (both are read at startup).
+//!   1. [`prepare_server_for_blobs`], before anything happens on L1. The server reads its pubdata
+//!      mode once at startup, and `PubdataMode::adapt_for_protocol_version` keeps sealing pre-v33
+//!      batches with no DA regardless of it — so the restart is inert until the chain reaches v33,
+//!      and doing it first means the server is already correct when it does.
+//!   2. [`to_logs_only_blobs`], right after the diamond cut: the DA validator pair and
+//!      `PubdataContent::LOGS_ONLY`.
 //!
-//! Step 2 reverts while committed-but-unverified batches exist, and step 1 stalls commits (the
-//! committer rejects any batch whose scheme differs from the stored one), which is what makes the
-//! queue drain and stay drained in between.
+//! Between the two the chain's commits revert with `MismatchL2DACommitmentScheme` — the server
+//! sends the blobs scheme while L1 still stores the no-DA one — and resume once the pair is set.
+//! That is the harmless failure of the pair; the other order commits v33 batches that no prover
+//! can settle. Closing the window entirely takes putting both calls in the cut's own
+//! `ChainAdmin.multicall`, which needs the protocol-ops change in
+//! matter-labs/era-contracts#2455.
 
 use std::time::{Duration, Instant};
 
@@ -34,9 +39,16 @@ const LOGS_ONLY: u8 = 1;
 /// How long the chain gets to prove out the batches committed before the switch.
 const QUIESCE_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Move `chain_id` from no-DA to logs-only pubdata posted through blobs, and restart its server in
-/// the matching mode.
-pub async fn to_logs_only_blobs(eco: &mut Ecosystem, chain_id: u64) -> Result<()> {
+/// Restart `chain_id`'s server with `pubdata_mode: Blobs` — the config change an operator makes
+/// before the chain reaches v33, since the server only reads the setting at startup.
+pub async fn prepare_server_for_blobs(eco: &mut Ecosystem, chain_id: u64) -> Result<()> {
+    eco.restart_chain_with_config(chain_id, "l1_sender:\n  pubdata_mode: Blobs\n")
+        .await
+        .with_context(|| format!("restart chain {chain_id}'s server in Blobs pubdata mode"))
+}
+
+/// Move `chain_id`'s L1 configuration from no-DA to logs-only pubdata posted through blobs.
+pub async fn to_logs_only_blobs(eco: &Ecosystem, chain_id: u64) -> Result<()> {
     let chain = eco
         .chains()
         .find(|c| c.chain_id() == chain_id)
@@ -67,11 +79,7 @@ pub async fn to_logs_only_blobs(eco: &mut Ecosystem, chain_id: u64) -> Result<()
 
     set_pubdata_content(&l1_rpc, bridgehub, chain_id, LOGS_ONLY)
         .await
-        .context("set LOGS_ONLY pubdata content")?;
-
-    eco.restart_chain_with_config(chain_id, "l1_sender:\n  pubdata_mode: Blobs\n")
-        .await
-        .context("restart the server in Blobs pubdata mode")
+        .context("set LOGS_ONLY pubdata content")
 }
 
 /// The blobs DA validator to move onto: the one the ecosystem's rollup chain already commits with,

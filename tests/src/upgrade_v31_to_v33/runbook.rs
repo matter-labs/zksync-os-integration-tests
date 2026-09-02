@@ -29,14 +29,22 @@ const PRIORITY_QUEUE_DRAIN_TIMEOUT: Duration = Duration::from_secs(300);
 /// Returns, per chain id, the L2 block its upgrade transaction was sealed in, so callers can wait
 /// for those to finalize.
 pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
-    let first = eco.chain();
-    let l1_rpc = first.l1_rpc_url();
-    let bridgehub = first.bridgehub_addr();
+    // Owned, not borrowed from a `Chain`: the per-chain loop below restarts servers, which needs
+    // the ecosystem mutably.
+    let (l1_rpc, bridgehub, first_chain_id) = {
+        let first = eco.chain();
+        (
+            first.l1_rpc_url().to_string(),
+            first.bridgehub_addr(),
+            first.chain_id(),
+        )
+    };
+    let l1_rpc = l1_rpc.as_str();
 
     // Every chain of the fixture shares one CTM — the upgrade is an ecosystem-level operation and
     // the per-chain cuts all come from it.
     let ctm =
-        protocol_ops::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, first.chain_id())
+        protocol_ops::common::l1_contracts::resolve_ctm_proxy(l1_rpc, bridgehub, first_chain_id)
             .await
             .context("resolve CTM")?;
 
@@ -83,10 +91,27 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
         .await
         .context("apply upgrade-governance")?;
 
-    // ── Per chain: bound, drain, schedule, cut ───────────────────────────────
+    // ── Per chain: DA prep, bound, drain, schedule, cut, DA move ─────────────
+    //
+    // A validium-priced chain has to leave no-DA behind as part of this upgrade: its first v33
+    // batch does not settle while it publishes nothing (`proveBatches` reverts `InvalidProof`),
+    // and until it publishes its log region its interop (IMT) leaves are unreachable from L1.
+    let validium_chains = validium_priced_chains(l1_rpc, bridgehub, eco).await?;
+
+    let chain_ids: Vec<u64> = eco.chains().map(|c| c.chain_id()).collect();
     let mut upgrade_blocks = Vec::new();
-    for chain in eco.chains() {
-        let chain_id = chain.chain_id();
+    for chain_id in chain_ids {
+        // The server half of that move goes first, before anything touches L1: it is inert while
+        // the chain is on v31, and it has to be in place by the time the cut makes it v33.
+        if validium_chains.contains(&chain_id) {
+            da_switch::prepare_server_for_blobs(eco, chain_id)
+                .await
+                .with_context(|| format!("prepare chain {chain_id}'s server for blobs"))?;
+        }
+        let chain = eco
+            .chains()
+            .find(|c| c.chain_id() == chain_id)
+            .expect("chain of this ecosystem");
 
         // The bound is recorded before the upgrade is scheduled so it lands in its own
         // transaction, as `V32UpgradeZKsyncOS` requires.
@@ -149,18 +174,16 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
         .await
         .with_context(|| format!("upgrade chain {chain_id}"))?;
 
-        upgrade_blocks.push((chain_id, upgrade_block));
-    }
+        // Immediately after the cut, so the chain spends as little time as possible committing
+        // under a DA setup its new version cannot settle. Both calls belong in the cut's own
+        // `ChainAdmin.multicall`; that takes matter-labs/era-contracts#2455.
+        if validium_chains.contains(&chain_id) {
+            da_switch::to_logs_only_blobs(eco, chain_id)
+                .await
+                .with_context(|| format!("move chain {chain_id} onto blobs DA"))?;
+        }
 
-    // A validium-priced chain has to leave no-DA behind as part of this upgrade: its first v33
-    // batch does not settle while it publishes nothing (`proveBatches` reverts `InvalidProof`),
-    // and until it publishes its log region its interop (IMT) leaves are unreachable from L1.
-    // v33 is the first version where such a chain may post through blobs, so the move belongs
-    // here rather than in whatever test happens to need interop afterwards.
-    for chain_id in validium_priced_chains(l1_rpc, bridgehub, eco).await? {
-        da_switch::to_logs_only_blobs(eco, chain_id)
-            .await
-            .with_context(|| format!("move chain {chain_id} onto blobs DA"))?;
+        upgrade_blocks.push((chain_id, upgrade_block));
     }
 
     Ok(upgrade_blocks)

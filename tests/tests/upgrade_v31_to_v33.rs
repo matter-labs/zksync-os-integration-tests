@@ -17,6 +17,10 @@ use tests::eth::{call, provider};
 use tests::upgrade_v31_to_v33::fixture::{self, DEPLOYER_KEY};
 use tests::upgrade_v31_to_v33::{protocol, runbook};
 
+/// The semver the upgrade lands on, as `(major, minor, patch)`. It comes from the pinned
+/// era-contracts revision's genesis config, so it moves with the pin.
+const UPGRADED_VERSION: (u32, u32, u32) = (0, 33, 0);
+
 /// `PubdataContent.FULL_PUBDATA` — the first variant of the enum the v33
 /// `Getters` facet exposes, and the value an upgraded rollup keeps.
 const FULL_PUBDATA: u8 = 0;
@@ -37,7 +41,7 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
 
     for (chain_id, upgrade_block) in &upgrade_blocks {
         let chain_id = *chain_id;
-        protocol::assert_protocol_version(l1_rpc, bridgehub, chain_id, 33)
+        protocol::assert_protocol_version(l1_rpc, bridgehub, chain_id, UPGRADED_VERSION)
             .await
             .with_context(|| format!("protocol version of chain {chain_id}"))?;
 
