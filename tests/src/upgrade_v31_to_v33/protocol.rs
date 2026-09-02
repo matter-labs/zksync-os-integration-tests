@@ -303,7 +303,9 @@ pub async fn run_chain_upgrade(
         // The scheme follows from the DA validator type and the chain's VM; the override is for
         // gateway-settling chains, which this fixture has none of.
         l2_da_commitment_scheme: None,
-        keep_da_setup: false,
+        // The fixture's validium ends up where the tool recommends — logs-only pubdata delivered
+        // through blobs — so nothing has to be acknowledged.
+        acknowledge_unrecommended_noda: false,
         shared: shared_args(l1_rpc, &out_dir),
     })
     .await
