@@ -272,12 +272,16 @@ pub async fn schedule_upgrade_timestamp(
 /// unblocking the server's upgrade_gatekeeper.
 /// `keys` must cover every signer the emitted bundle targets (see
 /// [`schedule_upgrade_timestamp`]).
+/// `da_move` is `Some((validator, mode))` for a chain whose DA setup the upgrade has to move —
+/// the DA validator pair and the pubdata content then go out in the same `ChainAdmin.multicall`
+/// as the diamond cut.
 pub async fn run_chain_upgrade(
     l1_rpc: &str,
     workdir: &Path,
     keys: &[&str],
     bridgehub: Address,
     chain_id: u64,
+    da_move: Option<(Address, protocol_ops::types::DAValidatorType)>,
 ) -> Result<()> {
     let out_dir = workdir.join(format!("chain_upgrade_{chain_id}"));
     std::fs::create_dir_all(&out_dir).context("create out dir")?;
@@ -286,6 +290,13 @@ pub async fn run_chain_upgrade(
         topology: ecosystem_args(bridgehub),
         chain_id: Some(chain_id),
         access_control_restriction: Address::ZERO,
+        l1_da_validator: da_move.map(|(validator, _)| validator),
+        da_mode: da_move.map(|(_, mode)| mode),
+        // Both follow from the mode and the chain's VM; the overrides exist for gateway-settling
+        // chains, which this fixture has none of.
+        l2_da_commitment_scheme: None,
+        pubdata_content: None,
+        keep_da_setup: false,
         shared: shared_args(l1_rpc, &out_dir),
     })
     .await
@@ -328,35 +339,4 @@ pub async fn assert_protocol_version(
         actual.2
     );
     Ok(())
-}
-
-/// Set a chain's DA validator pair through `chain set-da-validator-pair`, which drives
-/// `AdminFunctions.s.sol` and emits a ChainAdmin bundle for [`apply`] to broadcast.
-pub async fn set_da_validator_pair(
-    l1_rpc: &str,
-    workdir: &Path,
-    bridgehub: Address,
-    chain_id: u64,
-    l1_da_validator: Address,
-    da_mode: protocol_ops::types::DAValidatorType,
-    keys: &[&str],
-) -> Result<()> {
-    let out_dir = workdir.join(format!("set_da_validator_pair_{chain_id}"));
-    std::fs::create_dir_all(&out_dir).context("create out dir")?;
-
-    chain::set_da_validator_pair::run(chain::set_da_validator_pair::ChainSetDaValidatorPairArgs {
-        topology: chain_args(bridgehub, chain_id),
-        access_control_restriction: Address::ZERO,
-        l1_da_validator,
-        da_mode,
-        // The scheme follows from `da_mode` and the chain's VM; the override exists for
-        // gateway-settling chains, which this fixture has none of.
-        l2_da_commitment_scheme: None,
-        shared: shared_args(l1_rpc, &out_dir),
-    })
-    .await
-    .context("chain set-da-validator-pair")?;
-    apply(&out_dir, keys, l1_rpc)
-        .await
-        .context("apply set-da-validator-pair")
 }

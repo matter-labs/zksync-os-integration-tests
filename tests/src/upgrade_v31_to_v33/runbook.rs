@@ -91,23 +91,33 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
         .await
         .context("apply upgrade-governance")?;
 
-    // ── Per chain: DA prep, bound, drain, schedule, cut, DA move ─────────────
+    // ── Per chain: DA prep, bound, drain, schedule, cut ──────────────────────
     //
     // A validium-priced chain has to leave no-DA behind as part of this upgrade: its first v33
     // batch does not settle while it publishes nothing (`proveBatches` reverts `InvalidProof`),
     // and until it publishes its log region its interop (IMT) leaves are unreachable from L1.
     let validium_chains = validium_priced_chains(l1_rpc, bridgehub, eco).await?;
+    let blobs_validator = if validium_chains.is_empty() {
+        None
+    } else {
+        Some(da_switch::blobs_da_validator(l1_rpc, bridgehub, eco).await?)
+    };
 
     let chain_ids: Vec<u64> = eco.chains().map(|c| c.chain_id()).collect();
     let mut upgrade_blocks = Vec::new();
     for chain_id in chain_ids {
-        // The server half of that move goes first, before anything touches L1: it is inert while
-        // the chain is on v31, and it has to be in place by the time the cut makes it v33.
-        if validium_chains.contains(&chain_id) {
-            da_switch::prepare_server_for_blobs(eco, chain_id)
-                .await
-                .with_context(|| format!("prepare chain {chain_id}'s server for blobs"))?;
-        }
+        let da_move = if validium_chains.contains(&chain_id) {
+            // Before the cut, not after: from v33 the server posts through blobs, and it has to
+            // already be doing so when the chain gets there. Pre-v33 batches keep committing
+            // no-DA regardless of this setting.
+            da_switch::prepare_server_for_blobs(eco, chain_id).await?;
+            Some((
+                blobs_validator.expect("resolved for validium chains"),
+                protocol_ops::types::DAValidatorType::LogsOnlyValidium,
+            ))
+        } else {
+            None
+        };
         let chain = eco
             .chains()
             .find(|c| c.chain_id() == chain_id)
@@ -164,24 +174,19 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
             .await
             .with_context(|| format!("finalize chain {chain_id}'s pre-upgrade batches"))?;
 
+        // The cut, the DA validator pair and the pubdata content go out as one
+        // `ChainAdmin.multicall`: `setPubdataContent` exists only on the facets the cut installs,
+        // and a chain left between the two would commit v33 batches under its old DA setup.
         protocol::run_chain_upgrade(
             l1_rpc,
             eco.workdir(),
             CHAIN_SIGNING_KEYS,
             bridgehub,
             chain_id,
+            da_move,
         )
         .await
         .with_context(|| format!("upgrade chain {chain_id}"))?;
-
-        // Immediately after the cut, so the chain spends as little time as possible committing
-        // under a DA setup its new version cannot settle. Both calls belong in the cut's own
-        // `ChainAdmin.multicall`; that takes matter-labs/era-contracts#2455.
-        if validium_chains.contains(&chain_id) {
-            da_switch::to_logs_only_blobs(eco, chain_id)
-                .await
-                .with_context(|| format!("move chain {chain_id} onto blobs DA"))?;
-        }
 
         upgrade_blocks.push((chain_id, upgrade_block));
     }

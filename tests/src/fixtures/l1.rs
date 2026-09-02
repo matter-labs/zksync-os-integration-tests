@@ -67,7 +67,7 @@ pub(super) async fn setup_l1_chains(chains: &[ChainDef]) -> Ecosystem {
             .map(|def| ChainIntent {
                 chain_id: def.chain_id,
                 base_token: None,
-                da_mode: def.da_mode.clone(),
+                da_mode: def.da_mode,
             })
             .collect(),
     };

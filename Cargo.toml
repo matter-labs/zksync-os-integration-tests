@@ -24,10 +24,11 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-# TODO: repoint at `matter-labs/era-contracts` `release/v0.33.0-atomic-interop` once
-# matter-labs/era-contracts#2420 lands — chain init only takes `pubdata_content` there.
-protocol_ops = { git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v32-chain-creation-scripts" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v32-chain-creation-scripts" }
+# TODO: repoint at `matter-labs/era-contracts` `release/v0.33.0-atomic-interop` once the
+# protocol-ops changes land — chain init takes `pubdata_content` and `chain upgrade` moves the
+# DA setup in the same call only on this branch.
+protocol_ops = { git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v33-upgrade-with-da" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v33-upgrade-with-da" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 rstest = "0.26.1"
 serde = "1.0"
