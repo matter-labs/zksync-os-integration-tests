@@ -22,9 +22,7 @@ use protocol_ops::common::{
     wallets::load_wallets,
     PrivateKey,
 };
-use protocol_ops::types::{
-    DAValidatorType, L2ChainId, L2DACommitmentScheme, PubdataContent, VMOption,
-};
+use protocol_ops::types::{DAValidatorType, L2ChainId, L2DACommitmentScheme, VMOption};
 
 #[derive(Parser, Debug)]
 pub struct ApplyArgs {
@@ -162,7 +160,6 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 chain_params,
                 vm_type,
                 l2_da_commitment_scheme,
-                pubdata_content: Some(resolve_pubdata_content(chain)),
                 register_for_interop: false,
                 create2_factory_salt: None,
                 pause_deposits: false,
@@ -353,15 +350,6 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
 /// Protocol sentinel address used for an ETH base token.
 const ETH_BASE_TOKEN: Address = address!("0x0000000000000000000000000000000000000001");
 
-/// How much pubdata the chain's diamond is initialized to commit. A validium commits the
-/// logs-only region whichever way it publishes it; where that pubdata goes is [`resolve_da`].
-fn resolve_pubdata_content(chain: &ChainIntent) -> PubdataContent {
-    match chain.da_mode {
-        DaMode::Validium(_) => PubdataContent::LogsOnly,
-        DaMode::Rollup | DaMode::Avail => PubdataContent::FullPubdata,
-    }
-}
-
 /// Resolve a chain's DA registration inputs: the `DAValidatorType` passed to `register_chain`
 /// (which derives the on-chain `PubdataPricingMode` from `!= Rollup`), the L1 DA validator, and
 /// the L2 commitment scheme when the chain's delivery is not the blobs its kind defaults to.
@@ -413,6 +401,11 @@ fn resolve_da(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::address;
+
+    const ROLLUP_VALIDATOR: Address = address!("0x1111111111111111111111111111111111111111");
+    const NO_DA_VALIDATOR: Address = address!("0x2222222222222222222222222222222222222222");
+    const BLOBS_VALIDATOR: Address = address!("0x3333333333333333333333333333333333333333");
 
     fn chain(da_mode: DaMode) -> ChainIntent {
         ChainIntent {
@@ -422,25 +415,50 @@ mod tests {
         }
     }
 
+    fn ecosystem() -> ResolvedEcosystem {
+        ResolvedEcosystem {
+            bridgehub: Address::ZERO,
+            ctm_proxy: Address::ZERO,
+            rollup_l1_da_validator: ROLLUP_VALIDATOR,
+            no_da_l1_validator: NO_DA_VALIDATOR,
+            avail_l1_da_validator: Address::ZERO,
+            blobs_zksync_os_l1_da_validator: Some(BLOBS_VALIDATOR),
+        }
+    }
+
+    /// Every validium is the same kind of chain — `LogsOnlyValidium`, which is what gives it the
+    /// logs-only pubdata content — and the flavors differ only in how that pubdata is delivered.
     #[test]
-    fn pubdata_content_follows_the_da_mode() {
-        assert_eq!(
-            resolve_pubdata_content(&chain(DaMode::Rollup)),
-            PubdataContent::FullPubdata
-        );
-        assert_eq!(
-            resolve_pubdata_content(&chain(DaMode::Avail)),
-            PubdataContent::FullPubdata
-        );
-        for da in [
-            ValidiumDa::Blobs,
-            ValidiumDa::Calldata,
-            ValidiumDa::DiscouragedNoDa,
+    fn validium_flavors_differ_only_in_delivery() {
+        let eco = ecosystem();
+        for (flavor, validator, scheme) in [
+            (ValidiumDa::Blobs, BLOBS_VALIDATOR, None),
+            (
+                ValidiumDa::Calldata,
+                ROLLUP_VALIDATOR,
+                Some(L2DACommitmentScheme::BlobsAndPubdataKeccak256),
+            ),
+            (
+                ValidiumDa::DiscouragedNoDa,
+                NO_DA_VALIDATOR,
+                Some(L2DACommitmentScheme::EmptyNoDA),
+            ),
         ] {
+            let resolved =
+                resolve_da(&chain(DaMode::Validium(flavor)), VMOption::ZKSyncOsVM, &eco).unwrap();
             assert_eq!(
-                resolve_pubdata_content(&chain(DaMode::Validium(da))),
-                PubdataContent::LogsOnly
+                resolved,
+                (DAValidatorType::LogsOnlyValidium, validator, scheme),
+                "{flavor:?}"
             );
         }
+    }
+
+    #[test]
+    fn a_rollup_delivers_through_blobs() {
+        assert_eq!(
+            resolve_da(&chain(DaMode::Rollup), VMOption::ZKSyncOsVM, &ecosystem()).unwrap(),
+            (DAValidatorType::Rollup, BLOBS_VALIDATOR, None)
+        );
     }
 }

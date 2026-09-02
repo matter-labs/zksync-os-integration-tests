@@ -119,7 +119,6 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
             Some(protocol::DaMove {
                 l1_da_validator: blobs_validator.expect("resolved for validium chains"),
                 da_mode: protocol_ops::types::DAValidatorType::LogsOnlyValidium,
-                pubdata_content: protocol_ops::types::PubdataContent::LogsOnly,
             })
         } else {
             None

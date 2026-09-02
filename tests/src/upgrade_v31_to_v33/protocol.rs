@@ -272,13 +272,12 @@ pub async fn schedule_upgrade_timestamp(
 /// unblocking the server's upgrade_gatekeeper.
 /// `keys` must cover every signer the emitted bundle targets (see
 /// [`schedule_upgrade_timestamp`]).
-/// The DA setup an upgrade moves a chain to: both axes, named rather than derived, plus the L1 DA
-/// validator to register with.
+/// The DA setup an upgrade moves a chain to: the kind of chain it becomes, and the L1 DA validator
+/// that goes with it. The pubdata content and the delivery scheme follow from the kind.
 #[derive(Clone, Copy, Debug)]
 pub struct DaMove {
     pub l1_da_validator: Address,
     pub da_mode: protocol_ops::types::DAValidatorType,
-    pub pubdata_content: protocol_ops::types::PubdataContent,
 }
 
 /// `da_move` describes where a chain's pubdata should go after the upgrade, for a chain whose DA
@@ -304,9 +303,6 @@ pub async fn run_chain_upgrade(
         // The scheme follows from the DA validator type and the chain's VM; the override is for
         // gateway-settling chains, which this fixture has none of.
         l2_da_commitment_scheme: None,
-        // The other axis, named explicitly: `--da-mode rollup` alone would default the chain to
-        // full pubdata, which is not what a validium moving onto blobs wants.
-        pubdata_content: da_move.map(|m| m.pubdata_content),
         keep_da_setup: false,
         shared: shared_args(l1_rpc, &out_dir),
     })
