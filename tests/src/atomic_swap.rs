@@ -60,14 +60,11 @@ const TOKEN_DECIMALS: u8 = 18;
 /// settlement-layer TIMESTAMP (each leg's batch must settle on L1 before it); 24h is far beyond the
 /// few seconds a batch takes to settle on the harness Anvil.
 const DEADLINE_BUFFER_SECS: u64 = 24 * 3600;
-/// Gas limit for an atomic `sendBundle`. Generous on purpose: the call's cost grows with the IMT
-/// (each insert walks and rewrites a path whose length follows the tree), so a limit tight enough
-/// for a fresh chain runs out on one with history — as an out-of-gas revert, which carries no
-/// reason and looks like a protocol failure.
-const ATOMIC_SEND_GAS: u64 = 12_000_000;
-/// How many times a leg's `sendBundle` is attempted before the run fails. Only a stale
-/// low-nullifier index is worth retrying, and one retry has always been enough.
-const SEND_ATTEMPTS: u32 = 3;
+/// Gas limit for an atomic `sendBundle`. A chain's *first* IMT insert costs about 3.2M — it grows
+/// the tree rather than filling it — while later ones settle around 0.6M, so the limit is set from
+/// the first-insert case with room to spare. It was 3M once, which the first insert overran: an
+/// out-of-gas revert carries no reason and reads like a protocol failure.
+const ATOMIC_SEND_GAS: u64 = 6_000_000;
 const TX_GAS: u64 = 5_000_000;
 
 /// `ATOMIC_FLOW_PREIMAGE_VERSION` (IAtomicInterop.sol) — the only accepted preimage version.
@@ -510,65 +507,49 @@ async fn send_atomic_leg(
     fee: U256,
 ) -> Result<(Bytes, B256, B256, u64)> {
     let value = commit_value(flow_id, predicted_hash);
+    // Low-nullifier (predecessor) index from the server's Rust IMT engine against the pre-insert tree.
+    let block = source.provider.get_block_number().await?;
+    let low_null: Option<u64> = source
+        .provider
+        .raw_request("zks_getImtLowNullifierIndex".into(), (value, block))
+        .await
+        .context("zks_getImtLowNullifierIndex")?;
+    let low_null = low_null.context("no low-nullifier leaf for commit value")?;
+
     let ic = IInteropCenter::new(INTEROP_CENTER, &source.provider);
-
-    // The low-nullifier index is read against the tree as it stands, and the send is only valid
-    // while that predecessor still is one: any IMT insert landing in between (a chain-registration
-    // service transaction, the other leg) invalidates it and the send reverts. Re-read and retry
-    // rather than fail the run on a race that resolves itself.
-    let mut receipt = None;
-    for attempt in 1..=SEND_ATTEMPTS {
-        let block = source.provider.get_block_number().await?;
-        let low_null: Option<u64> = source
-            .provider
-            .raw_request("zks_getImtLowNullifierIndex".into(), (value, block))
-            .await
-            .context("zks_getImtLowNullifierIndex")?;
-        let low_null = low_null.context("no low-nullifier leaf for commit value")?;
-
-        let send = ic
-            .sendBundle(
-                encode_evm_chain(dest.chain_id),
-                vec![bridge_call_starter(source, amount, recipient)],
-                vec![atomic_bundle_attr(preimage.clone(), U256::from(low_null))],
-            )
-            .value(fee)
-            .gas(ATOMIC_SEND_GAS);
-        let r = send.clone().send().await?.get_receipt().await?;
-        if r.status() {
-            receipt = Some(r);
-            break;
-        }
+    let send = ic
+        .sendBundle(
+            encode_evm_chain(dest.chain_id),
+            vec![bridge_call_starter(source, amount, recipient)],
+            vec![atomic_bundle_attr(preimage.clone(), U256::from(low_null))],
+        )
+        .value(fee)
+        .gas(ATOMIC_SEND_GAS);
+    let receipt = send.clone().send().await?.get_receipt().await?;
+    if !receipt.status() {
         // A mined-but-reverted transaction carries no reason. Replay it as a call against the
         // block it landed in to get one, instead of reporting only that it failed.
         let reason = send
-            .block(r.block_number.unwrap_or_default().into())
+            .block(receipt.block_number.unwrap_or_default().into())
             .call()
             .await
             .err()
             .map(|e| format!("{e:#}"))
             // The same call succeeding against the same state means the transaction did not fail
-            // on its inputs — out of gas is what is left.
+            // on its inputs — running out of gas is what is left.
             .unwrap_or_else(|| {
                 format!(
-                    "no revert reason; the same call succeeds against that state, so it ran out \
-                     of the {} gas it was given (used {})",
-                    ATOMIC_SEND_GAS, r.gas_used
+                    "no revert reason, and the same call succeeds against that state — so it ran \
+                     out of the {ATOMIC_SEND_GAS} gas it was given (used {})",
+                    receipt.gas_used
                 )
             });
-        ensure!(
-            attempt < SEND_ATTEMPTS,
-            "atomic sendBundle reverted on chain {} after {attempt} attempts (tx {:#x}): {reason}",
+        anyhow::bail!(
+            "atomic sendBundle reverted on chain {} (tx {:#x}): {reason}",
             source.chain_id,
-            r.transaction_hash
-        );
-        println!(
-            "[atomic-swap] chain {}: sendBundle attempt {attempt} reverted ({reason}); retrying \
-             with a fresh low-nullifier index",
-            source.chain_id
+            receipt.transaction_hash
         );
     }
-    let receipt = receipt.expect("loop either sets the receipt or bails");
     let tx_hash = receipt.transaction_hash;
 
     // Extract the InteropBundleSent event: bundleHash + the bundle struct (re-encoded as bundleData).
