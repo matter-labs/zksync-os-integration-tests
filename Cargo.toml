@@ -24,12 +24,8 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-# TODO: repoint at `matter-labs/era-contracts` `release/v0.33.0-atomic-interop` once
-# matter-labs/era-contracts#2455 (which contains #2420) merges. Only that branch has the two
-# protocol-ops changes this repo depends on: `chain init` takes `pubdata_content`, and
-# `chain upgrade` moves the chain's DA setup in the same `ChainAdmin.multicall` as the cut.
-protocol_ops = { git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v33-upgrade-with-da" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/StanislavBreadfulAI/era-contracts", branch = "sb-v33-upgrade-with-da" }
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", branch = "release/v0.33.0-atomic-interop" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", branch = "release/v0.33.0-atomic-interop" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 rstest = "0.26.1"
 serde = "1.0"
