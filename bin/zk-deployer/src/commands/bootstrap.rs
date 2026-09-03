@@ -178,6 +178,15 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             with_testnet_verifier: true,
             zk_token_asset_id: None,
             create2_factory_salt: None,
+            // Baked as an immutable into `L1AssetRouter` and `L1NativeTokenVault`, and there is
+            // no canonical WETH on the throwaway anvil this deploys against — protocol-ops
+            // refuses to guess one. Mainnet's address is what every deploy, local ones included,
+            // baked before it started asking; nothing here bridges WETH, so the value is inert.
+            token_weth_address: Some(
+                protocol_ops::common::addresses::MAINNET_WETH_ADDRESS
+                    .parse()
+                    .expect("hardcoded WETH address parses"),
+            ),
         };
         let eco_output = ecosystem_init(&mut runner, &sender, &owner, &eco_input).await?;
 

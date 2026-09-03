@@ -34,7 +34,8 @@ era-contracts checkout that the `protocol_ops` dependency pins).
 ├── lib/server/         # In-process zksync-os-server wrapper + RPC wait helpers
 ├── tests/              # Test framework (rstest fixtures) + integration tests
 │   ├── src/fixtures/   #   ecosystem setup, snapshot restore, and deployment cache
-│   └── tests/          #   l1.rs
+│   ├── tests/          #   l1.rs, upgrade_v31_to_v33.rs
+│   └── local-chains/   #   committed v31.1 frozen state for the upgrade tests
 └── .zkos-test-cache/   # Deployment snapshot cache (gitignored)
 ```
 

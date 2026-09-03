@@ -35,6 +35,7 @@ Declare as `#[future] name: Type` parameters on your test function. Import from
 | Fixture | Type | Description |
 |---------|------|-------------|
 | `ecosystem` | `Ecosystem` | N L1-settling ZKsync OS chains on one Anvil L1 (default: one chain, ID 6565), 10 wallets pre-funded with 100 ETH each per chain |
+| `upgrade_v31_to_v33::fixture::start()` | `Ecosystem` | The frozen v31.1 pair — rollup 506 and validium 507 — restored from a committed snapshot via `restore()`; used by the protocol-upgrade tests. Its L1 keys live in `wallets.yaml`: anvil account #0 owns the Governance contract, and each chain's `owner` owns its ChainAdmin. |
 
 **Restoring a fixed chain:** `fixtures::restore::restore(dir)` brings up an
 `Ecosystem` from a committed snapshot directory (`l1-state.json.gz` +
@@ -75,6 +76,92 @@ When the fixture returns, batch 1 is already finalized on every chain — wallet
 are funded and the chains are ready for test operations.
 
 ---
+
+## The frozen v31.1 fixture
+
+`tests/local-chains/v31.1/` is a two-chain ecosystem captured before the v33 upgrade:
+
+| chain | shape | DA registration | pricing mode |
+|---|---|---|---|
+| 506 | rollup | blobs validator, `BlobsZKSyncOS` | `Rollup` |
+| 507 | validium | no-DA validator, `EmptyNoDA` | `Validium` |
+
+Two chains because the upgrade tests need both shapes across the boundary, and because an atomic
+swap needs two interop-capable chains — creating one *after* an upgrade does not work (chain
+creation re-reads the chain-creation params out of the block `newChainCreationParamsBlock` names,
+and an upgrade copies that block number from the old version, so on a restored snapshot it points
+at history a state dump does not carry).
+
+### Regenerating it
+
+The fixture must be built with a toolchain that predates this workspace — v31 contracts and the
+zk-deployer revision whose intent schema and protocol-ops API match them. `versions.yaml` in the
+fixture directory records both.
+
+```bash
+# 1. contracts at the recorded revision, built
+git worktree add --detach ../ec-v31 <era-contracts sha from versions.yaml>
+cd ../ec-v31 && git submodule update --init --recursive
+(cd l1-contracts && yarn install --frozen-lockfile)
+forge build --root l1-contracts
+
+# 2. the matching zk-deployer, with its era-contracts deps pinned to the same sha
+git worktree add --detach ../it-v31gen <zksync-os-integration-tests sha from versions.yaml>
+cd ../it-v31gen   # pin protocol_ops + zksync_os_genesis_gen to that rev in Cargo.toml
+cargo build --release -p zk-deployer
+
+# 3. deploy the two chains against a throwaway auto-Anvil (no l1_rpc_url in the intent)
+mkdir ../v31-fixture && cd ../v31-fixture
+cat > intent.yaml <<'YAML'
+schema_version: 1
+wallets:
+  ecosystem_seed: v31-two-chain-fixture
+chains:
+  - chain_id: 506
+    da_mode: rollup
+  - chain_id: 507
+    da_mode: no_da   # the schema of the deployer revision above; today it is
+                     # `!validium discouraged_no_da`
+YAML
+export PROTOCOL_CONTRACTS_ROOT=$PWD/../ec-v31
+ZKD=../it-v31gen/target/release/zk-deployer
+KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80  # anvil #0
+"$ZKD" bootstrap --private-key "$KEY" --broadcast --l1-state l1-state.json
+"$ZKD" apply     --private-key "$KEY" --broadcast --l1-state l1-state.json
+"$ZKD" server-config --chain 506 --output server-506.yaml
+"$ZKD" server-config --chain 507 --output server-507.yaml
+gzip -9 l1-state.json
+```
+
+Then copy `genesis.json`, `l1-state.json.gz`, `wallets.yaml` and the two `server-<id>.yaml` files
+into `tests/local-chains/v31.1/`, and in the server configs: drop `genesis_input_path` (the restore
+path injects it) and replace the validium's `pubdata_mode: RelayedL2Calldata` with `Validium` —
+that deployer emits a mode name the current server no longer knows.
+
+### Verifying it
+
+A regenerated snapshot is **not** byte-comparable with the committed one: anvil timestamps, gas
+values and CREATE2 nonces move between runs even with identical inputs. What is checkable is the
+shape, which is what everything built on the fixture actually depends on:
+
+```bash
+cargo test --release -p tests --test v31_fixture
+```
+
+`fixture_is_a_v31_rollup_and_validium` restores the snapshot, starts a server per chain, and
+asserts, on L1: exactly chains 506 and 507 on the bridgehub; both diamonds at packed protocol
+version v31.1; 506 `Rollup`-priced with the `BlobsZKSyncOS` scheme and 507 `Validium`-priced with
+`EmptyNoDA`; and each ChainAdmin owned by the key `upgrade_v31_to_v33::fixture` names. Reaching
+those assertions at all means both servers booted against the state and finalized their first
+batch. If a regenerated fixture passes this test, it is a drop-in replacement; if the wallet seed
+changed, the constants in `fixture.rs` are what the test will point at.
+
+Two things this cannot establish: that the snapshot was produced by exactly the revisions
+`versions.yaml` claims (nothing in the dump attests to that — the closest tie is that the genesis
+root in `genesis.json` is a deterministic function of the contracts revision, so regenerating
+genesis with those contracts and diffing it does pin the contracts half), and that the state is
+free of anything unrelated the generating run happened to leave behind. Both are why the fixture
+is regenerated from a scripted run rather than edited by hand.
 
 ## `Ecosystem` API
 
@@ -237,6 +324,16 @@ async fn transfer_between_wallets(#[future] ecosystem: Ecosystem) {
     assert!(chain.balance(to).await > U256::from(1_000_000_000_000_000_000u128));
 }
 ```
+
+### Example: protocol upgrade
+
+See `tests/tests/upgrade_v31_to_v33.rs` — starts the frozen v31.1 fixture
+(`upgrade_v31_to_v33::fixture`), drives the real upgrade runbook steps
+(`upgrade_v31_to_v33::protocol`), and verifies post-upgrade deposits. The
+version it upgrades *to* is whatever the pinned era-contracts revision's
+genesis config says, so the runbook itself is version-agnostic.
+
+---
 
 ## Deployment Cache
 

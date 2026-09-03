@@ -203,13 +203,16 @@ pub(crate) fn resolve_base_token_addr(
     }
 }
 
+/// The mechanism the server publishes each batch's pubdata with — the server's `PubdataMode`,
+/// which has to agree with the L2 DA commitment scheme the chain was registered with. It says
+/// nothing about how *much* pubdata there is; that is the chain's `PubdataContent`, set at init.
 pub(crate) fn resolve_pubdata_mode(chain: &ChainIntent) -> &'static str {
     match chain.da_mode {
         DaMode::Rollup | DaMode::Avail | DaMode::Validium(ValidiumDa::Blobs) => "Blobs",
         DaMode::Validium(ValidiumDa::Calldata) => "Calldata",
-        // `Validium` is the server's post-nothing mode and the only one its
-        // startup check accepts for a chain whose pricing mode is Validium.
-        DaMode::Validium(ValidiumDa::NoDa) => "Validium",
+        // `Validium` is the server's post-nothing mode and the only one its startup check accepts
+        // for a chain whose pricing mode is Validium below v33.
+        DaMode::Validium(ValidiumDa::DiscouragedNoDa) => "Validium",
     }
 }
 

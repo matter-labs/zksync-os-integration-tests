@@ -29,9 +29,7 @@ impl ChainDef {
         }
     }
 
-    /// Validium (LOGS_ONLY pubdata) posting via the chosen DA — see
-    /// [`ValidiumDa`] for the flavors and their on-chain pricing-mode
-    /// consequences.
+    /// A validium — logs-only pubdata — publishing it the way `da` says. See [`ValidiumDa`].
     pub fn validium(chain_id: u64, da: ValidiumDa) -> Self {
         Self {
             chain_id,
@@ -69,7 +67,7 @@ pub(super) async fn setup_l1_chains(chains: &[ChainDef]) -> Ecosystem {
             .map(|def| ChainIntent {
                 chain_id: def.chain_id,
                 base_token: None,
-                da_mode: def.da_mode.clone(),
+                da_mode: def.da_mode,
             })
             .collect(),
     };
