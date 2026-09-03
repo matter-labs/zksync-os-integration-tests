@@ -82,15 +82,20 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
     }
 
     // ── Post-upgrade traffic: an L1→L2 deposit must work on both chains ──────
-    let recipient: Address = "0x70997970C51812dc3A010C7d01b50e0d17dc79C8".parse()?;
+    //
+    // The recipient is an address nothing has ever funded, so its balance appearing on L2 is the
+    // deposit and nothing else. A rich wallet would already hold the base token the fixture's
+    // `apply` deposited into it, and the check would pass without the chain doing anything.
+    const DEPOSIT_WEI: u128 = 1_000_000_000_000_000_000; // 1 ETH
     for chain in eco.chains() {
         let chain_id = chain.chain_id();
+        let recipient = fresh_recipient(chain_id);
         zk_deployer::l1_l2_deposit::deposit_base_token(
             l1_rpc,
             bridgehub,
             chain_id,
             recipient,
-            U256::from(1_000_000_000_000_000_000u128), // 1 ETH
+            U256::from(DEPOSIT_WEI),
             1_000_000_000,
             DEPLOYER_KEY,
             None, // ETH-based chain
@@ -100,6 +105,19 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
         zk_deployer::l1_l2_deposit::wait_for_l2_balance(chain.l2_rpc_url(), recipient, 120)
             .await
             .with_context(|| format!("deposit lands on chain {chain_id}"))?;
+
+        // At least the deposited value, not exactly it: the deposit names the recipient as its
+        // refund recipient too, so whatever of the base cost the L2 transaction does not burn is
+        // credited on top.
+        let balance = chain
+            .balance(recipient)
+            .await
+            .with_context(|| format!("balance of {recipient} on chain {chain_id}"))?;
+        anyhow::ensure!(
+            balance >= U256::from(DEPOSIT_WEI),
+            "chain {chain_id} credited {recipient} with {balance}, less than the {DEPOSIT_WEI} \
+             deposited"
+        );
 
         // Wait for the deposit's block to finalize. Snapshot latest_block after the balance
         // appears — the deposit is in a block <= this number.
@@ -114,4 +132,13 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
     }
 
     Ok(())
+}
+
+/// An address no wallet list contains and no fixture funds, carrying the chain id in its low bytes
+/// so a failure says which chain it belongs to.
+fn fresh_recipient(chain_id: u64) -> Address {
+    let mut bytes = [0u8; 20];
+    bytes[..4].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    bytes[12..].copy_from_slice(&chain_id.to_be_bytes());
+    Address::from(bytes)
 }
