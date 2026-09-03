@@ -23,7 +23,7 @@ pub enum DaMode {
 
 /// How a validium delivers its logs-only pubdata to L1 — the chain's `L2DACommitmentScheme`. What
 /// it commits is the same either way; only `Blobs` and `Calldata` actually deliver it, which is
-/// what keeps interop (IMT) data reconstructible from L1.
+/// what lets anyone rebuild the interop (IMT) tree from L1 and prove membership in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ValidiumDa {
@@ -34,8 +34,10 @@ pub enum ValidiumDa {
     Calldata,
     /// Nothing published (`EmptyNoDA` scheme, no-DA validator).
     ///
-    /// Discouraged, hence the name: what the chain committed is unavailable from L1, its interop
-    /// (IMT) leaves included, so it cannot take part in atomic interop.
+    /// Discouraged, hence the name: the chain's interop (IMT) leaves are committed but never
+    /// published, so the counterparties in an atomic interop flow cannot rely on the availability
+    /// of the merkle proofs they need — the data those proofs are built from only ever existed on
+    /// the chain that withheld it.
     DiscouragedNoDa,
 }
 
