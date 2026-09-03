@@ -178,6 +178,9 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             with_testnet_verifier: true,
             zk_token_asset_id: None,
             create2_factory_salt: None,
+            // Only ever deployed against a throwaway L1, where the mainnet WETH default is as
+            // meaningless as any other address and nothing bridges WETH anyway.
+            token_weth_address: None,
         };
         let eco_output = ecosystem_init(&mut runner, &sender, &owner, &eco_input).await?;
 

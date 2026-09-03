@@ -354,8 +354,10 @@ const ETH_BASE_TOKEN: Address = address!("0x000000000000000000000000000000000000
 /// (which derives the on-chain `PubdataPricingMode` from `!= Rollup`), the L1 DA validator, and
 /// the L2 commitment scheme when the chain's delivery is not the blobs its kind defaults to.
 ///
-/// This is the *delivery* axis. What the chain commits is [`resolve_pubdata_content`], and every
-/// validium here commits the same logs-only region however it delivers it.
+/// This is the *delivery* axis. What the chain commits is the pubdata content protocol-ops
+/// derives from the `DAValidatorType`, and every validium here commits the same logs-only region
+/// however it delivers it — and registers as `PubdataPricingMode::Validium` either way, since
+/// `register_chain` reads that off `da_mode != Rollup`.
 fn resolve_da(
     chain: &ChainIntent,
     vm_type: VMOption,
