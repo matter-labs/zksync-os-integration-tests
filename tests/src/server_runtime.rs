@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use alloy::primitives::address;
-use lib_server::{Config, ExternalPriceApiClientConfig, ForcedPriceClientConfig};
+use lib_server::{Config, ExternalPriceApiClientConfig, ForcedPriceClientConfig, ZiskMode};
 
 use crate::locked_port::LockedPort;
 
@@ -93,6 +93,11 @@ impl ChainRuntime {
         // Skips the expensive ZK witness computation (the server's own integration
         // tests use the same setting: enable_input_generation=false).
         config.prover_input_generator_config.enable_input_generation = false;
+        config.prover_input_generator_config.zisk_mode = ZiskMode::Shadow;
+        config.prover_input_generator_config.zisk_shadow_execution = true;
+        config
+            .prover_input_generator_config
+            .halt_on_zisk_commitment_mismatch = true;
         config
             .sequencer_config
             .revm_consistency_checker_revert_on_divergence = true;
