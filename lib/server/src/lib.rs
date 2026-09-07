@@ -7,4 +7,6 @@ mod embedded;
 #[cfg(feature = "embedded-server")]
 pub use embedded::{load_config_from_yaml, Server};
 #[cfg(feature = "embedded-server")]
-pub use zksync_os_server::config::{Config, ExternalPriceApiClientConfig, ForcedPriceClientConfig};
+pub use zksync_os_server::config::{
+    Config, ExternalPriceApiClientConfig, ForcedPriceClientConfig, ZiskMode,
+};
