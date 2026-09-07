@@ -7,15 +7,17 @@
 //!    contracts, among them the `PriorityOpLowerBound` registry and the
 //!    per-chain upgrade contract the CTM stores as its default upgrade
 //! 2. `ecosystem upgrade-governance` (governor) — governance stages 0+1+2
-//! 3. [`record_priority_op_lower_bound`] — pin the chain's priority-op count,
+//! 3. [`run_stage3`] — post-governance, permissionless: fold the pre-upgrade
+//!    amounts into `L1NativeTokenVault.bridgedOut`
+//! 4. [`record_priority_op_lower_bound`] — pin the chain's priority-op count,
 //!    then [`wait_for_priority_ops_processed`]; the upgrade rejects the
 //!    diamond cut until every op below the pin has been processed on L2
-//! 4. [`schedule_upgrade_timestamp`] — notify ChainAdmin + ServerNotifier; the
+//! 5. [`schedule_upgrade_timestamp`] — notify ChainAdmin + ServerNotifier; the
 //!    server then injects the L2 upgrade tx and its upgrade_gatekeeper holds
 //!    v33 batches until the L1 chain upgrade lands
-//! 5. [`run_chain_upgrade`] — diamond cut, L1 protocolVersion → v33
+//! 6. [`run_chain_upgrade`] — diamond cut, L1 protocolVersion → v33
 //!
-//! Steps 1, 2, 4 and 5 go through protocol-ops commands and [`apply`]; step 3
+//! Steps 1, 2, 3, 5 and 6 go through protocol-ops commands and [`apply`]; step 4
 //! goes through `chain record-priority-op-lower-bound`, which broadcasts rather
 //! than emitting a bundle (see [`record_priority_op_lower_bound`]).
 //!
@@ -26,18 +28,22 @@
 //! The v31-named scripts and the `V32UpgradeZKsyncOS` contract are the release's
 //! current upgrade tooling, not leftovers from an older target.
 //!
-//! Unlike v30→v31 there is no stage-3 token migration and no base-token supply
-//! backfill: a chain created on v31 gets `baseTokenHasTotalSupply` from
-//! `DiamondInit`, which is what the upgrade checks.
+//! There is no base-token supply backfill: a chain created on v31 gets
+//! `baseTokenHasTotalSupply` from `DiamondInit`, which is what the upgrade
+//! checks. Stage 3 is not that backfill — v33's stage 3 is the `bridgedOut`
+//! population described in [`run_stage3`].
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, B256, U256};
 use anyhow::{Context, Result};
 use protocol_ops::commands::chain;
 use protocol_ops::commands::dev::execute_manifest::apply_manifest;
-use protocol_ops::common::abi::{IChainTypeManagerAbi, ZkChainAbi};
+use protocol_ops::commands::ecosystem::stage3;
+use protocol_ops::common::abi::{
+    BridgehubAbi, IChainTypeManagerAbi, IL1AssetRouterAbi, IL1NativeTokenVaultAbi, ZkChainAbi,
+};
 use protocol_ops::common::forge::ForgeScriptArgs;
 use protocol_ops::common::{EcosystemArgs, EcosystemChainArgs, SharedRunArgs};
 use serde::Deserialize;
@@ -211,6 +217,109 @@ pub async fn wait_for_priority_ops_processed(
         );
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
+}
+
+/// Run `ecosystem stage3`, which drives `CoreUpgrade_v33.stage3(bridgehub)`.
+///
+/// The v33 `L1NativeTokenVault` tracks `bridgedOut[assetId]` — the net amount of each L1-native
+/// asset currently bridged out — and refuses an inbound amount exceeding it as forged
+/// (`InsufficientChainBalance`). An upgraded-in-place vault starts that mapping at zero while
+/// still holding every asset bridged out before the upgrade, so until the pre-upgrade amounts are
+/// folded in, withdrawing them looks exactly like forgery. Stage 3 folds them in, once per asset.
+///
+/// Permissionless and idempotent per asset, so it needs no governance signer and an interrupted
+/// run is resumed by running it again. Like every forge-backed protocol-ops command it only
+/// *prepares* — the emitted bundle is applied here.
+///
+/// In production this runs between the governance stages and the per-chain diamond cuts, so that
+/// no chain is ever live on v33 with its withdrawals blocked. The upgrade test deliberately runs
+/// it after the cuts, to observe the window it closes; the population itself is independent of
+/// them, since it only touches the ecosystem-level vault.
+pub async fn run_stage3(
+    l1_rpc: &str,
+    workdir: &Path,
+    bridgehub: Address,
+    sender_key: &str,
+) -> Result<()> {
+    let out_dir = workdir.join("stage3");
+    std::fs::create_dir_all(&out_dir).context("create out dir")?;
+
+    stage3::run(stage3::Stage3Args {
+        shared: shared_args(l1_rpc, &out_dir),
+        topology: ecosystem_args(bridgehub),
+        sender: Some(
+            sender_key
+                .parse::<alloy::signers::local::PrivateKeySigner>()
+                .context("parse sender key")?
+                .address(),
+        ),
+    })
+    .await
+    .context("ecosystem stage3")?;
+    apply(&out_dir, &[sender_key], l1_rpc)
+        .await
+        .context("apply stage3")?;
+
+    Ok(())
+}
+
+/// The L1 native token vault: bridgehub -> asset router -> vault.
+pub async fn native_token_vault(l1_rpc: &str, bridgehub: Address) -> Result<Address> {
+    let provider = provider(l1_rpc).await?;
+    let asset_router = call(&provider, bridgehub, BridgehubAbi::assetRouterCall {})
+        .await
+        .context("bridgehub.assetRouter()")?;
+    call(
+        &provider,
+        asset_router,
+        IL1AssetRouterAbi::nativeTokenVaultCall {},
+    )
+    .await
+    .context("assetRouter.nativeTokenVault()")
+}
+
+/// One asset's `bridgedOut` accounting in the L1 vault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BridgedOut {
+    /// The net amount currently bridged out of L1.
+    pub amount: U256,
+    /// Whether the asset's pre-upgrade amount has already been folded in — set by stage 3, and
+    /// only for assets that had a non-zero amount to fold.
+    pub populated: bool,
+}
+
+/// Read `bridgedOut` / `bridgedOutPopulated` for `asset_id`.
+pub async fn bridged_out(l1_rpc: &str, vault: Address, asset_id: B256) -> Result<BridgedOut> {
+    let provider = provider(l1_rpc).await?;
+    Ok(BridgedOut {
+        amount: call(
+            &provider,
+            vault,
+            IL1NativeTokenVaultAbi::bridgedOutCall { _assetId: asset_id },
+        )
+        .await
+        .context("bridgedOut")?,
+        populated: call(
+            &provider,
+            vault,
+            IL1NativeTokenVaultAbi::bridgedOutPopulatedCall { _assetId: asset_id },
+        )
+        .await
+        .context("bridgedOutPopulated")?,
+    })
+}
+
+/// The pre-upgrade amount stage 3 folds into `bridgedOut` for `asset_id` — read out of the removed
+/// v31 asset tracker's retained state, so it is the same value before and after the population.
+pub async fn legacy_bridged_out(l1_rpc: &str, vault: Address, asset_id: B256) -> Result<U256> {
+    let provider = provider(l1_rpc).await?;
+    call(
+        &provider,
+        vault,
+        IL1NativeTokenVaultAbi::legacyBridgedOutCall { _assetId: asset_id },
+    )
+    .await
+    .context("legacyBridgedOut")
 }
 
 // ---------------------------------------------------------------------------

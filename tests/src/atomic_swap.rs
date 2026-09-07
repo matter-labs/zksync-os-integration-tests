@@ -42,12 +42,12 @@ use tokio::time::sleep;
 use crate::chain::Chain;
 
 // ── Canonical L2 built-in addresses (mirror contracts/common/l2-helpers/L2ContractAddresses.sol) ──
-const INTEROP_CENTER: Address = address!("000000000000000000000000000000000001000d");
+pub(crate) const INTEROP_CENTER: Address = address!("000000000000000000000000000000000001000d");
 const INTEROP_HANDLER: Address = address!("000000000000000000000000000000000001000e");
 const ATOMIC_FLOW_MANAGER: Address = address!("0000000000000000000000000000000000010014");
-const NATIVE_TOKEN_VAULT: Address = address!("0000000000000000000000000000000000010004");
+pub(crate) const NATIVE_TOKEN_VAULT: Address = address!("0000000000000000000000000000000000010004");
 const L2_BRIDGEHUB: Address = address!("0000000000000000000000000000000000010002");
-const ASSET_ROUTER: Address = address!("0000000000000000000000000000000000010003");
+pub(crate) const ASSET_ROUTER: Address = address!("0000000000000000000000000000000000010003");
 const INTEROP_ROOT_STORAGE: Address = address!("0000000000000000000000000000000000010008");
 #[allow(dead_code)]
 const COMMITMENT_TREE: Address = address!("0000000000000000000000000000000000010012");
@@ -79,6 +79,7 @@ sol! {
     interface IERC7786Attributes {
         function indirectCall(uint256 callValue);
         function atomicBundle(AtomicFlowPreimage flowPreimage, uint256 lowNullifierIndex);
+        function interopBundleSalt(bytes32 salt);
     }
 
     // Mirrors atomic-interop/IAtomicInterop.sol: the flowId preimage. `version` must equal
@@ -230,7 +231,7 @@ fn ntv_asset_id(chain_id: u64, token: Address) -> B256 {
 }
 
 /// ERC-7930 EVM chain reference without an address component.
-fn encode_evm_chain(chain_id: u64) -> Bytes {
+pub(crate) fn encode_evm_chain(chain_id: u64) -> Bytes {
     let be = chain_id.to_be_bytes();
     let first = be.iter().position(|&b| b != 0).unwrap_or(be.len() - 1);
     let chain_ref = &be[first..];
@@ -241,7 +242,7 @@ fn encode_evm_chain(chain_id: u64) -> Bytes {
 }
 
 /// ERC-7930 EVM address without a chain reference.
-fn encode_evm_address(addr: Address) -> Bytes {
+pub(crate) fn encode_evm_address(addr: Address) -> Bytes {
     let mut out = vec![0x00, 0x01, 0x00, 0x00, 0x00, 0x14];
     out.extend_from_slice(addr.as_slice());
     Bytes::from(out)
@@ -249,18 +250,20 @@ fn encode_evm_address(addr: Address) -> Bytes {
 
 /// `secondBridgeData` for an ERC20 transfer via the L2 asset router: `0x01 ++ abi.encode(bytes32 assetId, bytes burnData)`
 /// where `burnData = abi.encode(uint256 amount, address receiver, address(0))`.
-fn token_transfer_data(asset_id: B256, amount: U256, recipient: Address) -> Bytes {
+pub(crate) fn token_transfer_data(asset_id: B256, amount: U256, recipient: Address) -> Bytes {
     let burn_data = (amount, recipient, Address::ZERO).abi_encode_params();
     let mut out = vec![0x01u8];
     out.extend_from_slice(&(asset_id, Bytes::from(burn_data)).abi_encode_params());
     Bytes::from(out)
 }
 
-/// Indirect-call ERC-7786 attribute with zero call value.
-fn indirect_call_attr() -> Bytes {
+/// Indirect-call ERC-7786 attribute. `call_value` is the SOURCE-side value handed to the target's
+/// `initiateIndirectCall` (`indirectCallMessageValue`): zero for an ERC20 burn, the withdrawn
+/// amount for a base-token one, which the NTV requires to equal `msg.value`.
+pub(crate) fn indirect_call_attr(call_value: U256) -> Bytes {
     Bytes::from(
         IERC7786Attributes::indirectCallCall {
-            callValue: U256::ZERO,
+            callValue: call_value,
         }
         .abi_encode(),
     )
@@ -287,7 +290,7 @@ fn bridge_call_starter(source: &ChainCtx, amount: U256, recipient: Address) -> I
             amount,
             recipient,
         ),
-        callAttributes: vec![indirect_call_attr()],
+        callAttributes: vec![indirect_call_attr(U256::ZERO)],
     }
 }
 

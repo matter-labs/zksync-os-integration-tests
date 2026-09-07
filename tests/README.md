@@ -333,6 +333,14 @@ See `tests/tests/upgrade_v31_to_v33.rs` — starts the frozen v31.1 fixture
 version it upgrades *to* is whatever the pinned era-contracts revision's
 genesis config says, so the runbook itself is version-agnostic.
 
+It also asserts the one step whose *position* matters. v33's stage 3 populates
+`L1NativeTokenVault.bridgedOut` from the pre-upgrade accounting; until it has
+run, withdrawing anything that was bridged out before the upgrade reverts with
+`InsufficientChainBalance`. The test finalizes the same withdrawal twice —
+before stage 3, where it must be rejected, and after, where it must pay out —
+using the `withdrawal` module, which sends a base-token withdrawal as the
+L1-destined interop bundle this release makes it.
+
 ---
 
 ## Deployment Cache

@@ -5,10 +5,17 @@
 /// upgraded chains still process deposits. The fixture is restored from a committed snapshot via
 /// [`fixture::start`]; the upgrade steps live in [`protocol`].
 ///
+/// It also pins down the one step whose *position* in the runbook is load-bearing: stage 3, the
+/// `bridgedOut` population. A withdrawal of base token that was bridged out before the upgrade is
+/// finalized twice — once before stage 3, where the vault must reject it, and once after, where it
+/// must go through. See [`protocol::run_stage3`].
+///
 /// The target version comes from the pinned era-contracts revision's genesis
 /// config, not from this test — see [`protocol`]. On
 /// `release/v0.33.0-atomic-interop` that is v33, which is why the only
 /// hard-coded version numbers here are the assertions.
+use std::time::Duration;
+
 use alloy::primitives::{Address, U256};
 use anyhow::{Context, Result};
 use protocol_ops::common::abi::ZkChainAbi;
@@ -16,6 +23,7 @@ use protocol_ops::common::abi::ZkChainAbi;
 use tests::eth::{call, provider};
 use tests::upgrade_v31_to_v33::fixture::{self, DEPLOYER_KEY};
 use tests::upgrade_v31_to_v33::{protocol, runbook};
+use tests::withdrawal;
 
 /// The semver the upgrade lands on, as `(major, minor, patch)`. It comes from the pinned
 /// era-contracts revision's genesis config, so it moves with the pin.
@@ -26,6 +34,15 @@ const UPGRADED_VERSION: (u32, u32, u32) = (0, 33, 0);
 const FULL_PUBDATA: u8 = 0;
 /// `PubdataContent.LOGS_ONLY` — what a validium reads once the upgrade moves it onto blobs.
 const LOGS_ONLY: u8 = 1;
+
+/// How much base token the withdrawal moves back to L1. Any non-zero amount exercises the
+/// pre-stage-3 rejection (`bridgedOut` starts at zero); it has to stay well below what the fixture
+/// bridged out before the upgrade, since that is the escrow it is paid from.
+const WITHDRAW_WEI: u128 = 1_000_000_000_000_000_000; // 1 ETH
+
+/// The withdrawal's batch has to commit, prove and execute on L1 before the node can serve its
+/// inclusion proof — a full settlement round on a fixture whose servers share this machine.
+const WITHDRAWAL_PROOF_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v31_to_v33_upgrade() -> Result<()> {
@@ -80,6 +97,109 @@ async fn test_v31_to_v33_upgrade() -> Result<()> {
             .await
             .with_context(|| format!("finalize chain {chain_id}'s upgrade batch"))?;
     }
+
+    // ── Stage 3, and the withdrawal window it closes ─────────────────────────
+    //
+    // Everything the fixture bridged out before the upgrade sits in the L1 vault while the v33
+    // `bridgedOut` accounting starts at zero, so withdrawing any of it looks like an inbound
+    // amount exceeding what was ever sent out — forgery, as far as the vault can tell. Stage 3
+    // folds the pre-upgrade amounts in. Run before the deposits below deliberately: a post-upgrade
+    // deposit raises `bridgedOut` normally and would cover a small withdrawal on its own, hiding
+    // exactly the state this asserts.
+    //
+    // One chain is enough: the vault is ecosystem-level, so the population is not per chain.
+    let rollup = eco
+        .chains()
+        .find(|c| c.chain_id() == fixture::ROLLUP_CHAIN_ID)
+        .context("the fixture's rollup chain")?;
+    let withdrawer = rollup.wallet(0).clone();
+    let l1_receiver = fresh_recipient(rollup.chain_id());
+
+    let vault = protocol::native_token_vault(l1_rpc, bridgehub).await?;
+    let eth_asset_id = withdrawal::l1_eth_asset_id(l1_rpc, bridgehub).await?;
+    let pre_upgrade_amount = protocol::legacy_bridged_out(l1_rpc, vault, eth_asset_id).await?;
+    anyhow::ensure!(
+        pre_upgrade_amount > U256::from(WITHDRAW_WEI),
+        "the fixture bridged out {pre_upgrade_amount} wei before the upgrade, not enough to \
+         withdraw {WITHDRAW_WEI} from"
+    );
+
+    let sent =
+        withdrawal::send_base_token(rollup, &withdrawer, U256::from(WITHDRAW_WEI), l1_receiver)
+            .await
+            .context("send the base-token withdrawal")?;
+    anyhow::ensure!(
+        sent.asset_id == eth_asset_id,
+        "the chain's base token ({}) is not L1 ETH ({eth_asset_id}) — this test withdraws the \
+         asset whose L1 accounting stage 3 populates",
+        sent.asset_id
+    );
+    rollup
+        .wait_for_tx_finalized(sent.l2_tx_hash)
+        .await
+        .context("settle the withdrawal's batch on L1")?;
+    let proof = withdrawal::inclusion_proof(rollup, &sent, WITHDRAWAL_PROOF_TIMEOUT)
+        .await
+        .context("the withdrawal's L2->L1 inclusion proof")?;
+
+    let handler = withdrawal::l1_interop_handler(l1_rpc, bridgehub).await?;
+    let before = protocol::bridged_out(l1_rpc, vault, eth_asset_id).await?;
+    anyhow::ensure!(
+        before
+            == protocol::BridgedOut {
+                amount: U256::ZERO,
+                populated: false,
+            },
+        "expected an unpopulated, zero bridgedOut before stage 3, got {before:?}"
+    );
+
+    // The inclusion proof is checked before the bundle's calls run, so reaching this error proves
+    // the withdrawal is blocked on the vault's accounting and nothing else.
+    let rejected =
+        withdrawal::finalize_expecting_insufficient_balance(l1_rpc, handler, &sent, &proof)
+            .await
+            .context("finalize the withdrawal before stage 3")?;
+    anyhow::ensure!(
+        rejected.chainId == U256::from(rollup.chain_id())
+            && rejected.assetId == eth_asset_id
+            && rejected.amount == U256::from(WITHDRAW_WEI),
+        "unexpected InsufficientChainBalance{{{}, {}, {}}}",
+        rejected.chainId,
+        rejected.assetId,
+        rejected.amount
+    );
+
+    protocol::run_stage3(l1_rpc, eco.workdir(), bridgehub, DEPLOYER_KEY)
+        .await
+        .context("stage 3")?;
+
+    let after = protocol::bridged_out(l1_rpc, vault, eth_asset_id).await?;
+    anyhow::ensure!(
+        after
+            == protocol::BridgedOut {
+                amount: pre_upgrade_amount,
+                populated: true,
+            },
+        "expected bridgedOut to be populated with the {pre_upgrade_amount} wei bridged out before \
+         the upgrade, got {after:?}"
+    );
+
+    let receiver_before = withdrawal::l1_balance(l1_rpc, l1_receiver).await?;
+    withdrawal::finalize(l1_rpc, handler, &sent, &proof, DEPLOYER_KEY)
+        .await
+        .context("finalize the withdrawal after stage 3")?;
+    let receiver_after = withdrawal::l1_balance(l1_rpc, l1_receiver).await?;
+    anyhow::ensure!(
+        receiver_after == receiver_before + U256::from(WITHDRAW_WEI),
+        "expected the L1 receiver to be credited {WITHDRAW_WEI} wei, went from {receiver_before} \
+         to {receiver_after}"
+    );
+    // The finalization is an inbound flow, so it takes the withdrawn amount back off `bridgedOut`.
+    let settled = protocol::bridged_out(l1_rpc, vault, eth_asset_id).await?;
+    anyhow::ensure!(
+        settled.amount == pre_upgrade_amount - U256::from(WITHDRAW_WEI),
+        "expected bridgedOut to drop by the withdrawn amount, got {settled:?}"
+    );
 
     // ── Post-upgrade traffic: an L1→L2 deposit must work on both chains ──────
     //

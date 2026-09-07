@@ -25,6 +25,7 @@ pub mod fixtures;
 pub mod locked_port;
 pub mod server_runtime;
 pub mod upgrade_v31_to_v33;
+pub mod withdrawal;
 pub(crate) mod workdir;
 
 // Types available via `use tests::*`.
