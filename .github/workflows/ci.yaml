@@ -26,6 +26,8 @@ jobs:
 
       - name: Setup runner
         uses: ./.github/actions/runner-setup
+        with:
+          github_token: ${{ secrets.RELEASE_TOKEN }}
 
       - name: Test ZiSK backend helper
         run: node --test bin/zk-deployer/tools/zisk-backend/zisk-backend.test.js
