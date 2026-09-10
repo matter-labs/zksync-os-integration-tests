@@ -32,6 +32,7 @@ pub(super) async fn setup_l1_chains(chain_ids: &[u64]) -> Ecosystem {
 
     // ── Intent + cache key (l1_rpc_url is filled in on the miss path) ───────
     let mut intent = IntentConfig {
+        zisk_plonk_verifier_addr: None,
         schema_version: 1,
         l1_rpc_url: None,
         multi_proof_verifier: false,

@@ -32,8 +32,9 @@ To generate the ZiSK verifier and build the multiprover artifacts explicitly:
 cargo run -p zk-deployer -- build-contracts --with-zisk
 ```
 
-The generated GPL-licensed verifier sources remain ignored in the contracts
-checkout; the deployer consumes their Foundry artifacts.
+Backend preparation stays outside Git checkouts and is reused by `bootstrap`.
+An existing backend address can be supplied instead; see the
+[deployer instructions](bin/zk-deployer/README.md).
 
 ## Project structure
 

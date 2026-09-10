@@ -27,6 +27,9 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
 
+      - name: Test ZiSK backend helper
+        run: node --test bin/zk-deployer/tools/zisk-backend/zisk-backend.test.js
+
       - name: Check formatting
         run: cargo fmt --all --check
 

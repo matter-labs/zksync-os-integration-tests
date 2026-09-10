@@ -16,7 +16,7 @@ pub struct DevBuildContractsArgs {
     #[arg(long, default_value = "false")]
     pub with_l2: bool,
 
-    /// Generate and build the standalone ZiSK Plonk verifier.
+    /// Regenerate the ZiSK wrapper and prepare its standalone backend locally.
     #[arg(long, default_value = "false")]
     pub with_zisk: bool,
 }
@@ -55,18 +55,7 @@ fn generate_zisk_verifier(root: &std::path::Path) -> Result<()> {
         );
     }
 
-    logger::step("Generating ZiSK Plonk verifier...");
-    run_command(&generator, "npm", &["ci"], "`npm ci`")?;
-    run_command(
-        &generator,
-        "node",
-        &[
-            "render_plonk_verifier.js",
-            "data/ZiSK_plonk_verification_key.json",
-            "data/PlonkVerifier.sol",
-        ],
-        "ZiSK snarkJS verifier rendering",
-    )?;
+    logger::step("Generating ZiSK wrapper...");
     run_command(
         &generator,
         "cargo",
@@ -79,8 +68,6 @@ fn generate_zisk_verifier(root: &std::path::Path) -> Result<()> {
             "data/ZiSK_vk.json",
             "--zisk_output_path",
             "../../l1-contracts/contracts/state-transition/verifiers/ZiskVerifier.sol",
-            "--zisk_plonk_input_path",
-            "data/PlonkVerifier.sol",
         ],
         "ZiSK verifier generation",
     )
@@ -124,6 +111,7 @@ pub async fn run(args: DevBuildContractsArgs) -> Result<()> {
 
     if args.with_zisk {
         generate_zisk_verifier(&root)?;
+        super::zisk::prepare_plonk_verifier(&root)?;
     }
 
     let mut dirs = vec![root.join("l1-contracts"), root.join("da-contracts")];

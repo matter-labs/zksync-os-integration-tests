@@ -164,7 +164,13 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
 
     // --- Step 3: Deploy ZiSK Plonk verifier (opt-in) -----------------------
     let zisk_plonk_verifier_addr = if intent.multi_proof_verifier {
-        let output = if state.is_done(StepKey::ZiskPlonkVerifierDeploy) {
+        let output = if let Some(verifier_address) = intent.zisk_plonk_verifier_addr {
+            anyhow::ensure!(
+                !verifier_address.is_zero(),
+                "zisk_plonk_verifier_addr must not be zero"
+            );
+            ZiskPlonkVerifierDeployedOutput { verifier_address }
+        } else if state.is_done(StepKey::ZiskPlonkVerifierDeploy) {
             logger::info("Skipping zisk.plonk_verifier.deploy (already done)");
             state.get_output::<ZiskPlonkVerifierDeployedOutput>(StepKey::ZiskPlonkVerifierDeploy)?
         } else {
@@ -172,7 +178,7 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             let verifier_address = deploy_plonk_verifier(
                 &l1_rpc_url,
                 &args.private_key,
-                &protocol_ops::common::paths::resolve_l1_contracts_path()?.join("out"),
+                &protocol_ops::common::paths::contracts_root(),
             )
             .await?;
             let output = ZiskPlonkVerifierDeployedOutput { verifier_address };
