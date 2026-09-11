@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use protocol_ops::types::L1Network;
 
 use crate::commands::execute_manifest::apply_manifest;
 use crate::commands::genesis::{self, GenesisCommands, GenesisGenerateArgs};
@@ -168,7 +169,10 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
                 !verifier_address.is_zero(),
                 "zisk_plonk_verifier_addr must not be zero"
             );
-            ZiskPlonkVerifierDeployedOutput { verifier_address }
+            let output = ZiskPlonkVerifierDeployedOutput { verifier_address };
+            state.mark_done(StepKey::ZiskPlonkVerifierDeploy, &output)?;
+            state.save(&args.state)?;
+            output
         } else if state.is_done(StepKey::ZiskPlonkVerifierDeploy) {
             logger::info("Skipping zisk.plonk_verifier.deploy (already done)");
             state.get_output::<ZiskPlonkVerifierDeployedOutput>(StepKey::ZiskPlonkVerifierDeploy)?
@@ -215,8 +219,9 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             zisk_range_verifier_addr: None,
             zk_token_asset_id: None,
             create2_factory_salt: None,
-            // Auto-Anvil has no WETH deployment; match the local contracts fixture.
-            token_weth_address: _anvil.is_some().then_some(alloy::primitives::Address::ZERO),
+            // Local L1s have no canonical WETH, including externally managed Anvil.
+            token_weth_address: (L1Network::from_l1_rpc(&l1_rpc_url)? == L1Network::Localhost)
+                .then_some(alloy::primitives::Address::ZERO),
         };
         let eco_output = ecosystem_init(&mut runner, &sender, &owner, &eco_input).await?;
 

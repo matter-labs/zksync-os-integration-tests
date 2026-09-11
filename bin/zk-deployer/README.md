@@ -216,5 +216,7 @@ This runs `build-contracts --with-zisk`, `bootstrap --broadcast`, `apply
 --broadcast`, and `server-config` on a fresh managed Anvil chain with an empty
 backend cache. It checks the deployed backend bytecode and follows the chain's
 verifier through the ZiSK wrapper to that backend, then verifies a real 1.2.0
-range proof and rejects a tampered commitment. The normal integration CI
+range proof and rejects a tampered commitment. It also reuses that backend on
+the existing L1 and checks that bootstrap can resume without preparing another
+backend. The normal integration CI
 command includes this test; it does not restore a deployment snapshot.

@@ -174,6 +174,30 @@ async fn fresh_multiprover_deployment_wires_external_backend() -> Result<()> {
     public_inputs[0] ^= U256::from(1);
     assert!(!range.verify(public_inputs, proof).call().await?);
 
+    // Reuse the backend on an existing L1, then resume bootstrap. This must
+    // persist the prerequisite just like the automatic deployment path.
+    let reuse = tempfile::tempdir()?;
+    let unused_cache = reuse.path().join("unused-backend-cache");
+    std::fs::write(
+        reuse.path().join("intent.yaml"),
+        format!(
+            "schema_version: 1\nmulti_proof_verifier: true\nl1_rpc_url: '{}'\nzisk_plonk_verifier_addr: '{backend:#x}'\nchains:\n  - chain_id: {CHAIN_ID}\n    da_mode: rollup\n",
+            anvil.endpoint()
+        ),
+    )?;
+    run(reuse.path(), &unused_cache, &["bootstrap", "--broadcast"])?;
+    run(reuse.path(), &unused_cache, &["bootstrap", "--broadcast"])?;
+    ensure!(
+        !unused_cache.exists(),
+        "reusing a backend must not prepare another one"
+    );
+    let reused_state: Value =
+        serde_json::from_slice(&std::fs::read(reuse.path().join("state.json"))?)?;
+    let reused_backend: Address = serde_json::from_value(
+        reused_state["steps"]["zisk.plonk_verifier.deploy"]["verifier_address"].clone(),
+    )?;
+    assert_eq!(reused_backend, backend);
+
     let config: serde_yaml::Value =
         serde_yaml::from_slice(&std::fs::read(workdir.path().join("server.yaml"))?)?;
     assert_eq!(config["genesis"]["chain_id"].as_u64(), Some(CHAIN_ID));
