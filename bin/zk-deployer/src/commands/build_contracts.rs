@@ -107,11 +107,13 @@ fn yarn_install_if_needed(root: &std::path::Path) -> Result<()> {
 }
 
 pub async fn run(args: DevBuildContractsArgs) -> Result<()> {
-    let root = contracts_root();
+    build_in(&contracts_root(), args).await
+}
 
+pub async fn build_in(root: &std::path::Path, args: DevBuildContractsArgs) -> Result<()> {
     if args.with_zisk {
-        generate_zisk_verifier(&root)?;
-        super::zisk::prepare_plonk_verifier(&root)?;
+        generate_zisk_verifier(root)?;
+        super::zisk::prepare_plonk_verifier(root)?;
     }
 
     let mut dirs = vec![root.join("l1-contracts"), root.join("da-contracts")];
@@ -119,7 +121,7 @@ pub async fn run(args: DevBuildContractsArgs) -> Result<()> {
         dirs.push(root.join("l2-contracts"));
     }
 
-    yarn_install_if_needed(&root)?;
+    yarn_install_if_needed(root)?;
     for dir in &dirs {
         if !dir.exists() {
             bail!(
