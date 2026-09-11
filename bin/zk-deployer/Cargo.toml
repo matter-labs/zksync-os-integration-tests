@@ -38,3 +38,6 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 toml = { workspace = true }
+
+[dev-dependencies]
+alloy = { workspace = true, features = ["contract", "sol-types"] }

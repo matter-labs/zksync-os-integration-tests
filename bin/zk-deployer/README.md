@@ -12,7 +12,7 @@ No setup required. `zk-deployer` manages Anvil automatically when `l1_rpc_url` i
 zk-deployer build-contracts
 ```
 
-For a multiprover deployment, generate and build the ZiSK verifier as well:
+For a multiprover deployment, regenerate the ZiSK wrapper and prepare its backend:
 
 ```bash
 zk-deployer build-contracts --with-zisk
@@ -36,16 +36,46 @@ multi_proof_verifier: false
 
 chains:
   - chain_id: 6565
-    da_mode: rollup     # rollup, no_da, or avail
+    da_mode: rollup     # rollup or avail
 ```
 
 Declare more entries under `chains:` to deploy multiple L1-settling chains on
 the same L1.
 
 Set `multi_proof_verifier: true` to deploy the Airbender + ZiSK verifier set.
-`bootstrap` deploys the generated ZiSK Plonk verifier directly, then passes its
-address into the CTM deployment. This requires artifacts built with
-`build-contracts --with-zisk`.
+To reuse a compatible backend on the target L1, set `zisk_plonk_verifier_addr`
+in `intent.yaml`. Otherwise, `bootstrap` prepares and deploys it automatically,
+then passes its address into the CTM deployment. `build-contracts --with-zisk`
+prepares the same cache in advance.
+
+Backend preparation downloads the pinned snarkJS dependency and builds upstream's
+`PlonkVerifier` outside Git checkouts. It requires Node.js, npm, and the Foundry
+version pinned by the selected contracts checkout. Source, notices, and artifacts
+stay under `$XDG_CACHE_HOME/zksync-os/zisk-backend` (default
+`~/.cache/zksync-os/zisk-backend`); CI uses `$RUNNER_TEMP` instead. Override this
+with `ZISK_BACKEND_CACHE`, which must be outside a Git checkout. The cache is
+keyed by the contracts PLONK key, helper, dependency pins, and compiler settings.
+The backend retains its upstream license; keep generated outputs and L1 state
+dumps containing its bytecode out of published packages.
+
+The wrapper pins the guest VKs. A backend can be reused across guest updates
+while its final PLONK circuit/setup key remains unchanged. The deployment checks
+that the supplied address has code; the operator selects the matching backend.
+
+For standalone preparation, deployment, or contracts real-proof tests, run from
+this repository (no Rust build required):
+
+```bash
+node bin/zk-deployer/tools/zisk-backend/zisk-backend.js prepare /path/to/era-contracts
+node bin/zk-deployer/tools/zisk-backend/zisk-backend.js deploy /path/to/era-contracts -- \
+  --rpc-url "$RPC_URL" --account deployer --broadcast
+node bin/zk-deployer/tools/zisk-backend/zisk-backend.js test /path/to/era-contracts
+```
+
+`prepare` prints the cached artifact path; `deploy` prints
+`zisk_plonk_verifier_addr` for the intent or contracts deployment config.
+The test command requires the bytecode-aware contracts test setup; additional
+Foundry test flags may follow `--`.
 
 ### 3. Bootstrap the ecosystem
 
@@ -160,7 +190,7 @@ zk-deployer token deploy \
 | Command | Purpose |
 |---------|---------|
 | `zk-deployer init` | Generate a starter `intent.yaml` |
-| `zk-deployer build-contracts` | Build Forge contract artifacts (`--with-zisk` generates the ZiSK verifier first) |
+| `zk-deployer build-contracts` | Build Forge contract artifacts (`--with-zisk` also prepares the external ZiSK backend) |
 | `zk-deployer bootstrap` | Wallets → genesis → ecosystem L1 init |
 | `zk-deployer apply` | Chain registration, operator setup, default L2 dev-wallet funding |
 | `zk-deployer server-config` | Generate server YAML from state (`--chain <chain_id>`) |
@@ -175,3 +205,18 @@ zk-deployer token deploy \
 | `--broadcast` | false | Broadcast bundles immediately (required for local dev) |
 | `--l1-state <path>` | l1-state.json | Anvil state file (auto-Anvil mode) |
 | `--no-fund-l2` | false | Skip the default L1→L2 deposits that fund the well-known dev wallets (100 base-token units each — ETH, or the custom base token) on every chain. Funding runs automatically on local/Anvil so a fresh chain is ready to operate. |
+
+## Testing multiprover deployment
+
+```bash
+cargo test --locked --release -p zk-deployer --test multiprover
+```
+
+This runs `build-contracts --with-zisk`, `bootstrap --broadcast`, `apply
+--broadcast`, and `server-config` on a fresh managed Anvil chain with an empty
+backend cache. It checks the deployed backend bytecode and follows the chain's
+verifier through the ZiSK wrapper to that backend, then verifies a real 1.2.0
+range proof and rejects a tampered commitment. It also reuses that backend on
+the existing L1 and checks that bootstrap can resume without preparing another
+backend. The normal integration CI
+command includes this test; it does not restore a deployment snapshot.

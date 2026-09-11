@@ -24,8 +24,8 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "bc607214f0f4cbf4610b143efeda40c64cf66699" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "bc607214f0f4cbf4610b143efeda40c64cf66699" }
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "0d7beba403c619b51ce84f455273c536ccab7cc5" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "0d7beba403c619b51ce84f455273c536ccab7cc5" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 rstest = "0.26.1"
 serde = "1.0"
@@ -40,7 +40,7 @@ tokio = "1"
 toml = "1.1.2"
 tracing = "0.1"
 tracing-subscriber = "0.3"
-zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server-private", rev = "423e78b8f69d5684a1369a96413ee0611c51cd43" }
+zksync_os_server = { git = "https://github.com/matter-labs/zksync-os-server-private", rev = "efafc9969b45102c2d8a9236c45bf1856160f1fd" }
 
 # ── Local path overrides ───────────────────────────────────────────────────────
 # Uncomment to test against a local checkout instead of the pinned git rev.

@@ -20,8 +20,17 @@ use tests::upgrade_v30_to_v31::protocol;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_v30_to_v31_upgrade() -> Result<()> {
-    // The upgrade runbook runs forge scripts — compiled contracts are required.
-    tests::fixtures::ensure_contracts_built().await;
+    // The upgrade scripts use their own v31 checkout, including its DA
+    // artifacts; building the current deployment revision does not prepare it.
+    zk_deployer::commands::build_contracts::build_in(
+        &protocol_ops_v31::common::paths::contracts_root(),
+        zk_deployer::commands::build_contracts::DevBuildContractsArgs {
+            with_l2: false,
+            with_zisk: false,
+        },
+    )
+    .await
+    .context("build v31 upgrade contracts")?;
 
     let eco = fixture::start().await.context("start v30.2 fixture")?;
     let chain = eco.chain();

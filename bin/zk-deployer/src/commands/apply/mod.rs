@@ -16,13 +16,12 @@ use protocol_ops::common::output::write_output_if_requested;
 use protocol_ops::common::{
     args::SharedRunArgs,
     forge::{ForgeRunner, ForgeScriptArgs},
-    l1_contracts::resolve_bridgehub_admin,
     logger, preflight,
     private_key::pk_to_address,
     wallets::load_wallets,
     PrivateKey,
 };
-use protocol_ops::types::{DAValidatorType, L2ChainId, VMOption};
+use protocol_ops::types::{DAValidatorType, L2ChainId};
 
 #[derive(Parser, Debug)]
 pub struct ApplyArgs {
@@ -107,8 +106,6 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
         forge_args: ForgeScriptArgs::default(),
     };
 
-    let vm_type = VMOption::ZKSyncOsVM;
-
     // ── Chain init loop ────────────────────────────────────────────────────
 
     let manifest_path = args.out.join("manifest.json");
@@ -134,7 +131,7 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
             // ETH base token (intent has no `base_token`) registers as the protocol
             // sentinel address; a custom token resolves to its deployed/declared addr.
             let base_token_addr = resolve_base_token_addr(chain, &state)?.unwrap_or(ETH_BASE_TOKEN);
-            let (da_type, l1_da_validator) = resolve_da(chain, vm_type, &eco)?;
+            let (da_type, l1_da_validator) = resolve_da(chain, &eco)?;
 
             let chain_id = L2ChainId::new(chain.chain_id).map_err(|e| anyhow::anyhow!("{e}"))?;
 
@@ -149,7 +146,6 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 execute_operator,
                 token_multiplier_setter: None,
                 da_mode: da_type,
-                vm_type,
             };
 
             let input = ChainInitInput {
@@ -157,15 +153,12 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
                 bridgehub,
                 l1_da_validator,
                 chain_params,
-                vm_type,
                 l2_da_commitment_scheme: None,
                 register_for_interop: false,
                 create2_factory_salt: None,
                 pause_deposits: false,
                 evm_emulator: false,
-                deploy_paymaster: false,
                 make_permanent_rollup: false,
-                skip_priority_txs: true,
             };
 
             let mut runner = ForgeRunner::new(&shared)?;
@@ -173,21 +166,9 @@ pub async fn run(args: ApplyArgs) -> Result<()> {
             let deployer = runner.prepare_sender(deployer_address).await?;
             let owner_wallet = runner.prepare_sender(owner).await?;
 
-            let bridgehub_admin_addr = resolve_bridgehub_admin(&runner.rpc_url, bridgehub)
-                .await
-                .context("resolving bridgehub admin from L1 fork")?;
-            let bridgehub_admin = runner.prepare_sender(bridgehub_admin_addr).await?;
-
             let manifest_start = count_manifest_bundles(&manifest_path);
 
-            let output = chain_init(
-                &mut runner,
-                &deployer,
-                &owner_wallet,
-                &bridgehub_admin,
-                &input,
-            )
-            .await?;
+            let output = chain_init(&mut runner, &deployer, &owner_wallet, &input).await?;
 
             write_output_if_requested(
                 &prepared_key.to_string(),
@@ -351,24 +332,18 @@ const ETH_BASE_TOKEN: Address = address!("0x000000000000000000000000000000000000
 
 fn resolve_da(
     chain: &ChainIntent,
-    vm_type: VMOption,
     eco: &ResolvedEcosystem,
 ) -> anyhow::Result<(DAValidatorType, Address)> {
     Ok(match chain.da_mode {
         DaMode::Rollup => {
-            let validator = if vm_type == VMOption::ZKSyncOsVM {
-                eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "blobs_zksync_os_l1_da_validator not found in state — \
-                         re-run bootstrap to populate it"
-                    )
-                })?
-            } else {
-                eco.rollup_l1_da_validator
-            };
+            let validator = eco.blobs_zksync_os_l1_da_validator.ok_or_else(|| {
+                anyhow::anyhow!("blobs_zksync_os_l1_da_validator not found in state")
+            })?;
             (DAValidatorType::Rollup, validator)
         }
-        DaMode::NoDa => (DAValidatorType::NoDA, eco.no_da_l1_validator),
+        DaMode::NoDa => {
+            anyhow::bail!("no_da is not supported by the selected contracts; use rollup or avail")
+        }
         DaMode::Avail => (DAValidatorType::Avail, eco.avail_l1_da_validator),
     })
 }

@@ -32,6 +32,7 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
         with:
+          github_token: ${{ secrets.RELEASE_TOKEN }}
           enable_cache: 'true'
           # Only main-branch runs refresh the shared Rust build cache.
           save_cache: ${{ github.event_name == 'push' && 'true' || 'false' }}

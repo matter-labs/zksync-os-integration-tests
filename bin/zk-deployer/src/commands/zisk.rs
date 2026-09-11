@@ -1,4 +1,5 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 
 use alloy::network::{EthereumWallet, TransactionBuilder};
 use alloy::primitives::{Address, Bytes};
@@ -8,12 +9,53 @@ use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
 use protocol_ops::common::PrivateKey;
 
+pub fn prepare_plonk_verifier(contracts_root: &Path) -> Result<PathBuf> {
+    // Embed only our preparation scripts and dependency pins so installed
+    // binaries can prepare the backend without the deployer source checkout.
+    let helper = tempfile::tempdir()?;
+    for (name, contents) in [
+        (
+            "zisk-backend.js",
+            include_str!("../../tools/zisk-backend/zisk-backend.js"),
+        ),
+        (
+            "render_plonk_verifier.js",
+            include_str!("../../tools/zisk-backend/render_plonk_verifier.js"),
+        ),
+        (
+            "package.json",
+            include_str!("../../tools/zisk-backend/package.json"),
+        ),
+        (
+            "package-lock.json",
+            include_str!("../../tools/zisk-backend/package-lock.json"),
+        ),
+    ] {
+        std::fs::write(helper.path().join(name), contents)?;
+    }
+    let output = Command::new("node")
+        .arg(helper.path().join("zisk-backend.js"))
+        .arg("prepare")
+        .arg(contracts_root)
+        .stderr(Stdio::inherit())
+        .output()
+        .context("run ZiSK backend preparation (requires Node.js, npm, and pinned Foundry)")?;
+    anyhow::ensure!(output.status.success(), "ZiSK backend preparation failed");
+    let artifact = PathBuf::from(String::from_utf8(output.stdout)?.trim());
+    anyhow::ensure!(
+        artifact.is_absolute() && artifact.is_file(),
+        "ZiSK backend preparation returned no artifact"
+    );
+    Ok(artifact)
+}
+
 pub async fn deploy_plonk_verifier(
     l1_rpc_url: &str,
     private_key: &PrivateKey,
-    l1_contracts_out: &Path,
+    contracts_root: &Path,
 ) -> Result<Address> {
-    let bytecode = load_zisk_plonk_bytecode(l1_contracts_out)?;
+    let artifact_path = prepare_plonk_verifier(contracts_root)?;
+    let bytecode = load_zisk_plonk_bytecode(&artifact_path)?;
     let signer: PrivateKeySigner = private_key
         .expose()
         .parse()
@@ -46,15 +88,9 @@ pub async fn deploy_plonk_verifier(
     Ok(address)
 }
 
-fn load_zisk_plonk_bytecode(l1_contracts_out: &Path) -> Result<Vec<u8>> {
-    let artifact_path =
-        l1_contracts_out.join("ZiskSnarkPlonkVerifier.sol/ZiskSnarkPlonkVerifier.json");
-    let content = std::fs::read_to_string(&artifact_path).with_context(|| {
-        format!(
-            "read {} — run `zk-deployer build-contracts --with-zisk` first",
-            artifact_path.display()
-        )
-    })?;
+fn load_zisk_plonk_bytecode(artifact_path: &Path) -> Result<Vec<u8>> {
+    let content = std::fs::read_to_string(artifact_path)
+        .with_context(|| format!("read {}", artifact_path.display()))?;
     let artifact: serde_json::Value = serde_json::from_str(&content)?;
     let bytecode = artifact["bytecode"]["object"]
         .as_str()
@@ -70,6 +106,22 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "requires PROTOCOL_CONTRACTS_ROOT, Node.js, npm, and pinned Foundry"]
+    fn prepares_backend_from_embedded_helper() {
+        let root = PathBuf::from(std::env::var("PROTOCOL_CONTRACTS_ROOT").unwrap())
+            .canonicalize()
+            .unwrap();
+        let artifact = prepare_plonk_verifier(&root).unwrap();
+
+        assert!(!artifact.starts_with(root));
+        assert!(!load_zisk_plonk_bytecode(&artifact).unwrap().is_empty());
+        assert_eq!(
+            prepare_plonk_verifier(&protocol_ops::common::paths::contracts_root()).unwrap(),
+            artifact
+        );
+    }
+
+    #[test]
     fn reads_generated_plonk_bytecode_from_foundry_artifact() {
         let dir = tempfile::tempdir().unwrap();
         let artifact_dir = dir.path().join("ZiskSnarkPlonkVerifier.sol");
@@ -81,7 +133,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            load_zisk_plonk_bytecode(dir.path()).unwrap(),
+            load_zisk_plonk_bytecode(&artifact_dir.join("ZiskSnarkPlonkVerifier.json")).unwrap(),
             hex::decode("60016000").unwrap()
         );
     }
@@ -97,7 +149,8 @@ mod tests {
         )
         .unwrap();
 
-        let error = load_zisk_plonk_bytecode(dir.path()).unwrap_err();
+        let error = load_zisk_plonk_bytecode(&artifact_dir.join("ZiskSnarkPlonkVerifier.json"))
+            .unwrap_err();
         assert!(error.to_string().contains("no bytecode"));
     }
 }

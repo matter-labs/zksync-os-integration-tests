@@ -24,10 +24,23 @@ inputs:
     description: 'Shared key for the Rust build cache.'
     required: false
     default: 'integration-tests'
+  github_token:
+    description: >-
+      Token with read access to private dependency repositories. Composite
+      actions cannot read secrets themselves, so callers must pass it in.
+      Leave empty for public-only builds.
+    required: false
+    default: ''
 
 runs:
   using: composite
   steps:
+    # Must run before the Rust cache or any other step that resolves Cargo dependencies.
+    - name: Configure private repo auth
+      uses: ./.github/actions/private-git-auth
+      with:
+        token: ${{ inputs.github_token }}
+
     - name: Install linux packages
       shell: 'bash -ex {0}'
       env:

@@ -49,6 +49,8 @@ pub struct IntentConfig {
     pub l1_rpc_url: Option<String>,
     #[serde(default)]
     pub multi_proof_verifier: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub zisk_plonk_verifier_addr: Option<Address>,
     #[serde(default)]
     pub wallets: WalletsIntent,
     pub chains: Vec<ChainIntent>,
@@ -88,6 +90,7 @@ chains:
         let intent: IntentConfig = serde_yaml::from_str(MINIMAL_INTENT).unwrap();
 
         assert!(!intent.multi_proof_verifier);
+        assert!(intent.zisk_plonk_verifier_addr.is_none());
     }
 
     #[test]
@@ -96,5 +99,19 @@ chains:
         let intent: IntentConfig = serde_yaml::from_str(&input).unwrap();
 
         assert!(intent.multi_proof_verifier);
+    }
+
+    #[test]
+    fn parses_existing_backend() {
+        let address = Address::repeat_byte(0x11);
+        let input = MINIMAL_INTENT.replace(
+            "chains:",
+            &format!(
+                "multi_proof_verifier: true\nzisk_plonk_verifier_addr: '{address:#x}'\nchains:"
+            ),
+        );
+        let intent: IntentConfig = serde_yaml::from_str(&input).unwrap();
+
+        assert_eq!(intent.zisk_plonk_verifier_addr, Some(address));
     }
 }

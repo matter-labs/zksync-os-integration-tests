@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use protocol_ops::types::L1Network;
 
 use crate::commands::execute_manifest::apply_manifest;
 use crate::commands::genesis::{self, GenesisCommands, GenesisGenerateArgs};
@@ -23,7 +24,6 @@ use protocol_ops::common::{
     wallets::Wallet,
     PrivateKey,
 };
-use protocol_ops::types::VMOption;
 
 #[derive(Parser, Debug)]
 pub struct BootstrapArgs {
@@ -164,7 +164,16 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
 
     // --- Step 3: Deploy ZiSK Plonk verifier (opt-in) -----------------------
     let zisk_plonk_verifier_addr = if intent.multi_proof_verifier {
-        let output = if state.is_done(StepKey::ZiskPlonkVerifierDeploy) {
+        let output = if let Some(verifier_address) = intent.zisk_plonk_verifier_addr {
+            anyhow::ensure!(
+                !verifier_address.is_zero(),
+                "zisk_plonk_verifier_addr must not be zero"
+            );
+            let output = ZiskPlonkVerifierDeployedOutput { verifier_address };
+            state.mark_done(StepKey::ZiskPlonkVerifierDeploy, &output)?;
+            state.save(&args.state)?;
+            output
+        } else if state.is_done(StepKey::ZiskPlonkVerifierDeploy) {
             logger::info("Skipping zisk.plonk_verifier.deploy (already done)");
             state.get_output::<ZiskPlonkVerifierDeployedOutput>(StepKey::ZiskPlonkVerifierDeploy)?
         } else {
@@ -172,7 +181,7 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
             let verifier_address = deploy_plonk_verifier(
                 &l1_rpc_url,
                 &args.private_key,
-                &protocol_ops::common::paths::resolve_l1_contracts_path()?.join("out"),
+                &protocol_ops::common::paths::contracts_root(),
             )
             .await?;
             let output = ZiskPlonkVerifierDeployedOutput { verifier_address };
@@ -204,14 +213,15 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         let eco_input = EcosystemInitInput {
             sender: sender.address,
             owner: owner.address,
-            era_chain_id: intent.main_chain_id()?,
-            vm_type: VMOption::ZKSyncOsVM,
             with_testnet_verifier: true,
             multi_proof_verifier: intent.multi_proof_verifier,
             zisk_plonk_verifier_addr,
             zisk_range_verifier_addr: None,
             zk_token_asset_id: None,
             create2_factory_salt: None,
+            // Local L1s have no canonical WETH, including externally managed Anvil.
+            token_weth_address: (L1Network::from_l1_rpc(&l1_rpc_url)? == L1Network::Localhost)
+                .then_some(alloy::primitives::Address::ZERO),
         };
         let eco_output = ecosystem_init(&mut runner, &sender, &owner, &eco_input).await?;
 
