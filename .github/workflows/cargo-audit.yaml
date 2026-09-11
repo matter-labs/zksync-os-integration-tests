@@ -48,7 +48,7 @@ jobs:
       - name: Configure private repo auth
         uses: ./.github/actions/private-git-auth
         with:
-          token: ${{ secrets.RELEASE_TOKEN }}
+          token: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
 
       - name: Run cargo-deny
         # Advisories are handled by the cargo-audit job above.
