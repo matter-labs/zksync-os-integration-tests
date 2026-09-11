@@ -37,6 +37,20 @@ Declare as `#[future] name: Type` parameters on your test function. Import from
 | `ecosystem` | `Ecosystem` | N L1-settling ZKsync OS chains on one Anvil L1 (default: one chain, ID 6565), 10 wallets pre-funded with 100 ETH each per chain |
 | `upgrade_v31_to_v33::fixture::start()` | `Ecosystem` | The frozen v31.1 pair — rollup 506 and validium 507 — restored from a committed snapshot via `restore()`; used by the protocol-upgrade tests. Its L1 keys live in `wallets.yaml`: anvil account #0 owns the Governance contract, and each chain's `owner` owns its ChainAdmin. |
 
+The v33.0 → v33.1 verifier-only upgrade test restores `tests/local-chains/v33.0/`,
+checks the old protocol and VK, registers the v33.1 verifier through governance,
+and schedules and applies the chain upgrade. It then checks the new VK and that
+a fresh deposit and transfer finalize. The framework uses mock proofs; this test
+covers upgrade orchestration and server compatibility, not cryptographic proving.
+
+```bash
+cargo test --release -p tests --test upgrade_v33_0_to_v33_1
+```
+
+The frozen v33.0 fixture is copied from the server revision recorded in its
+`versions.yaml`, with `default/config.yaml` renamed to `server.yaml` and its
+`genesis_input_path` omitted so restore supplies the scratch path.
+
 **Restoring a fixed chain:** `fixtures::restore::restore(dir)` brings up an
 `Ecosystem` from a committed snapshot directory (`l1-state.json.gz` +
 `genesis.json` + `server.yaml`/`server-<id>.yaml`). The committed server config

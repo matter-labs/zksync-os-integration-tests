@@ -230,6 +230,7 @@ pub async fn schedule_upgrade_timestamp(
     keys: &[&str],
     bridgehub: Address,
     chain_id: u64,
+    priority_op_lower_bound: Option<Address>,
 ) -> Result<()> {
     let provider = provider(l1_rpc).await?;
 
@@ -256,6 +257,7 @@ pub async fn schedule_upgrade_timestamp(
         topology: chain_args(bridgehub, chain_id),
         access_control_restriction: Address::ZERO,
         upgrade_timestamp: upgrade_timestamp.to_string(),
+        priority_op_lower_bound,
         shared: shared_args(l1_rpc, &out_dir),
     })
     .await

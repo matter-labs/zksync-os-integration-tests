@@ -1,0 +1,27 @@
+general:
+  zksync_os_version: "0.33.0"
+  # PLONK VK hash reported by the chain's `ZKsyncOSTestnetVerifier` (wrapping
+  # `ZKsyncOSVerifierPlonk`), as deployed and registered by the era-contracts
+  # revision below. Queried from the deployed verifier via `verificationKeyHash()`.
+  verification_key: "0x29651d5f044e1671ff820f85018ed87b26f57402222eb31dd453206e2379bc9c"
+
+era-contracts:
+  # release/v0.33.0-atomic-interop head: the v33 atomic-interop contracts. The Executor
+  # folds the 4-word chain config hash (chainId | fri_enabled | maxTxGasLimit |
+  # pubdataContent) into the batch proof public input, mirroring zk_ee's
+  # `ChainConfig::hash`, and the chain exposes `getPubdataContent()`.
+  sha: "3408903ed8296714813b9fab4fd0abf30091168a"
+
+zksync-os-integration-tests:
+  # zk-deployer revision. Built with its era-contracts deps re-pinned to the sha above,
+  # which needs a two-line follow-up for the protocol_ops API rename
+  # (`with_legacy_bridge` dropped / replaced by `register_for_interop: false`).
+  sha: "16c6a83b4f634609958f347c56549ba19bf9df9b"
+
+zksync-os-server:
+  sha: "3b7985264599ba232ef07b09b25f2b269982eed7"
+
+fixture_source:
+  repository: "matter-labs/zksync-os-server-private"
+  sha: "af6615b50c99f0d761f0551e535788a9cc1e5c0d"
+  path: "local-chains/v33.0"

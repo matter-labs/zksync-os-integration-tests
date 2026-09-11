@@ -27,7 +27,7 @@ jobs:
       - name: Setup runner
         uses: ./.github/actions/runner-setup
         with:
-          github_token: ${{ secrets.RELEASE_TOKEN }}
+          github_token: ${{ secrets.ZKSYNC_ADMIN_BOT_ORG_REPO_WRITE }}
 
       - name: Check formatting
         run: cargo fmt --all --check

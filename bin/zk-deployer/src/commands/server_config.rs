@@ -210,9 +210,8 @@ pub(crate) fn resolve_pubdata_mode(chain: &ChainIntent) -> &'static str {
     match chain.da_mode {
         DaMode::Rollup | DaMode::Avail | DaMode::Validium(ValidiumDa::Blobs) => "Blobs",
         DaMode::Validium(ValidiumDa::Calldata) => "Calldata",
-        // `Validium` is the server's post-nothing mode and the only one its startup check accepts
-        // for a chain whose pricing mode is Validium below v33.
-        DaMode::Validium(ValidiumDa::DiscouragedNoDa) => "Validium",
+        // From v33, publishing no DA requires an explicit trust opt-in in the server config.
+        DaMode::Validium(ValidiumDa::DiscouragedNoDa) => "DangerousTrustedValidium",
     }
 }
 
