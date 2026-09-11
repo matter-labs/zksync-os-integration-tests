@@ -36,7 +36,7 @@ multi_proof_verifier: false
 
 chains:
   - chain_id: 6565
-    da_mode: rollup     # rollup, no_da, or avail
+    da_mode: rollup     # rollup or avail
 ```
 
 Declare more entries under `chains:` to deploy multiple L1-settling chains on
@@ -205,3 +205,16 @@ zk-deployer token deploy \
 | `--broadcast` | false | Broadcast bundles immediately (required for local dev) |
 | `--l1-state <path>` | l1-state.json | Anvil state file (auto-Anvil mode) |
 | `--no-fund-l2` | false | Skip the default L1→L2 deposits that fund the well-known dev wallets (100 base-token units each — ETH, or the custom base token) on every chain. Funding runs automatically on local/Anvil so a fresh chain is ready to operate. |
+
+## Testing multiprover deployment
+
+```bash
+cargo test --locked --release -p zk-deployer --test multiprover
+```
+
+This runs `build-contracts --with-zisk`, `bootstrap --broadcast`, `apply
+--broadcast`, and `server-config` on a fresh managed Anvil chain with an empty
+backend cache. It checks the deployed backend bytecode and follows the chain's
+verifier through the ZiSK wrapper to that backend, then verifies a real 1.2.0
+range proof and rejects a tampered commitment. The normal integration CI
+command includes this test; it does not restore a deployment snapshot.
