@@ -23,7 +23,6 @@ use protocol_ops::common::{
     wallets::Wallet,
     PrivateKey,
 };
-use protocol_ops::types::VMOption;
 
 #[derive(Parser, Debug)]
 pub struct BootstrapArgs {
@@ -210,14 +209,14 @@ pub async fn run(args: BootstrapArgs) -> Result<()> {
         let eco_input = EcosystemInitInput {
             sender: sender.address,
             owner: owner.address,
-            era_chain_id: intent.main_chain_id()?,
-            vm_type: VMOption::ZKSyncOsVM,
             with_testnet_verifier: true,
             multi_proof_verifier: intent.multi_proof_verifier,
             zisk_plonk_verifier_addr,
             zisk_range_verifier_addr: None,
             zk_token_asset_id: None,
             create2_factory_salt: None,
+            // Auto-Anvil has no WETH deployment; match the local contracts fixture.
+            token_weth_address: _anvil.is_some().then_some(alloy::primitives::Address::ZERO),
         };
         let eco_output = ecosystem_init(&mut runner, &sender, &owner, &eco_input).await?;
 

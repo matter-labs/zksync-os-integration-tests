@@ -10217,7 +10217,7 @@ dependencies = [
 [[package]]
 name = "protocol_ops"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?rev=bc607214f0f4cbf4610b143efeda40c64cf66699#bc607214f0f4cbf4610b143efeda40c64cf66699"
+source = "git+https://github.com/matter-labs/era-contracts?rev=68580e65397bcd0054aa515c2d626fdd42a1262d#68580e65397bcd0054aa515c2d626fdd42a1262d"
 dependencies = [
  "alloy",
  "anyhow",
@@ -16887,7 +16887,7 @@ dependencies = [
  "futures",
  "hex",
  "human-panic",
- "protocol_ops 0.1.0 (git+https://github.com/matter-labs/era-contracts?rev=bc607214f0f4cbf4610b143efeda40c64cf66699)",
+ "protocol_ops 0.1.0 (git+https://github.com/matter-labs/era-contracts?rev=68580e65397bcd0054aa515c2d626fdd42a1262d)",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -16985,7 +16985,7 @@ dependencies = [
 [[package]]
 name = "zksync-os-genesis-gen"
 version = "0.1.0"
-source = "git+https://github.com/matter-labs/era-contracts?rev=bc607214f0f4cbf4610b143efeda40c64cf66699#bc607214f0f4cbf4610b143efeda40c64cf66699"
+source = "git+https://github.com/matter-labs/era-contracts?rev=68580e65397bcd0054aa515c2d626fdd42a1262d#68580e65397bcd0054aa515c2d626fdd42a1262d"
 dependencies = [
  "alloy",
  "anyhow",

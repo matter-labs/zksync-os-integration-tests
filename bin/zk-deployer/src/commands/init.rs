@@ -44,5 +44,5 @@ multi_proof_verifier: false
 
 chains:
   - chain_id: 6565
-    da_mode: rollup           # rollup, no_da, or avail
+    da_mode: rollup           # rollup or avail
 "#;
