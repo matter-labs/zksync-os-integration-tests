@@ -67,6 +67,7 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
         rollup_da_manager_address: None,
         is_zk_sync_os: Some(true),
         create2_factory_salt: None,
+        redeploy_zk_governance: false,
         upgrade_input_path: fixture::UPGRADE_INPUT_PATH.to_string(),
         core_output_path: UPGRADE_V33_CORE_OUTPUT_PATH.to_string(),
         core_script_path: CORE_UPGRADE_V33_SCRIPT_PATH.to_string(),
@@ -160,6 +161,7 @@ pub async fn run_upgrade(eco: &mut Ecosystem) -> Result<Vec<(u64, u64)>> {
             CHAIN_SIGNING_KEYS,
             bridgehub,
             chain_id,
+            Some(protocol::priority_op_lower_bound_registry(ctm)?),
         )
         .await
         .with_context(|| format!("schedule the upgrade timestamp for chain {chain_id}"))?;

@@ -19,7 +19,7 @@ use tests::upgrade_v31_to_v33::{protocol, runbook};
 
 /// The semver the upgrade lands on, as `(major, minor, patch)`. It comes from the pinned
 /// era-contracts revision's genesis config, so it moves with the pin.
-const UPGRADED_VERSION: (u32, u32, u32) = (0, 33, 0);
+const UPGRADED_VERSION: (u32, u32, u32) = (0, 33, 1);
 
 /// `PubdataContent.FULL_PUBDATA` — the first variant of the enum the v33
 /// `Getters` facet exposes, and the value an upgraded rollup keeps.

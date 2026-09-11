@@ -1,9 +1,10 @@
-name: 'Configure private repo auth'
+name: 'Configure private dependency auth'
 
 description: >-
   Rewrites github.com HTTPS URLs to use a token so Cargo can resolve git
   dependencies that live in private matter-labs repositories, and forces Cargo
-  to fetch via the git CLI so the rewrite is honoured. No-op when no token is
+  to fetch via the git CLI so the rewrite is honoured. Exposes the same token
+  to build scripts that download private release assets. No-op when no token is
   supplied, which keeps public-only builds unchanged.
 
 inputs:
@@ -32,3 +33,4 @@ runs:
           url."https://x-access-token:${PRIVATE_REPO_TOKEN}@github.com/".insteadOf \
           "https://github.com/"
         echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "${GITHUB_ENV}"
+        echo "GH_TOKEN=${PRIVATE_REPO_TOKEN}" >> "${GITHUB_ENV}"
