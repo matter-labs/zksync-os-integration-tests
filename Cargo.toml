@@ -24,8 +24,8 @@ fs2 = "0.4.3"
 futures = "0.3"
 hex = "0.4"
 human-panic = "2.0"
-protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "68580e65397bcd0054aa515c2d626fdd42a1262d" }
-zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "68580e65397bcd0054aa515c2d626fdd42a1262d" }
+protocol_ops = { git = "https://github.com/matter-labs/era-contracts", rev = "0d7beba403c619b51ce84f455273c536ccab7cc5" }
+zksync_os_genesis_gen = { package = "zksync-os-genesis-gen", git = "https://github.com/matter-labs/era-contracts", rev = "0d7beba403c619b51ce84f455273c536ccab7cc5" }
 reth-tasks = { git = "https://github.com/paradigmxyz/reth.git", tag = "v2.5.0" }
 rstest = "0.26.1"
 serde = "1.0"
